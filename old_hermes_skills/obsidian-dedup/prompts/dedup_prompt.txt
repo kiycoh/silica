@@ -1,0 +1,1 @@
+/goal /obsidian-dedup --vault "<VAULT_ROOT>" [--folder "<FOLDER_PATH>"]

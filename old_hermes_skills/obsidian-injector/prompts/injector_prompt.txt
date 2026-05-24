@@ -1,0 +1,1 @@
+/goal /obsidian-injector --inbox "<INBOX>" --target "<TARGET>" --hub "<HUB_NAME>"

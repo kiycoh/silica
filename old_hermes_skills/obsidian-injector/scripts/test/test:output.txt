@@ -1,0 +1,1138 @@
+kiycoh@kiycoh-Legion-Pro-7-16IRX9H:~/.hermes/skills/note-taking/obsidian-curator/scripts$ python3 recon.py --inbox "/home/kiycoh/Documents/Obsidian/Alex's Second Brain Sync/0 Inbox/reti_internet" --vault "/home/kiycoh/Documents/Obsidian/Alex's Second Brain Sync/1 Cultura/1.1 Informatica/1.1.6 Telecomunicazioni"
+[
+  {
+    "file": "/home/kiycoh/Documents/Obsidian/Alex's Second Brain Sync/0 Inbox/reti_internet/slide-cap-01.md",
+    "collisions": [
+      {
+        "name": "Throughput",
+        "hit_count": 9,
+        "hits": [
+          {
+            "path": "/home/kiycoh/Documents/Obsidian/Alex's Second Brain Sync/1 Cultura/1.1 Informatica/1.1.6 Telecomunicazioni/Collo di bottiglia.md",
+            "count": 5
+          },
+          {
+            "path": "/home/kiycoh/Documents/Obsidian/Alex's Second Brain Sync/1 Cultura/1.1 Informatica/1.1.6 Telecomunicazioni/Throughput TCP.md",
+            "count": 3
+          },
+          {
+            "path": "/home/kiycoh/Documents/Obsidian/Alex's Second Brain Sync/1 Cultura/1.1 Informatica/1.1.6 Telecomunicazioni/Trasferimento dati affidabile (RDT).md",
+            "count": 1
+          }
+        ]
+      },
+      {
+        "name": "Ritardo di Trasmissione",
+        "hit_count": 5,
+        "hits": [
+          {
+            "path": "/home/kiycoh/Documents/Obsidian/Alex's Second Brain Sync/1 Cultura/1.1 Informatica/1.1.6 Telecomunicazioni/Ritardo di trasmissione.md",
+            "count": 3
+          },
+          {
+            "path": "/home/kiycoh/Documents/Obsidian/Alex's Second Brain Sync/1 Cultura/1.1 Informatica/1.1.6 Telecomunicazioni/Telecomunicazioni.md",
+            "count": 1
+          },
+          {
+            "path": "/home/kiycoh/Documents/Obsidian/Alex's Second Brain Sync/1 Cultura/1.1 Informatica/1.1.6 Telecomunicazioni/Ritardo di propagazione.md",
+            "count": 1
+          }
+        ]
+      },
+      {
+        "name": "Ritardo di propagazione",
+        "hit_count": 5,
+        "hits": [
+          {
+            "path": "/home/kiycoh/Documents/Obsidian/Alex's Second Brain Sync/1 Cultura/1.1 Informatica/1.1.6 Telecomunicazioni/Ritardo di propagazione.md",
+            "count": 4
+          },
+          {
+            "path": "/home/kiycoh/Documents/Obsidian/Alex's Second Brain Sync/1 Cultura/1.1 Informatica/1.1.6 Telecomunicazioni/Telecomunicazioni.md",
+            "count": 1
+          }
+        ]
+      },
+      {
+        "name": "Ritardo di accodamento",
+        "hit_count": 4,
+        "hits": [
+          {
+            "path": "/home/kiycoh/Documents/Obsidian/Alex's Second Brain Sync/1 Cultura/1.1 Informatica/1.1.6 Telecomunicazioni/Ritardo di accodamento.md",
+            "count": 3
+          },
+          {
+            "path": "/home/kiycoh/Documents/Obsidian/Alex's Second Brain Sync/1 Cultura/1.1 Informatica/1.1.6 Telecomunicazioni/Telecomunicazioni.md",
+            "count": 1
+          }
+        ]
+      },
+      {
+        "name": "Collo di bottiglia",
+        "hit_count": 4,
+        "hits": [
+          {
+            "path": "/home/kiycoh/Documents/Obsidian/Alex's Second Brain Sync/1 Cultura/1.1 Informatica/1.1.6 Telecomunicazioni/Collo di bottiglia.md",
+            "count": 3
+          },
+          {
+            "path": "/home/kiycoh/Documents/Obsidian/Alex's Second Brain Sync/1 Cultura/1.1 Informatica/1.1.6 Telecomunicazioni/Equit\u00e0 TCP.md",
+            "count": 1
+          }
+        ]
+      },
+      {
+        "name": "Accesso wireless",
+        "hit_count": 2,
+        "hits": [
+          {
+            "path": "/home/kiycoh/Documents/Obsidian/Alex's Second Brain Sync/1 Cultura/1.1 Informatica/1.1.6 Telecomunicazioni/Accesso wireless.md",
+            "count": 2
+          }
+        ]
+      },
+      {
+        "name": "Sicurezza di rete",
+        "hit_count": 2,
+        "hits": [
+          {
+            "path": "/home/kiycoh/Documents/Obsidian/Alex's Second Brain Sync/1 Cultura/1.1 Informatica/1.1.6 Telecomunicazioni/Sicurezza di rete.md",
+            "count": 2
+          }
+        ]
+      },
+      {
+        "name": "Commutazione di pacchetto",
+        "hit_count": 1,
+        "hits": [
+          {
+            "path": "/home/kiycoh/Documents/Obsidian/Alex's Second Brain Sync/1 Cultura/1.1 Informatica/1.1.6 Telecomunicazioni/Nucleo della rete.md",
+            "count": 1
+          }
+        ]
+      },
+      {
+        "name": "Ritardi e percorsi in Internet",
+        "hit_count": 1,
+        "hits": [
+          {
+            "path": "/home/kiycoh/Documents/Obsidian/Alex's Second Brain Sync/1 Cultura/1.1 Informatica/1.1.6 Telecomunicazioni/Ritardi e percorsi in Internet.md",
+            "count": 1
+          }
+        ]
+      },
+      {
+        "name": "Quattro cause di ritardo per i pacchetti",
+        "hit_count": 1,
+        "hits": [
+          {
+            "path": "/home/kiycoh/Documents/Obsidian/Alex's Second Brain Sync/1 Cultura/1.1 Informatica/1.1.6 Telecomunicazioni/Telecomunicazioni.md",
+            "count": 1
+          }
+        ]
+      }
+    ],
+    "new_concepts": [
+      "1961-1972: sviluppo della commutazione di pacchetto",
+      "4. Ritardo di propagazione (d/s)",
+      "Accesso aziendale: reti locali (LAN)",
+      "Accesso residenziale: punto-punto",
+      "Accodamento e perdita di pacchetto:",
+      "Ai confini della rete",
+      "Argomenti trattati",
+      "Capacit\u00e0 acquisite:",
+      "Capitolo 1: Introduzione",
+      "Capitolo 1: roadmap",
+      "Cavo coassiale:",
+      "Che cos' e Internet?",
+      "Che cos'\u00e8 Internet",
+      "Come si verificano ritardi e perdite?",
+      "Commutazione di circuito: FDM e TDM",
+      "Commutazione di pacchetto: store-and-forward",
+      "Comportamento di un router",
+      "Contesa per le risorse",
+      "Cos'\u00e8 Internet",
+      "Cos'\u00e8 un protocollo?",
+      "Domanda:",
+      "Doppino intrecciato (TP)",
+      "Fibra ottica:",
+      "I malintenzionati analizzano i pacchetti",
+      "I malintenzionati attaccano server e infrastrutture di rete",
+      "I malintenzionati registrano e riproducono",
+      "I malintenzionati usano indirizzi sorgente falsi",
+      "Il nucleo della rete",
+      "Il nucleo della rete: commutazione di circuito",
+      "Il nucleo della rete: commutazione di pacchetto",
+      "Le reti sono complesse!",
+      "Livelli di protocolli",
+      "Mezzi trasmissivi: canali radio",
+      "Mezzi trasmissivi: cavo coassiale e fibra ottica",
+      "Mezzzi trasmissivi",
+      "Modello di riferimento ISO/OSI (anni ' 70)",
+      "Obiettivi:",
+      "Organizzazione di un viaggio aereo",
+      "Panoramica:",
+      "Perch\u00e9 la stratificazione?",
+      "Pila di protocolli Internet",
+      "Protocolli di rete:",
+      "Reti d'accesso e mezzi fisici",
+      "Reti di calcolatori e Internet: Un approccio top-down",
+      "Reti domestiche",
+      "Riassunto",
+      "Risorse punto-punto riservate alla \"chiamata\"",
+      "Ritardo di nodo",
+      "Ritardo nelle reti a commutazione di pacchetto",
+      "Ritarto di trasmissione vs. ritardo di propagazione",
+      "Storia di Internet",
+      "Stratificazione delle funzionalit\u00e0",
+      "Struttura di internet: una rete di reti",
+      "Throughput (segue)",
+      "Tipi di canali radio:",
+      "Uno sguardo da vicino alla struttura di rete",
+      "q una serie di passi successivi",
+      "\u0086 Servizi forniti alle applicazioni:",
+      "\u274f LAN wireless:",
+      "\u2751 DSL: digital subscriber line",
+      "\u2751 Ritardo di propagazione",
+      "\u2751 Standard Internet",
+      "\u2751 Virus",
+      "\u2751 Worm:",
+      "\uf071 Ethernet:",
+      "\uf071 architetura client/server",
+      "\uf071 architetura peer to peer",
+      "\uf071 satellitari"
+    ]
+  },
+  {
+    "file": "/home/kiycoh/Documents/Obsidian/Alex's Second Brain Sync/0 Inbox/reti_internet/Esercitazione 01 testo.md",
+    "collisions": [],
+    "new_concepts": [
+      "Esercizio 1"
+    ]
+  },
+  {
+    "file": "/home/kiycoh/Documents/Obsidian/Alex's Second Brain Sync/0 Inbox/reti_internet/scheda.trasparenza - Internet.md",
+    "collisions": [
+      {
+        "name": "PROGRAMMA",
+        "hit_count": 2,
+        "hits": [
+          {
+            "path": "/home/kiycoh/Documents/Obsidian/Alex's Second Brain Sync/1 Cultura/1.1 Informatica/1.1.6 Telecomunicazioni/Traceroute.md",
+            "count": 1
+          },
+          {
+            "path": "/home/kiycoh/Documents/Obsidian/Alex's Second Brain Sync/1 Cultura/1.1 Informatica/1.1.6 Telecomunicazioni/Architettura Client-Server.md",
+            "count": 1
+          }
+        ]
+      }
+    ],
+    "new_concepts": []
+  },
+  {
+    "file": "/home/kiycoh/Documents/Obsidian/Alex's Second Brain Sync/0 Inbox/reti_internet/Esercitazione 04 + soluzione parziale.md",
+    "collisions": [],
+    "new_concepts": [
+      "Esercitazione 04",
+      "Esercizio 1",
+      "Esercizio 2",
+      "Esercizio 3",
+      "Internet Reti di Calcolatori e Internet Ing. A. De Paola",
+      "Note:",
+      "Soluzione",
+      "Soluzione:"
+    ]
+  },
+  {
+    "file": "/home/kiycoh/Documents/Obsidian/Alex's Second Brain Sync/0 Inbox/reti_internet/Esercitazione 02 - soluzione parziale.md",
+    "collisions": [
+      {
+        "name": "Internet",
+        "hit_count": 41,
+        "hits": [
+          {
+            "path": "/home/kiycoh/Documents/Obsidian/Alex's Second Brain Sync/1 Cultura/1.1 Informatica/1.1.6 Telecomunicazioni/Internet Service Provider (ISP).md",
+            "count": 8
+          },
+          {
+            "path": "/home/kiycoh/Documents/Obsidian/Alex's Second Brain Sync/1 Cultura/1.1 Informatica/1.1.6 Telecomunicazioni/Internet.md",
+            "count": 6
+          },
+          {
+            "path": "/home/kiycoh/Documents/Obsidian/Alex's Second Brain Sync/1 Cultura/1.1 Informatica/1.1.6 Telecomunicazioni/Rete informatica.md",
+            "count": 4
+          }
+        ]
+      }
+    ],
+    "new_concepts": [
+      "Esercitazione 2",
+      "Esercizio 1",
+      "Esercizio 3",
+      "Esercizio 4",
+      "Internet Reti di Calcolatori ed Internet Ing. A. De Paola",
+      "Note:",
+      "Prima interazione",
+      "Quesito 1",
+      "Soluzione"
+    ]
+  },
+  {
+    "file": "/home/kiycoh/Documents/Obsidian/Alex's Second Brain Sync/0 Inbox/reti_internet/slide-cap-05.md",
+    "collisions": [],
+    "new_concepts": [
+      "AS1 deve:",
+      "Algoritmi d'instradamento",
+      "Algoritmo con vettore distanza",
+      "Algoritmo d' instradamento con vettore distanza (DV)",
+      "Algoritmo di Dijkstra: discussione",
+      "Algoritmo di Dijkstra: esempio",
+      "Algoritmo di Dijsktra",
+      "Algoritno d'instradamento a stato del collegamento (LS)",
+      "Allora:",
+      "Annunci RIP",
+      "Attributi dei percorsi",
+      "Autonomia amministrativa:",
+      "BGP basics",
+      "BGP, OSPF, forwarding table entries",
+      "Capitolo 5: Livello di rete (Piano",
+      "Classificazione degli algoritmi d'instradamento",
+      "Complessit\u00e0 dei messaggi:",
+      "Confronto tra gli algoritmi LS e DV",
+      "Criteri di arresto dell'invio",
+      "DV:",
+      "Dal router A alle varie sottoreti:",
+      "Decentralizzato:",
+      "Definiamo la seguente notazione:",
+      "Dinamico:",
+      "Distance Vector: cambio del costo dei link",
+      "Distance Vector: inversione avvelenata",
+      "Distribuito:",
+      "Formula di Bellman-Ford: esempio",
+      "Funzionalit\u00e0 del livello Rete",
+      "Grafo di una rete : costi",
+      "Idea di base:",
+      "Instradamento gerarchico",
+      "Instradamento inter-AS in Internet: BGP",
+      "Instradamento tra sistemi autonomi",
+      "Internet Control Message Protocol (ICMP)",
+      "OSPF (Open Shortest Path First)",
+      "Piano di controllo Per-router",
+      "Piano di controllo centralizzato",
+      "Policy-based routing:",
+      "RIP (Routing Information Protocol)",
+      "Reti di calcolatori e Internet: Un approccio top-down",
+      "Router gateway",
+      "Scala: con 200 milioni di destinazioni:",
+      "Statico o dinamico?",
+      "Statico:",
+      "Tabella d' inoltro in u:",
+      "Tabelle d'instradamento RIP",
+      "Traceroute e ICMP",
+      "Velocit\u00e0 di convergenza:",
+      "eBGP, iBGP connections"
+    ]
+  },
+  {
+    "file": "/home/kiycoh/Documents/Obsidian/Alex's Second Brain Sync/0 Inbox/reti_internet/Esercitazione 03 + soluzione parziale.md",
+    "collisions": [],
+    "new_concepts": [
+      "Esercizio 1",
+      "Esercizio2",
+      "Internet Reti di Calcolatori e Internet Ing. A. De Paola",
+      "Note:",
+      "Soluzione:",
+      "Tempo che va da timout a t$\\_{finale}$"
+    ]
+  },
+  {
+    "file": "/home/kiycoh/Documents/Obsidian/Alex's Second Brain Sync/0 Inbox/reti_internet/0 - info corso.md",
+    "collisions": [],
+    "new_concepts": [
+      "Materiale didattico",
+      "Modalit\u00e0 d'esame",
+      "Orari delle lezioni",
+      "\u00b7 Internet",
+      "\u00b7 Reti di Calcolatori e Internet"
+    ]
+  },
+  {
+    "file": "/home/kiycoh/Documents/Obsidian/Alex's Second Brain Sync/0 Inbox/reti_internet/slide-cap-03-b.md",
+    "collisions": [
+      {
+        "name": "ricevente",
+        "hit_count": 9,
+        "hits": [
+          {
+            "path": "/home/kiycoh/Documents/Obsidian/Alex's Second Brain Sync/1 Cultura/1.1 Informatica/1.1.6 Telecomunicazioni/Trasferimento dati affidabile (RDT).md",
+            "count": 2
+          },
+          {
+            "path": "/home/kiycoh/Documents/Obsidian/Alex's Second Brain Sync/1 Cultura/1.1 Informatica/1.1.6 Telecomunicazioni/Collo di bottiglia.md",
+            "count": 1
+          },
+          {
+            "path": "/home/kiycoh/Documents/Obsidian/Alex's Second Brain Sync/1 Cultura/1.1 Informatica/1.1.6 Telecomunicazioni/Mezzi trasmissivi.md",
+            "count": 1
+          }
+        ]
+      },
+      {
+        "name": "Go-Back-N",
+        "hit_count": 1,
+        "hits": [
+          {
+            "path": "/home/kiycoh/Documents/Obsidian/Alex's Second Brain Sync/1 Cultura/1.1 Informatica/1.1.6 Telecomunicazioni/Trasferimento dati affidabile (RDT).md",
+            "count": 1
+          }
+        ]
+      }
+    ],
+    "new_concepts": [
+      "-Ricevente",
+      "Capitolo 3: Livello di trasporto",
+      "Dati dall'alto:",
+      "Esempio:",
+      "GBN in action",
+      "GBN: automa esteso del ricevente",
+      "Gestione dei duplicati:",
+      "Go-back-N:",
+      "Mittente:",
+      "Pipelining: aumento dell'utilizzo",
+      "Prestazioni di rdt3.0",
+      "Principi del trasferimento dati affidabile",
+      "Protocolli con pipeline",
+      "Rdt1.0: trasferimento affidabile su canale affidabile",
+      "Rdt2.0: canale con errori nei bit",
+      "Reti di calcolatori e Internet: Un approccio top- down",
+      "Ricevente:",
+      "Ripetizione selettiva",
+      "Ripetizione selettiva: dilemma",
+      "Selective repeat in action",
+      "Timeout(n):",
+      "Trasferimento dati affidabile: preparazione",
+      "rdt2.0 ha un difetto fatale!",
+      "rdt2.0: operazione senza errori",
+      "rdt2.0: scenario di errore",
+      "rdt2.0: specifica dell'automa",
+      "rdt2.1: discussion",
+      "rdt2.1: il mittente gestisce gli ACK/NAK alterati",
+      "rdt2.1: il ricevente gestisce gli ACK/NAK alterati",
+      "rdt2.2: frammenti del mittente e del ricevente",
+      "rdt2.2: un protocollo senza NAK",
+      "rdt3.0 in azione",
+      "rdt3.0 mittente",
+      "rdt3.0: canali con errori e perdite",
+      "rdt3.0: funzionamento con stop-and-wait",
+      "stop and wait",
+      "\uf070 Pacchetto fuori sequenza:"
+    ]
+  },
+  {
+    "file": "/home/kiycoh/Documents/Obsidian/Alex's Second Brain Sync/0 Inbox/reti_internet/slide-cap-04-a.md",
+    "collisions": [
+      {
+        "name": "Tabelle di inoltro",
+        "hit_count": 2,
+        "hits": [
+          {
+            "path": "/home/kiycoh/Documents/Obsidian/Alex's Second Brain Sync/1 Cultura/1.1 Informatica/1.1.6 Telecomunicazioni/Protocolli di Instradamento.md",
+            "count": 1
+          },
+          {
+            "path": "/home/kiycoh/Documents/Obsidian/Alex's Second Brain Sync/1 Cultura/1.1 Informatica/1.1.6 Telecomunicazioni/Inoltro e Instradamento.md",
+            "count": 1
+          }
+        ]
+      }
+    ],
+    "new_concepts": [
+      "Accodamento delle porte di uscita",
+      "Accodamento nelle porte di Input",
+      "Architettura del router",
+      "COSA SI TROVA ALL'INTERNO DI UN ROUTER?",
+      "Commutazione in memoria",
+      "Commutazione tramite bus",
+      "Confronta un prefisso dell' indirizzo",
+      "Formato dei datagrammi",
+      "Frammentazione dei datagrammi IP",
+      "Frammentazione e riassemblaggio IP",
+      "Funzioni chiave del livello di rete",
+      "Instradamento e inoltro",
+      "Modeli di servizi del livello di rete",
+      "Modello di servizio del livello di rete",
+      "Network layer",
+      "PROTOCOLLO INTERNET (IP)",
+      "Porte d' ingresso",
+      "Porte d'uscita",
+      "Reti a datagramma",
+      "Reti di calcolatori e Internet: Un approccio top-down",
+      "Servizi per un flusso di datagrammi:",
+      "Servizi per un singolo datagramma:",
+      "Struttura di commutazione",
+      "Tabella d' inoltro",
+      "analogia:"
+    ]
+  },
+  {
+    "file": "/home/kiycoh/Documents/Obsidian/Alex's Second Brain Sync/0 Inbox/reti_internet/slide-cap-04-b.md",
+    "collisions": [
+      {
+        "name": "Definizione",
+        "hit_count": 21,
+        "hits": [
+          {
+            "path": "/home/kiycoh/Documents/Obsidian/Alex's Second Brain Sync/1 Cultura/1.1 Informatica/1.1.6 Telecomunicazioni/Architettura di rete.md",
+            "count": 1
+          },
+          {
+            "path": "/home/kiycoh/Documents/Obsidian/Alex's Second Brain Sync/1 Cultura/1.1 Informatica/1.1.6 Telecomunicazioni/Internet Service Provider (ISP).md",
+            "count": 1
+          },
+          {
+            "path": "/home/kiycoh/Documents/Obsidian/Alex's Second Brain Sync/1 Cultura/1.1 Informatica/1.1.6 Telecomunicazioni/Telecomunicazioni.md",
+            "count": 1
+          }
+        ]
+      },
+      {
+        "name": "Sottoreti",
+        "hit_count": 3,
+        "hits": [
+          {
+            "path": "/home/kiycoh/Documents/Obsidian/Alex's Second Brain Sync/1 Cultura/1.1 Informatica/1.1.6 Telecomunicazioni/Sottoreti (Subnetting).md",
+            "count": 3
+          }
+        ]
+      },
+      {
+        "name": "Indirizzamento",
+        "hit_count": 3,
+        "hits": [
+          {
+            "path": "/home/kiycoh/Documents/Obsidian/Alex's Second Brain Sync/1 Cultura/1.1 Informatica/1.1.6 Telecomunicazioni/Indirizzamento IPv4.md",
+            "count": 2
+          },
+          {
+            "path": "/home/kiycoh/Documents/Obsidian/Alex's Second Brain Sync/1 Cultura/1.1 Informatica/1.1.6 Telecomunicazioni/IPv6.md",
+            "count": 1
+          }
+        ]
+      },
+      {
+        "name": "Indirizzamento IPv4",
+        "hit_count": 2,
+        "hits": [
+          {
+            "path": "/home/kiycoh/Documents/Obsidian/Alex's Second Brain Sync/1 Cultura/1.1 Informatica/1.1.6 Telecomunicazioni/Indirizzamento IPv4.md",
+            "count": 2
+          }
+        ]
+      },
+      {
+        "name": "Sottorete",
+        "hit_count": 1,
+        "hits": [
+          {
+            "path": "/home/kiycoh/Documents/Obsidian/Alex's Second Brain Sync/1 Cultura/1.1 Informatica/1.1.6 Telecomunicazioni/Sottoreti (Subnetting).md",
+            "count": 1
+          }
+        ]
+      }
+    ],
+    "new_concepts": [
+      "Assegnazione indirizzi Internet CIDR",
+      "Client MAC address: Wiston\\_23:68:8a (00:16:d3:23:68:8a)",
+      "Come ottenere un blocco di indirizzi",
+      "DHCP: Dynamic Host Configuration Protocol",
+      "Indirizzamento con Classi",
+      "Indirizzamento gerarchico",
+      "Indirizzamento gerarchico pi\u00f9 specifico",
+      "Inoltro dei pacchetti: Host",
+      "Inoltro dei pacchetti: Router",
+      "NAT \u00e8 contestato perch\u00e9:",
+      "Netmask",
+      "Option: (55) Parameter Request List",
+      "PROTOCOLLO INTERNET (IP)",
+      "PROTOCOLLO INTERNET (IP) NAT",
+      "Panoramica di DHCP:",
+      "Reami di indirizzi privati",
+      "Reti di calcolatori e Internet: Un approccio top-down",
+      "Scenario client-server DHCP",
+      "Traduzione degli indirizzi di rete (NAT)",
+      "Transaction ID: 0x6b3a11b7",
+      "q Insiemi di indirizzi privati",
+      "\u2752 Cos'\u00e8 una sottorete?",
+      "\uf070 Configurazione manuale:",
+      "\uf070 DHCP: Dynamic Host Configuration Protocol:"
+    ]
+  },
+  {
+    "file": "/home/kiycoh/Documents/Obsidian/Alex's Second Brain Sync/0 Inbox/reti_internet/slide-cap-03-a.md",
+    "collisions": [
+      {
+        "name": "Checksum UDP",
+        "hit_count": 2,
+        "hits": [
+          {
+            "path": "/home/kiycoh/Documents/Obsidian/Alex's Second Brain Sync/1 Cultura/1.1 Informatica/1.1.6 Telecomunicazioni/Checksum UDP.md",
+            "count": 2
+          }
+        ]
+      }
+    ],
+    "new_concepts": [
+      "Analogia con la posta ordinaria:",
+      "Capitolo 3: Livello di trasporto",
+      "Come funziona il demultiplexing",
+      "Demultiplexing orientato alla connessione",
+      "Demultiplexing orientato alla connessione (continua)",
+      "Demultiplexing senza connessione",
+      "Demultiplexing senza connessione (continua)",
+      "Esempio di checksum",
+      "Mittente:",
+      "Multiplexing/demultiplexing",
+      "Obiettivi:",
+      "Perch\u00e9 esiste UDP?",
+      "Protocolli del livello di trasporto in Internet",
+      "Relazione tra livello di trasporto e livello di rete",
+      "Reti di calcolatori e Internet: Un approccio top-down",
+      "Ricevente:",
+      "Senza connessione:",
+      "Servizi e protocolli di trasporto",
+      "UDP: User Datagram Protocol [RFC 768]",
+      "UDP: ulteriori informazioni"
+    ]
+  },
+  {
+    "file": "/home/kiycoh/Documents/Obsidian/Alex's Second Brain Sync/0 Inbox/reti_internet/Esercitazione 01 testo + soluzione.md",
+    "collisions": [],
+    "new_concepts": [
+      "DIPARTIMENTO DI INGEGNERIA",
+      "Domande aggiuntive:",
+      "Esercitazione 01",
+      "Esercizio 1",
+      "Soluzione"
+    ]
+  },
+  {
+    "file": "/home/kiycoh/Documents/Obsidian/Alex's Second Brain Sync/0 Inbox/reti_internet/slide-cap-02-b.md",
+    "collisions": [
+      {
+        "name": "Esempio",
+        "hit_count": 7,
+        "hits": [
+          {
+            "path": "/home/kiycoh/Documents/Obsidian/Alex's Second Brain Sync/1 Cultura/1.1 Informatica/1.1.6 Telecomunicazioni/Protocollo di rete.md",
+            "count": 3
+          },
+          {
+            "path": "/home/kiycoh/Documents/Obsidian/Alex's Second Brain Sync/1 Cultura/1.1 Informatica/1.1.6 Telecomunicazioni/Interoperabilit\u00e0.md",
+            "count": 2
+          },
+          {
+            "path": "/home/kiycoh/Documents/Obsidian/Alex's Second Brain Sync/1 Cultura/1.1 Informatica/1.1.6 Telecomunicazioni/Switch (Telecomunicazione).md",
+            "count": 1
+          }
+        ]
+      },
+      {
+        "name": "Posta elettronica",
+        "hit_count": 2,
+        "hits": [
+          {
+            "path": "/home/kiycoh/Documents/Obsidian/Alex's Second Brain Sync/1 Cultura/1.1 Informatica/1.1.6 Telecomunicazioni/Posta Elettronica (SMTP, POP3, IMAP).md",
+            "count": 2
+          }
+        ]
+      },
+      {
+        "name": "IMAP",
+        "hit_count": 2,
+        "hits": [
+          {
+            "path": "/home/kiycoh/Documents/Obsidian/Alex's Second Brain Sync/1 Cultura/1.1 Informatica/1.1.6 Telecomunicazioni/Posta Elettronica (SMTP, POP3, IMAP).md",
+            "count": 2
+          }
+        ]
+      }
+    ],
+    "new_concepts": [
+      "Agente utente",
+      "Capitolo 2: Livello di applicazione",
+      "Componenti architetturali:",
+      "Confronto con HTTP:",
+      "DNS",
+      "DNS: Domain Name System",
+      "DNS: caching e aggiornamento dei record",
+      "DNS: server DNS radice",
+      "Domain Name System:",
+      "Esempio di interazione SMTP",
+      "Fase di transazione, client:",
+      "Formato dei messaggi di posta elettronica",
+      "Host e router di Internet:",
+      "Il client vuole l'IP di www.amazon.com; 1\u00aa approssimazione:",
+      "Inserire record nel database DNS",
+      "Intestazione del messaggio",
+      "Messaggi DNS",
+      "POP3 (altro) e IMAP",
+      "Perch\u00e9 non centralizzare DNS?",
+      "Posta elettronica: SMTP [RFC 2821]",
+      "Posta elettronica: server di posta",
+      "Protocolli di accesso alla posta",
+      "Protocollo POP3",
+      "Query iterativa:",
+      "Query ricorsiva:",
+      "Record DNS",
+      "Reti di calcolatori e Internet: Un approccio top-down",
+      "SMTP: note finali",
+      "Scenario: Alice invia un messaggio a Bob",
+      "Server DNS locale",
+      "Server TLD e server di competenza",
+      "Type=CNAME",
+      "Type=MX",
+      "\u274f Flag:",
+      "\u274f Type=NS"
+    ]
+  },
+  {
+    "file": "/home/kiycoh/Documents/Obsidian/Alex's Second Brain Sync/0 Inbox/reti_internet/slide-cap-03-d.md",
+    "collisions": [
+      {
+        "name": "Throughput TCP",
+        "hit_count": 2,
+        "hits": [
+          {
+            "path": "/home/kiycoh/Documents/Obsidian/Alex's Second Brain Sync/1 Cultura/1.1 Informatica/1.1.6 Telecomunicazioni/Throughput TCP.md",
+            "count": 2
+          }
+        ]
+      },
+      {
+        "name": "Controllo di congestione TCP",
+        "hit_count": 1,
+        "hits": [
+          {
+            "path": "/home/kiycoh/Documents/Obsidian/Alex's Second Brain Sync/1 Cultura/1.1 Informatica/1.1.6 Telecomunicazioni/Controllo di Congestione TCP.md",
+            "count": 1
+          }
+        ]
+      },
+      {
+        "name": "Partenza lenta",
+        "hit_count": 1,
+        "hits": [
+          {
+            "path": "/home/kiycoh/Documents/Obsidian/Alex's Second Brain Sync/1 Cultura/1.1 Informatica/1.1.6 Telecomunicazioni/Controllo di Congestione TCP.md",
+            "count": 1
+          }
+        ]
+      }
+    ],
+    "new_concepts": [
+      "\"Costi\" della congestione:",
+      "Approcci al controllo della congestione",
+      "Capitolo 3: Livello di trasporto",
+      "Cause/costi della congestione: scenario 2",
+      "Cause/costi della congestione: scenario 3",
+      "Cause/costi della consegione: scenario 1",
+      "Congestione:",
+      "Controllo della congestione assistito dalla rete:",
+      "Decremento moltiplicativo:",
+      "Equit\u00e0 di TCP",
+      "Equit\u00e0 e UDP",
+      "Equit\u00e0 e connessioni TCP in parallelo",
+      "Explicit Congestion Notification (ECN)",
+      "In che modo il mittente percepisce la congestione?",
+      "Partenza lenta (continua)",
+      "Perch\u00e9 TCP \u00e8 equo?",
+      "Principi del controllo di congestione",
+      "Reti di calcolatori e Internet: Un approccio top-down",
+      "Riassunto: il controllo della congestione TCP",
+      "Riepilogo: Controllo di Congestione del TCP",
+      "TCP: passaggio tra slow start e congestion avoidance",
+      "TCP: reazione ad un evento di perdita",
+      "Un altro \"costo\" della congestione:",
+      "Valore Soglia:",
+      "tre meccanismi:",
+      "\uf070 Utilizzano UDP:"
+    ]
+  },
+  {
+    "file": "/home/kiycoh/Documents/Obsidian/Alex's Second Brain Sync/0 Inbox/reti_internet/slide-cap-03-d-analysis.md",
+    "collisions": [],
+    "new_concepts": [
+      "AIMD Growth Pattern",
+      "Concept Extraction & Collision Analysis: slide-cap-03-d.md",
+      "Congestion Control Principles",
+      "Congestion Detection Mechanisms",
+      "Congestion Window Dynamics (CongWin function)",
+      "ECN (Explicit Congestion Notification)",
+      "Extracted Concepts with Collision Status",
+      "File:",
+      "Files for Potential Collaboration",
+      "Flow Control vs Congestion Control Distinction",
+      "Focus:",
+      "Slow Start Phase (Partenza lenta)",
+      "Source File Overview",
+      "Summary Statistics",
+      "TCP Fairness Mechanism",
+      "TCP Three-Way Handshake",
+      "TCP Throughput Formula",
+      "TOTAL CONCEPTS IDENTIFIED",
+      "Topic:",
+      "Transport Layer Services Overview"
+    ]
+  },
+  {
+    "file": "/home/kiycoh/Documents/Obsidian/Alex's Second Brain Sync/0 Inbox/reti_internet/slide-cap-02-a.md",
+    "collisions": [
+      {
+        "name": "Throughput",
+        "hit_count": 9,
+        "hits": [
+          {
+            "path": "/home/kiycoh/Documents/Obsidian/Alex's Second Brain Sync/1 Cultura/1.1 Informatica/1.1.6 Telecomunicazioni/Collo di bottiglia.md",
+            "count": 5
+          },
+          {
+            "path": "/home/kiycoh/Documents/Obsidian/Alex's Second Brain Sync/1 Cultura/1.1 Informatica/1.1.6 Telecomunicazioni/Throughput TCP.md",
+            "count": 3
+          },
+          {
+            "path": "/home/kiycoh/Documents/Obsidian/Alex's Second Brain Sync/1 Cultura/1.1 Informatica/1.1.6 Telecomunicazioni/Trasferimento dati affidabile (RDT).md",
+            "count": 1
+          }
+        ]
+      },
+      {
+        "name": "Sicurezza",
+        "hit_count": 5,
+        "hits": [
+          {
+            "path": "/home/kiycoh/Documents/Obsidian/Alex's Second Brain Sync/1 Cultura/1.1 Informatica/1.1.6 Telecomunicazioni/Sicurezza di rete.md",
+            "count": 3
+          },
+          {
+            "path": "/home/kiycoh/Documents/Obsidian/Alex's Second Brain Sync/1 Cultura/1.1 Informatica/1.1.6 Telecomunicazioni/Architettura Peer-to-Peer.md",
+            "count": 1
+          },
+          {
+            "path": "/home/kiycoh/Documents/Obsidian/Alex's Second Brain Sync/1 Cultura/1.1 Informatica/1.1.6 Telecomunicazioni/Sottoreti (Subnetting).md",
+            "count": 1
+          }
+        ]
+      },
+      {
+        "name": "Socket",
+        "hit_count": 5,
+        "hits": [
+          {
+            "path": "/home/kiycoh/Documents/Obsidian/Alex's Second Brain Sync/1 Cultura/1.1 Informatica/1.1.6 Telecomunicazioni/Socket di Rete.md",
+            "count": 2
+          },
+          {
+            "path": "/home/kiycoh/Documents/Obsidian/Alex's Second Brain Sync/1 Cultura/1.1 Informatica/1.1.6 Telecomunicazioni/Multiplexing e Demultiplexing.md",
+            "count": 2
+          },
+          {
+            "path": "/home/kiycoh/Documents/Obsidian/Alex's Second Brain Sync/1 Cultura/1.1 Informatica/1.1.6 Telecomunicazioni/Servizi tra Processi Applicativi.md",
+            "count": 1
+          }
+        ]
+      },
+      {
+        "name": "Connessioni HTTP",
+        "hit_count": 4,
+        "hits": [
+          {
+            "path": "/home/kiycoh/Documents/Obsidian/Alex's Second Brain Sync/1 Cultura/1.1 Informatica/1.1.6 Telecomunicazioni/Connessioni HTTP Persistenti.md",
+            "count": 2
+          },
+          {
+            "path": "/home/kiycoh/Documents/Obsidian/Alex's Second Brain Sync/1 Cultura/1.1 Informatica/1.1.6 Telecomunicazioni/Connessioni HTTP Non Persistenti.md",
+            "count": 2
+          }
+        ]
+      },
+      {
+        "name": "200 OK",
+        "hit_count": 2,
+        "hits": [
+          {
+            "path": "/home/kiycoh/Documents/Obsidian/Alex's Second Brain Sync/1 Cultura/1.1 Informatica/1.1.6 Telecomunicazioni/Codici di Stato HTTP.md",
+            "count": 1
+          },
+          {
+            "path": "/home/kiycoh/Documents/Obsidian/Alex's Second Brain Sync/1 Cultura/1.1 Informatica/1.1.6 Telecomunicazioni/Messaggi HTTP.md",
+            "count": 1
+          }
+        ]
+      },
+      {
+        "name": "404 Not Found",
+        "hit_count": 2,
+        "hits": [
+          {
+            "path": "/home/kiycoh/Documents/Obsidian/Alex's Second Brain Sync/1 Cultura/1.1 Informatica/1.1.6 Telecomunicazioni/Codici di Stato HTTP.md",
+            "count": 1
+          },
+          {
+            "path": "/home/kiycoh/Documents/Obsidian/Alex's Second Brain Sync/1 Cultura/1.1 Informatica/1.1.6 Telecomunicazioni/Messaggi HTTP.md",
+            "count": 1
+          }
+        ]
+      },
+      {
+        "name": "Architettura client-server",
+        "hit_count": 2,
+        "hits": [
+          {
+            "path": "/home/kiycoh/Documents/Obsidian/Alex's Second Brain Sync/1 Cultura/1.1 Informatica/1.1.6 Telecomunicazioni/Architettura Client-Server.md",
+            "count": 2
+          }
+        ]
+      },
+      {
+        "name": "Messaggi HTTP",
+        "hit_count": 2,
+        "hits": [
+          {
+            "path": "/home/kiycoh/Documents/Obsidian/Alex's Second Brain Sync/1 Cultura/1.1 Informatica/1.1.6 Telecomunicazioni/Messaggi HTTP.md",
+            "count": 2
+          }
+        ]
+      },
+      {
+        "name": "GET condizionale",
+        "hit_count": 1,
+        "hits": [
+          {
+            "path": "/home/kiycoh/Documents/Obsidian/Alex's Second Brain Sync/1 Cultura/1.1 Informatica/1.1.6 Telecomunicazioni/Caching Web.md",
+            "count": 1
+          }
+        ]
+      },
+      {
+        "name": "Protocollo a livello di applicazione",
+        "hit_count": 1,
+        "hits": [
+          {
+            "path": "/home/kiycoh/Documents/Obsidian/Alex's Second Brain Sync/1 Cultura/1.1 Informatica/1.1.6 Telecomunicazioni/HTTP.md",
+            "count": 1
+          }
+        ]
+      },
+      {
+        "name": "400 Bad Request",
+        "hit_count": 1,
+        "hits": [
+          {
+            "path": "/home/kiycoh/Documents/Obsidian/Alex's Second Brain Sync/1 Cultura/1.1 Informatica/1.1.6 Telecomunicazioni/Codici di Stato HTTP.md",
+            "count": 1
+          }
+        ]
+      },
+      {
+        "name": "301 Moved Permanently",
+        "hit_count": 1,
+        "hits": [
+          {
+            "path": "/home/kiycoh/Documents/Obsidian/Alex's Second Brain Sync/1 Cultura/1.1 Informatica/1.1.6 Telecomunicazioni/Codici di Stato HTTP.md",
+            "count": 1
+          }
+        ]
+      },
+      {
+        "name": "nota",
+        "hit_count": 1,
+        "hits": [
+          {
+            "path": "/home/kiycoh/Documents/Obsidian/Alex's Second Brain Sync/1 Cultura/1.1 Informatica/1.1.6 Telecomunicazioni/Switch (Telecomunicazione).md",
+            "count": 1
+          }
+        ]
+      },
+      {
+        "name": "DELETE",
+        "hit_count": 1,
+        "hits": [
+          {
+            "path": "/home/kiycoh/Documents/Obsidian/Alex's Second Brain Sync/1 Cultura/1.1 Informatica/1.1.6 Telecomunicazioni/Messaggi HTTP.md",
+            "count": 1
+          }
+        ]
+      }
+    ],
+    "new_concepts": [
+      "Architettura P2P pura",
+      "Architettura delle applicazioni di rete",
+      "Cache web (continua)",
+      "Cache web (server proxy)",
+      "Campo URL:",
+      "Capitolo 2: Livello di applicazione",
+      "Codici di stato della risposta HTTP",
+      "Connessioni non persistenti",
+      "Connessioni persistenti",
+      "Conseguenze",
+      "Cookie (continua)",
+      "Cookie e privacy:",
+      "Creare un'applicazione di rete",
+      "Esempio di caching",
+      "Esempio di caching (continua)",
+      "Esempio:",
+      "HTTP/1.0",
+      "HTTP/1.1",
+      "Ibridi (client-server e P2P)",
+      "Interazione utente-server: i cookie",
+      "Ipotesi",
+      "Lo \"stato\"",
+      "Messaggiistica istantanea",
+      "Messaggio di richiesta HTTP: formato generale",
+      "Messaggio di risposta HTTP",
+      "Metodo Post:",
+      "Panoramica su HTTP",
+      "Panoramica su HTTP (continua)",
+      "Perch\u00e9 il caching web?",
+      "Processi comunicanti",
+      "Processi di indirizzamento",
+      "Quale servizio di trasporto richiede un'applicazione?",
+      "Quattro componenti:",
+      "Reti di calcolatori e Internet: Un approccio top-down",
+      "Schema del tempo di risposta",
+      "Servizi dei protocolli di trasporto Internet",
+      "Servizio di TCP:",
+      "Servizio di UDP:",
+      "Temporizzazione",
+      "Tipi di metodi",
+      "Upload dell'input di un form",
+      "Usa TCP:",
+      "Uso intensivo dell'infrastruttura",
+      "Web e HTTP",
+      "client:",
+      "server:",
+      "software in grado di funzionare su pi\u00f9 macchine"
+    ]
+  },
+  {
+    "file": "/home/kiycoh/Documents/Obsidian/Alex's Second Brain Sync/0 Inbox/reti_internet/slide-cap-04-c.md",
+    "collisions": [
+      {
+        "name": "IPv6",
+        "hit_count": 9,
+        "hits": [
+          {
+            "path": "/home/kiycoh/Documents/Obsidian/Alex's Second Brain Sync/1 Cultura/1.1 Informatica/1.1.6 Telecomunicazioni/IPv6.md",
+            "count": 4
+          },
+          {
+            "path": "/home/kiycoh/Documents/Obsidian/Alex's Second Brain Sync/1 Cultura/1.1 Informatica/1.1.6 Telecomunicazioni/Tunneling (Rete).md",
+            "count": 2
+          },
+          {
+            "path": "/home/kiycoh/Documents/Obsidian/Alex's Second Brain Sync/1 Cultura/1.1 Informatica/1.1.6 Telecomunicazioni/Internet Protocol (IP).md",
+            "count": 2
+          }
+        ]
+      },
+      {
+        "name": "Tunneling",
+        "hit_count": 3,
+        "hits": [
+          {
+            "path": "/home/kiycoh/Documents/Obsidian/Alex's Second Brain Sync/1 Cultura/1.1 Informatica/1.1.6 Telecomunicazioni/Tunneling (Rete).md",
+            "count": 2
+          },
+          {
+            "path": "/home/kiycoh/Documents/Obsidian/Alex's Second Brain Sync/1 Cultura/1.1 Informatica/1.1.6 Telecomunicazioni/IPv6.md",
+            "count": 1
+          }
+        ]
+      },
+      {
+        "name": "Topologia a stella",
+        "hit_count": 1,
+        "hits": [
+          {
+            "path": "/home/kiycoh/Documents/Obsidian/Alex's Second Brain Sync/1 Cultura/1.1 Informatica/1.1.6 Telecomunicazioni/Topologie di rete.md",
+            "count": 1
+          }
+        ]
+      }
+    ],
+    "new_concepts": [
+      "Altre novit\u00e0 di IPv6",
+      "Esercizio 1",
+      "Esercizio 2",
+      "Formato dei datagrammi IPv6",
+      "Formato dei datagrammi IPv6:",
+      "PROTOCOLLO INTERNET (IP)",
+      "Passaggio da IPv4 a IPv6",
+      "Piano di indirizzamento ottimizzato",
+      "Piano di indirizzamento semplificato",
+      "Reti di calcolatori e Internet: Un approccio top-down",
+      "Topologia generica",
+      "Topologie di Rete e Subnetting",
+      "\uf06f Altre motivazioni:",
+      "\uf071 Metodo:"
+    ]
+  },
+  {
+    "file": "/home/kiycoh/Documents/Obsidian/Alex's Second Brain Sync/0 Inbox/reti_internet/slide-cap-03-c.md",
+    "collisions": [],
+    "new_concepts": [
+      "Algoritmo della ritrasmissione rapida:",
+      "Capitolo 3: Livello di trasporto",
+      "D: come stimare RTT?",
+      "Dati ricevuti dall'applicazione:",
+      "Esempio di stima di RTT:",
+      "Gestione della connessione TCP",
+      "Gestione della connessione TCP (continua)",
+      "Impostazione del timeout",
+      "Mittente TCP (semplificato)",
+      "RFC: 793, 1122, 1323, 2018, 2581",
+      "Raddoppio dell' intervallo di",
+      "Reti di calcolatori e Internet: Un approccio top-down",
+      "Ritrasmissione rapida - triplo ACK duplicato",
+      "Se riscontra segmenti",
+      "Struttura dei segmenti TCP",
+      "TCP 3-way handshake",
+      "TCP controllo di flusso",
+      "TCP flow control",
+      "TCP seq. numbers, ACKs",
+      "TCP: Panoramica",
+      "TCP: closing a connection",
+      "TCP: eventi del mittente",
+      "TCP: generazione di ACK [RFC 1122, RFC 2581]",
+      "TCP: scenari di ritrasmissione",
+      "TCP: tempo di andata e ritorno e timeout",
+      "TCP: tempo di andata e ritorno timeout",
+      "TCP: trasferimento dati affidabile",
+      "Timeout:",
+      "acknowledgements:",
+      "sequence numbers:",
+      "\uf072 orientato alla connessione :"
+    ]
+  },
+  {
+    "file": "/home/kiycoh/Documents/Obsidian/Alex's Second Brain Sync/0 Inbox/reti_internet/scheda.trasparenza - Reti di Calcolatori e Internet.md",
+    "collisions": [
+      {
+        "name": "PROGRAMMA",
+        "hit_count": 2,
+        "hits": [
+          {
+            "path": "/home/kiycoh/Documents/Obsidian/Alex's Second Brain Sync/1 Cultura/1.1 Informatica/1.1.6 Telecomunicazioni/Traceroute.md",
+            "count": 1
+          },
+          {
+            "path": "/home/kiycoh/Documents/Obsidian/Alex's Second Brain Sync/1 Cultura/1.1 Informatica/1.1.6 Telecomunicazioni/Architettura Client-Server.md",
+            "count": 1
+          }
+        ]
+      }
+    ],
+    "new_concepts": []
+  }
+]

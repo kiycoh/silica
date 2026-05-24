@@ -1,0 +1,30 @@
+[build-system]
+requires = ["setuptools>=61.0"]
+build-backend = "setuptools.build_meta"
+
+[project]
+name = "silica"
+version = "0.1.0"
+description = "Obsidian-native agentic CLI — vault curation with quality gates"
+readme = "SILICA.md"
+requires-python = ">=3.11"
+license = { text = "MIT" }
+dependencies = [
+  "litellm",
+  "pydantic>=2.0",
+  "prompt_toolkit>=3.0",
+  "pyyaml>=6.0",
+  "python-dotenv>=1.0",
+]
+
+[project.optional-dependencies]
+dev = ["pytest>=8.0", "mypy>=1.10"]
+
+[project.scripts]
+silica = "silica.cli:main"
+
+[tool.setuptools.packages.find]
+include = ["silica", "silica.*"]
+
+[tool.pytest.ini_options]
+testpaths = ["tests"]
