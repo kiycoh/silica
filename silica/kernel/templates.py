@@ -14,7 +14,7 @@ def slugify(s: str) -> str:
     return s.strip().replace('  ', ' ')  # keep spaces, Obsidian likes them
 
 
-def template_spoke(heading: str, snippet: str, hub: str, tags: list[str] = None, related: list[str] = None) -> str:
+def template_spoke(heading: str, snippet: str, hub: str, tags: list[str] | None = None, related: list[str] | None = None) -> str:
     today = datetime.date.today().strftime("%Y, %m, %d")
     body = snippet.strip() or "(da espandere)"
 
@@ -64,7 +64,7 @@ AI: true
 """
 
 
-def patch_snippet(heading: str, snippet: str, source_basename: str, hub: str = None, existing_content: str = None) -> str:
+def patch_snippet(heading: str, snippet: str, source_basename: str, hub: str | None = None, existing_content: str | None = None) -> str:
     patch_text = f"""
 
 ## Note aggiuntive — {heading} (da {source_basename})

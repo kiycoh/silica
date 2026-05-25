@@ -284,9 +284,18 @@ class ObsidianFSBackend:
             link_counts[name] = len(self._links.get(name, []))
             backlink_counts[name] = len(self._backlinks.get(name, []))
 
-        # Filter orphans & unresolved to neighborhood
-        orphans = [r for r in self.orphans() if r.name in neighborhood]
-        unresolved = [l for l in self.unresolved() if l.source.name in neighborhood]
+        # Filter orphans & unresolved to neighborhood incrementally
+        orphans = [
+            self._notes[name] for name in neighborhood
+            if name in self._notes and (name not in self._backlinks or not self._backlinks[name])
+        ]
+        unresolved = []
+        for name in neighborhood:
+            if name in self._notes:
+                source_ref = self._notes[name]
+                for target in self._links.get(name, []):
+                    if target not in self._notes:
+                        unresolved.append(Link(source=source_ref, target=target))
 
         return GraphSnapshot(
             orphans=orphans,
@@ -352,7 +361,7 @@ class ObsidianFSBackend:
             
         data[name] = value
         
-        new_content = fm.join(data, body)
+        new_content = fm.dump(data, body)
         path.write_text(new_content, encoding="utf-8")
 
     def move(self, ref: NoteRef | str, to: str) -> None:

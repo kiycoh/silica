@@ -25,11 +25,11 @@ def partition_by_concepts(payload: dict, max_concepts: int, max_bytes: int = 80 
         return []
         
     chunks = []
-    current_concepts = []
+    current_concepts: list[tuple[str, dict]] = []
     
-    def build_chunk_dict(concept_list: list) -> dict:
+    def build_chunk_dict(concept_list: list[tuple[str, dict]]) -> dict:
         # Group list of (inbox_file, concept) into batches, preserving order
-        batches_dict = {}
+        batches_dict: dict[str, list[dict]] = {}
         for inbox_file, concept in concept_list:
             if inbox_file not in batches_dict:
                 batches_dict[inbox_file] = []

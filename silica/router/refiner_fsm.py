@@ -13,7 +13,7 @@ from enum import Enum, auto
 from typing import Any
 
 from silica.driver import DRIVER
-from silica.driver.base import NoteRef
+from silica.driver.base import NoteRef, Txn, GraphSnapshot
 from silica.tools.composed import (
     silica_bulk_write,
     silica_lint,
@@ -55,8 +55,8 @@ class RefinerFSM:
             "ops": [],
         }
         self._tmp_files: list[str] = []
-        self._txn = None  # holds the live Txn object for ROLLBACK
-        self._pre_graph = None  # pre-write graph snapshot
+        self._txn: Txn | None = None  # holds the live Txn object for ROLLBACK
+        self._pre_graph: GraphSnapshot | None = None  # pre-write graph snapshot
 
         # Load the recipe
         from silica.router.recipe_parser import load_recipe
@@ -218,7 +218,7 @@ class RefinerFSM:
         
         det_ops = []
         enrich_queue = []
-        summary = {"total": len(md_files), "decouple": 0, "reformat": 0, "enrich": 0, "ok": 0, "errors": []}
+        summary: dict[str, Any] = {"total": len(md_files), "decouple": 0, "reformat": 0, "enrich": 0, "ok": 0, "errors": []}
         ledger = get_ledger()
 
         for path in md_files:
@@ -266,7 +266,7 @@ class RefinerFSM:
                             preamble = "\n".join(lines[1:]).strip()
 
                     sections = ofm.sections_by_h2(body)
-                    seen = {}
+                    seen: dict[str, int] = {}
                     titles = []
                     for s in sections:
                         slug = templates.slugify(s["title"])

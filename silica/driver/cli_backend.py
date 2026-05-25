@@ -112,9 +112,9 @@ class ObsidianCLIBackend:
         if isinstance(data, list):
             for item in data:
                 if isinstance(item, dict):
-                    name = item.get("name", item.get("file", ""))
-                    path = item.get("path", item.get("file", ""))
-                    ref = NoteRef(name=name, path=path)
+                    name = item.get("name", item.get("file", "")) or ""
+                    path = item.get("path", item.get("file", "")) or ""
+                    ref = NoteRef(name=str(name), path=str(path))
                     # Handle matches within the item
                     matches = item.get("matches", [item])
                     for match in matches if isinstance(matches, list) else [matches]:
@@ -122,7 +122,7 @@ class ObsidianCLIBackend:
                             results.append(Hit(
                                 ref=ref,
                                 line=match.get("line", 0),
-                                snippet=match.get("content", match.get("text", "")),
+                                snippet=str(match.get("content", match.get("text", ""))),
                             ))
                         else:
                             results.append(Hit(ref=ref, snippet=str(match)))
@@ -154,7 +154,7 @@ class ObsidianCLIBackend:
                 if isinstance(item, dict):
                     headings.append(Heading(
                         level=item.get("level", 1),
-                        text=item.get("heading", item.get("text", "")),
+                        text=str(item.get("heading", item.get("text", ""))),
                         position=item.get("position", 0),
                     ))
         return headings
@@ -265,32 +265,47 @@ class ObsidianCLIBackend:
             except Exception:
                 pass
 
-        link_counts: dict[str, int] = {}
-        backlink_counts: dict[str, int] = {}
+        link_counts = {}
+        backlink_counts = {}
+        orphans: list[NoteRef] = []
+        unresolved: list[Link] = []
+
+        existence_cache: dict[str, bool] = {}
+        def note_exists(n: str) -> bool:
+            if n in existence_cache:
+                return existence_cache[n]
+            r = name_to_ref.get(n, NoteRef(name=n))
+            try:
+                self._run_cli("read", self._ref_arg(r))
+                exists = True
+            except Exception:
+                exists = False
+            existence_cache[n] = exists
+            return exists
 
         for name in neighborhood:
             ref = name_to_ref.get(name, NoteRef(name=name))
+            if not note_exists(name):
+                link_counts[name] = 0
+                backlink_counts[name] = 0
+                continue
+
             try:
                 out = self.links(ref)
                 link_counts[name] = len(out)
+                for target in out:
+                    if not note_exists(target.name):
+                        unresolved.append(Link(source=ref, target=target.name))
             except Exception:
                 link_counts[name] = 0
 
             try:
                 inc = self.backlinks(ref)
                 backlink_counts[name] = len(inc)
+                if len(inc) == 0:
+                    orphans.append(ref)
             except Exception:
                 backlink_counts[name] = 0
-
-        # Filter orphans & unresolved to neighborhood
-        all_orphans = self.orphans()
-        orphans = [r for r in all_orphans if r.name in neighborhood]
-
-        all_unresolved = self.unresolved()
-        unresolved = [
-            link for link in all_unresolved
-            if link.source.name in neighborhood or link.source.path in neighborhood
-        ]
 
         return GraphSnapshot(
             orphans=orphans,

@@ -4,8 +4,8 @@ from silica.driver import DRIVER
 def validate_operations(ops: list, payloads: list, target_dir: str) -> tuple[list, list]:
     """Validates operations against payloads and target_dir using DRIVER."""
     
-    valid_concepts = {}
-    expected_collision_paths = {}
+    valid_concepts: dict[str, set[str]] = {}
+    expected_collision_paths: dict[tuple[str, str], str | None] = {}
     inbox_folders = set()
     has_payloads = bool(payloads)
 
@@ -62,7 +62,7 @@ def validate_operations(ops: list, payloads: list, target_dir: str) -> tuple[lis
                 op["op"] = "write"
 
     # 2. Global deduplication
-    path_groups = {}
+    path_groups: dict[str, list[dict]] = {}
     for op in ops:
         op_type = op.get("op")
         path = op.get("path")

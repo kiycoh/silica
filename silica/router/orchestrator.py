@@ -22,7 +22,10 @@ import logging
 import os
 import tempfile
 from enum import Enum, auto
-from typing import Any
+from typing import Any, TYPE_CHECKING
+
+if TYPE_CHECKING:
+    from silica.driver.base import Txn, GraphSnapshot
 
 from silica.driver import DRIVER
 from silica.tools.composed import (
@@ -65,8 +68,8 @@ class InjectorFSM:
         self.state = InjectorState.INIT
         self.context: dict[str, Any] = {}
         self._tmp_files: list[str] = []
-        self._txn = None  # holds the live Txn object for ROLLBACK
-        self._pre_graph = None  # S3.2 pre-write graph snapshot
+        self._txn: Txn | None = None  # holds the live Txn object for ROLLBACK
+        self._pre_graph: GraphSnapshot | None = None  # S3.2 pre-write graph snapshot
 
         # S3.3: Load the recipe for dynamic configuration
         from silica.router.recipe_parser import load_recipe
@@ -283,7 +286,7 @@ class InjectorFSM:
             merged_updates.extend(r.get("updates", []))
 
         # Deduplicate by path (C4)
-        path_groups = {}
+        path_groups: dict[str, list[dict]] = {}
         for op in merged_updates:
             path = op.get("path")
             if path:

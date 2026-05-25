@@ -149,7 +149,7 @@ class ValidateOpsArgs(BaseModel):
     target_dir: str = Field(default="", description="Target folder in the vault")
 
 @tool(ValidateOpsArgs, cls="composed")
-def silica_validate_ops(ops_json_path: str, payload_paths: list[str] = None, target_dir: str = "") -> dict[str, Any]:
+def silica_validate_ops(ops_json_path: str, payload_paths: list[str] | None = None, target_dir: str = "") -> dict[str, Any]:
     """Gate pre-scrittura: controlla validità strutturale e applica threshold rigetti (10%).
 
     C4: After validation, OVERWRITES ops_json_path with the coerced + deduped

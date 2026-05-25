@@ -1,4 +1,5 @@
 import re
+from typing import Any
 from silica.driver import DRIVER
 
 DEFAULT_WINDOW = 450          # Chars on each side of a non-heading concept match.
@@ -6,7 +7,7 @@ MAX_EXCERPT_CHARS = 2000      # Hard per-excerpt cap.
 MAX_OCCURRENCES = 2           # Max non-overlapping windows per concept per file.
 FULL_INCLUDE_THRESHOLD = 6000 # Include whole note below this.
 
-def classify_action(collision: dict, in_new_concepts: bool) -> str:
+def classify_action(collision: dict | None, in_new_concepts: bool) -> str:
     if in_new_concepts:
         return "create"
     if not collision:
@@ -64,7 +65,7 @@ def safe_truncate(text: str, max_chars: int) -> str:
 
 def extract_windows(content: str, concept: str, window: int, max_occ: int) -> list:
     pattern = compile_concept_regex(concept)
-    windows = []
+    windows: list[str] = []
     last_end = -1
     for m in pattern.finditer(content):
         if len(windows) >= max_occ:
@@ -105,10 +106,10 @@ def vault_content_or_excerpt(note_name: str, concept: str, window: int, is_title
     except RuntimeError:
         return ""
 
-def build_concept_entry(name: str, inbox_name: str, collision: dict, in_new_concepts: bool, window: int) -> dict:
-    entry = {
+def build_concept_entry(name: str, inbox_name: str, collision: dict | None, in_new_concepts: bool, window: int) -> dict:
+    entry: dict[str, Any] = {
         "name": name,
-        "action_hint": classify_action(collision, in_new_concepts),
+        "action_hint": classify_action(collision, in_new_concepts) if collision is not None else "create",
         "inbox_excerpt": extract_excerpt_from_note(inbox_name, name, window),
     }
     if collision and collision.get("hits"):

@@ -49,7 +49,9 @@ def parse_json(raw: str, strict: bool = False):
             parse_err = e
 
     if parsed is None:
-        raise parse_err
+        if parse_err is not None:
+            raise parse_err
+        raise ValueError("JSON Parse Error")
 
     if strict and not was_strict_clean:
         raise ValueError("Strict mode violation: markdown fences, preambles, or postambles were stripped from the output.")
