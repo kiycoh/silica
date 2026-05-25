@@ -68,10 +68,7 @@ class ObsidianCLIBackend:
             )
             if result.stderr:
                 logger.debug("CLI stderr: %s", result.stderr.strip())
-            stdout = result.stdout.strip()
-            if stdout.startswith("Error:") or stdout.startswith("error:"):
-                raise RuntimeError(f"Obsidian CLI error output: {stdout}")
-            return stdout
+            return result.stdout.strip()
         except subprocess.TimeoutExpired:
             raise RuntimeError(f"Obsidian CLI timeout: {' '.join(cmd)}")
         except subprocess.CalledProcessError as e:

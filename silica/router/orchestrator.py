@@ -135,18 +135,6 @@ class InjectorFSM:
                 return phase
         return {}
 
-    @property
-    def target_mode(self) -> str:
-        from silica.router.target_resolver import resolve_ingestion_target
-        mode, _ = resolve_ingestion_target(self.target_dir, CONFIG.vault_path)
-        return mode
-
-    @property
-    def resolved_target(self) -> str:
-        from silica.router.target_resolver import resolve_ingestion_target
-        _, resolved = resolve_ingestion_target(self.target_dir, CONFIG.vault_path)
-        return resolved
-
     def _make_tmp(self, content: Any, suffix: str = ".json") -> str:
         """Write content as JSON to a temp file and track for cleanup."""
         fd, path = tempfile.mkstemp(suffix=suffix)
@@ -285,9 +273,8 @@ class InjectorFSM:
         def run_one(chunk: dict) -> dict:
             return run_distiller(
                 payload=chunk,
-                target=self.resolved_target,
+                target=self.target_dir,
                 hub=self.hub,
-                target_mode=self.target_mode,
             )
 
         phase_conf = self._get_recipe_phase("distill")
@@ -353,7 +340,7 @@ class InjectorFSM:
         res = silica_validate_ops(
             ops_path,
             payload_paths=payload_paths,
-            target_dir=self.resolved_target,
+            target_dir=self.target_dir,
         )
 
         if "error" in res:
