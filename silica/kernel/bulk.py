@@ -94,7 +94,7 @@ def execute_operations(ops: list) -> dict:
 
     failed_count = len(ops) - success_count
     return {
-        "success": success_count == len(ops) and len(ops) > 0,
+        "success": failed_count == 0,
         "total_operations": len(ops),
         "successful_operations": success_count,
         "failed_operations": failed_count,  # explicit count for WRITE state check (B4)

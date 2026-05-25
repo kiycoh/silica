@@ -18,7 +18,10 @@ from __future__ import annotations
 
 import logging
 
+import time
+
 from silica.agent.llm import call_llm
+from silica.config import CONFIG
 from silica.tools import TOOLS
 
 logger = logging.getLogger(__name__)
@@ -58,10 +61,26 @@ def run_agent(messages: list[dict], model: str) -> str:
         for tc in resp.tool_calls:
             logger.info("Tool call: %s(%s)", tc.name, tc.args)
 
+            start_time = time.perf_counter()
             if tc.name not in TOOLS:
                 result = f'{{"error": "Unknown tool: {tc.name}"}}'
             else:
+                if CONFIG.verbose:
+                    logger.info("[DEBUG Tool Input]: Running tool '%s' with args: %s", tc.name, tc.args)
                 result = TOOLS[tc.name].run(**tc.args)
+
+            duration = time.perf_counter() - start_time
+            if CONFIG.verbose:
+                res_str = str(result)
+                truncated_result = res_str
+                if len(res_str) > 1000:
+                    truncated_result = res_str[:1000] + "... (truncated to 1000 chars)"
+                logger.info(
+                    "[DEBUG Tool Output]: Tool '%s' executed in %.4fs | Result: %s",
+                    tc.name,
+                    duration,
+                    truncated_result,
+                )
 
             messages.append(
                 {

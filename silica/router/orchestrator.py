@@ -28,6 +28,7 @@ if TYPE_CHECKING:
     from silica.driver.base import Txn, GraphSnapshot
 
 from silica.driver import DRIVER
+from silica.config import CONFIG
 from silica.tools.composed import (
     silica_bulk_write,
     silica_lint,
@@ -144,6 +145,7 @@ class InjectorFSM:
             os.close(fd)
             raise
         self._tmp_files.append(path)
+        logger.debug("Creato file temporaneo di stage in: %s", path)
         return path
 
     def _cleanup_tmp(self) -> None:
@@ -167,6 +169,7 @@ class InjectorFSM:
         try:
             while self.state not in (InjectorState.DONE, InjectorState.ERROR):
                 try:
+                    logger.debug("FSM Transizione: %s -> eseguendo handler", self.state.name)
                     self.step()
                 except Exception as e:
                     logger.error("FSM Error in state %s: %s", self.state, e)
@@ -344,7 +347,28 @@ class InjectorFSM:
             raise RuntimeError(f"Validate failed: {res['error']}")
 
         self.context["validate"] = res
+
         max_rate = self._get_recipe_gate("rejection_rate_max", 0.10)
+
+        if CONFIG.verbose:
+            total_ops = res.get("validated_count", 0) + res.get("rejected_count", 0)
+            logger.info(
+                "[DEBUG VALIDATE Gate]: Success: %s | Total evaluated ops: %d | Validated (accepted): %d | Rejected: %d | Rejection Rate: %.1f%% (Max Allowed: %.1f%%)",
+                res.get("success"),
+                total_ops,
+                res.get("validated_count", 0),
+                res.get("rejected_count", 0),
+                res.get("rejection_rate", 0) * 100,
+                max_rate * 100,
+            )
+
+        if res.get("validated_count", 0) == 0 and res.get("rejected_count", 0) == 0:
+            logger.info("VALIDATE: no actionable ops (all skip) — short-circuit to CLEANUP")
+            self.context["final_status"] = "no_ops"
+            self.context["ops_path"] = ops_path
+            self.state = InjectorState.CLEANUP
+            return
+
         if not res["success"] or res.get("rejection_rate", 0) >= max_rate:
             self.context["abort_reason"] = (
                 f"Rejection rate {res.get('rejection_rate', 0):.1%} >= {max_rate:.1%}"
@@ -419,6 +443,15 @@ class InjectorFSM:
 
         for path, op_type, hub in touched:
             res = silica_lint(path, op_type=op_type or "", hub=hub or "")
+            if CONFIG.verbose:
+                logger.info(
+                    "[DEBUG LINT Gate]: File: %s | Type: %s | Hub: %s | Success: %s | Errors: %s",
+                    path,
+                    op_type,
+                    hub,
+                    res["success"],
+                    res.get("errors", []),
+                )
             if not res["success"]:
                 self.context["abort_reason"] = (
                     f"Lint failed for {path}: {res['errors']}"
@@ -446,6 +479,16 @@ class InjectorFSM:
                 
                 created_paths = self._txn.created_paths if self._txn else []
                 success, errors = check_graph_regression(self._pre_graph, post_graph, created_paths)
+
+                if CONFIG.verbose:
+                    logger.info(
+                        "[DEBUG Graph Regression Gate]: Pre-write graph size: %d nodes | Post-write graph size: %d nodes | Rule: %s | Result: %s",
+                        len(self._pre_graph.notes) if self._pre_graph and self._pre_graph.notes else 0,
+                        len(post_graph.notes) if post_graph and post_graph.notes else 0,
+                        regression_rule,
+                        "PASSED" if success else f"FAILED: {errors}"
+                    )
+
                 if not success:
                     self.context["abort_reason"] = (
                         f"Graph regression gate failed: {'; '.join(errors)}"
@@ -467,7 +510,8 @@ class InjectorFSM:
             self.context["cleanup_warning"] = res["error"]
 
         self._write_ledger("committed")
-        self.context["final_status"] = "Success"
+        if self.context.get("final_status") != "no_ops":
+            self.context["final_status"] = "Success"
         self._transition_success()
 
     def _handle_rollback(self) -> None:

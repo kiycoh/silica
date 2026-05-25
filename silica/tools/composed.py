@@ -16,6 +16,15 @@ from silica.driver import DRIVER
 from silica.tools import tool
 
 
+def _same_note(ref_a, ref_b) -> bool:
+    """Confronto path-safe tra due NoteRef — gestisce slash, case, .md suffix."""
+    import os
+    def norm(r):
+        p = r.path or r.name
+        return os.path.normcase(p.replace("\\", "/").removesuffix(".md").strip("/"))
+    return norm(ref_a) == norm(ref_b)
+
+
 class ReconArgs(BaseModel):
     inbox_file: str = Field(description="Percorso file inbox da analizzare")
     limit: int = Field(default=0, description="Limite estrazione concetti")
@@ -49,7 +58,7 @@ def silica_recon(inbox_file: str, limit: int = 0) -> dict[str, Any]:
         for h in hits:
             if h.ref.path and ('/done/' in h.ref.path or h.ref.path.startswith('done/')):
                 continue
-            if h.ref.path == nc.ref.path or h.ref.name == nc.ref.name:
+            if _same_note(h.ref, nc.ref):
                 continue
                 
             name = h.ref.name

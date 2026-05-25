@@ -57,5 +57,10 @@ class SilicaConfig:
         default_factory=lambda: int(os.getenv("SILICA_MAX_CONTEXT", "60000"))
     )
 
+    # Verbose / debug mode active
+    verbose: bool = field(
+        default_factory=lambda: os.getenv("SILICA_VERBOSE", "False").lower() in ("true", "1", "t")
+    )
+
 
 CONFIG = SilicaConfig()

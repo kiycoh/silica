@@ -40,3 +40,70 @@ def test_driver_base_types():
     assert ref.name == "Test"
     content = NoteContent(ref=ref, content="hello", size=5)
     assert content.size == 5
+
+
+def test_verbose_config_and_logging():
+    """Setting CONFIG.verbose to True enables debug logging levels and updates setup."""
+    import logging
+    from silica.config import CONFIG
+    from silica.cli import _setup_logging
+    
+    # Save original state
+    orig_verbose = CONFIG.verbose
+    
+    try:
+        # Enable verbose
+        _setup_logging(verbose=True)
+        assert CONFIG.verbose is True
+        
+        # Verify logger level gets set appropriately
+        assert logging.getLogger("httpx").level == logging.DEBUG
+        assert logging.getLogger("litellm").level == logging.DEBUG
+        assert logging.getLogger("openai").level == logging.DEBUG
+        
+        # Reset logging
+        _setup_logging(verbose=False)
+        assert CONFIG.verbose is False
+        assert logging.getLogger("httpx").level == logging.WARNING
+        assert logging.getLogger("litellm").level == logging.WARNING
+        assert logging.getLogger("openai").level == logging.WARNING
+        
+    finally:
+        # Restore original state
+        CONFIG.verbose = orig_verbose
+        _setup_logging(verbose=orig_verbose)
+
+
+def test_verbose_fsm_logging(caplog):
+    """FSM transitions are logged in debug/verbose mode."""
+    import logging
+    from silica.config import CONFIG
+    from silica.router.orchestrator import InjectorFSM
+    
+    orig_verbose = CONFIG.verbose
+    CONFIG.verbose = True
+    
+    # Set logger to DEBUG so caplog captures debug logs
+    logger = logging.getLogger("silica.router.orchestrator")
+    orig_level = logger.level
+    logger.setLevel(logging.DEBUG)
+    
+    try:
+        # Create FSM
+        fsm = InjectorFSM(inbox_file="nonexistent.md", target_dir="tmp")
+        
+        # Testing _make_tmp with verbose logging
+        import shutil
+        import tempfile
+        tmp_dir = tempfile.mkdtemp()
+        fsm.target_dir = tmp_dir
+        
+        with caplog.at_level(logging.DEBUG):
+            fsm._make_tmp({"test": "data"})
+            assert any("Creato file temporaneo di stage" in rec.message for rec in caplog.records)
+            
+        shutil.rmtree(tmp_dir)
+    finally:
+        CONFIG.verbose = orig_verbose
+        logger.setLevel(orig_level)
+

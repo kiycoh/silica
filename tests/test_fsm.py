@@ -211,7 +211,7 @@ def test_fsm_recipe_end_to_end_flow(
     mock_payload.return_value = {"payload": {"chunk_id": 0}}
     mock_delegate.return_value = [{"updates": []}]
     mock_sanitize.return_value = {"parsed": []}
-    mock_validate.return_value = {"success": True, "rejection_rate": 0.0}
+    mock_validate.return_value = {"success": True, "rejection_rate": 0.0, "validated_count": 1, "rejected_count": 0}
     mock_snapshot.return_value = {"txn_id": "txn_123", "inverses": []}
     mock_write.return_value = {"success": True}
     mock_lint.return_value = {"success": True}
@@ -297,6 +297,30 @@ def test_worker_read_only(mock_call_llm):
         assert name not in BLOCKED_TOOL_NAMES
         # Ensure only atomic read-only operations are returned
         assert tool.cls == "atomic"
+
+
+@patch("silica.router.orchestrator.silica_validate_ops")
+def test_fsm_short_circuit_no_ops(mock_validate):
+    # Setup mock validation with 0 validated and 0 rejected (all skip/no-op)
+    mock_validate.return_value = {
+        "success": True,
+        "validated_count": 0,
+        "rejected_count": 0,
+        "rejection_rate": 0.0,
+        "total": 5,
+    }
+
+    fsm = InjectorFSM("Inbox/test.md", "TargetDir")
+    fsm.context["payload"] = {"payload": {"chunk_id": 0}}
+    fsm.context["sanitized"] = {"parsed": []}
+    fsm.state = InjectorState.VALIDATE
+
+    with patch.object(fsm, "_make_tmp", return_value="dummy_ops.json"):
+        fsm.step()
+
+    # Verify transition directly to CLEANUP and final_status set to "no_ops"
+    assert fsm.state == InjectorState.CLEANUP
+    assert fsm.context["final_status"] == "no_ops"
 
 
 

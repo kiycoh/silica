@@ -32,16 +32,18 @@ BANNER = """\
 
 def _setup_logging(verbose: bool = False) -> None:
     """Configure logging for the CLI session."""
+    CONFIG.verbose = verbose
     level = logging.DEBUG if verbose else logging.WARNING
     logging.basicConfig(
         level=level,
         format="%(asctime)s [%(name)s] %(levelname)s: %(message)s",
         datefmt="%H:%M:%S",
     )
-    # Quiet down noisy libraries
-    logging.getLogger("httpx").setLevel(logging.WARNING)
-    logging.getLogger("litellm").setLevel(logging.WARNING)
-    logging.getLogger("openai").setLevel(logging.WARNING)
+    # Quiet down noisy libraries unless verbose is requested
+    lib_level = logging.DEBUG if verbose else logging.WARNING
+    logging.getLogger("httpx").setLevel(lib_level)
+    logging.getLogger("litellm").setLevel(lib_level)
+    logging.getLogger("openai").setLevel(lib_level)
 
 
 def _handle_slash_command(cmd: str, messages: list[dict]) -> bool:
@@ -81,6 +83,7 @@ def _handle_slash_command(cmd: str, messages: list[dict]) -> bool:
         return True
 
     if cmd == "/verbose":
+        CONFIG.verbose = True
         _setup_logging(verbose=True)
         print("  Logging verbose attivato.")
         return True
@@ -91,7 +94,7 @@ def _handle_slash_command(cmd: str, messages: list[dict]) -> bool:
 
 def main():
     """Entry point for the `silica` CLI command."""
-    verbose = "--verbose" in sys.argv or "-v" in sys.argv
+    verbose = "--verbose" in sys.argv or "-v" in sys.argv or CONFIG.verbose
     _setup_logging(verbose=verbose)
 
     print(BANNER)

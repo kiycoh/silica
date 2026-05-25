@@ -14,6 +14,8 @@ import litellm
 
 logger = logging.getLogger(__name__)
 
+from silica.config import CONFIG
+
 # Suppress litellm's verbose logging by default
 litellm.suppress_debug_info = True
 
@@ -52,6 +54,15 @@ def call_llm(
     Returns:
         LLMResponse with either text or tool_calls populated
     """
+    if CONFIG.verbose:
+        litellm.suppress_debug_info = False
+        logger.info(
+            "[DEBUG LLM Request]: Model: %s | Messages count: %d | Enabled Tools: %s",
+            model,
+            len(messages),
+            [t["function"]["name"] for t in tools] if tools else [],
+        )
+
     kwargs: dict = {
         "model": model,
         "messages": messages,
@@ -99,6 +110,14 @@ def call_llm(
             parsed_calls.append(
                 ToolCall(id=tc.id, name=tc.function.name, args=args)
             )
+
+    if CONFIG.verbose:
+        logger.info(
+            "[DEBUG LLM Response]: Text: %s | Tool Calls: %s | Usage: %s",
+            message.content,
+            [(tc.name, tc.args) for tc in parsed_calls],
+            dict(response.usage) if response.usage else {},
+        )
 
     return LLMResponse(
         text=message.content,
