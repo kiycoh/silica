@@ -153,6 +153,12 @@ class InjectorFSM:
 
     def run(self) -> dict[str, Any]:
         """Execute the pipeline end-to-end."""
+        from silica.kernel.ledger import get_ledger
+        basename = os.path.basename(self.inbox_file)
+        if get_ledger().is_committed(basename):
+            self.context["final_status"] = "already_ingested"
+            return self.context
+
         self.state = InjectorState.RECON
 
         try:

@@ -165,9 +165,12 @@ def silica_validate_ops(ops_json_path: str, payload_paths: list[str] = None, tar
     try:
         with open(ops_json_path, 'r', encoding='utf-8') as f:
             ops_data = json.load(f)
-            ops = ops_data.get("updates", ops_data)
-            if not isinstance(ops, list):
-                ops = [ops]
+            if isinstance(ops_data, dict) and "updates" in ops_data:
+                ops = ops_data["updates"]
+            elif isinstance(ops_data, list):
+                ops = ops_data
+            else:
+                ops = [ops_data]
     except Exception as e:
         return {"error": f"Failed to load operations: {e}"}
 

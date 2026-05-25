@@ -7,33 +7,35 @@ def validate_operations(ops: list, payloads: list, target_dir: str) -> tuple[lis
     valid_concepts = {}
     expected_collision_paths = {}
     inbox_folders = set()
+    has_payloads = bool(payloads)
 
     # Index payloads
-    for payload_data in payloads:
-        batches = payload_data.get("batches", [])
-        for batch in batches:
-            inbox_file = batch.get("inbox_file")
-            if not inbox_file:
-                continue
-                
-            source_basename = os.path.basename(inbox_file)
-            inbox_dir = os.path.dirname(os.path.abspath(inbox_file))
-            inbox_folders.add(inbox_dir)
-            
-            if source_basename not in valid_concepts:
-                valid_concepts[source_basename] = set()
-                
-            for c in batch.get("concepts", []):
-                name = c.get("name")
-                if not name:
+    if has_payloads:
+        for payload_data in payloads:
+            batches = payload_data.get("batches", [])
+            for batch in batches:
+                inbox_file = batch.get("inbox_file")
+                if not inbox_file:
                     continue
-                valid_concepts[source_basename].add(name)
+                    
+                source_basename = os.path.basename(inbox_file)
+                inbox_dir = os.path.dirname(os.path.abspath(inbox_file))
+                inbox_folders.add(inbox_dir)
                 
-                collision = c.get("vault_collision")
-                if collision and isinstance(collision, dict) and collision.get("path"):
-                    expected_collision_paths[(source_basename, name)] = collision["path"]
-                else:
-                    expected_collision_paths[(source_basename, name)] = None
+                if source_basename not in valid_concepts:
+                    valid_concepts[source_basename] = set()
+                    
+                for c in batch.get("concepts", []):
+                    name = c.get("name")
+                    if not name:
+                        continue
+                    valid_concepts[source_basename].add(name)
+                    
+                    collision = c.get("vault_collision")
+                    if collision and isinstance(collision, dict) and collision.get("path"):
+                        expected_collision_paths[(source_basename, name)] = collision["path"]
+                    else:
+                        expected_collision_paths[(source_basename, name)] = None
 
     # Helper to check existence via DRIVER
     def path_exists(p: str) -> bool:
@@ -52,8 +54,11 @@ def validate_operations(ops: list, payloads: list, target_dir: str) -> tuple[lis
         if op_type == "write" and path and path_exists(path):
             op["op"] = "patch"
         elif op_type == "patch" and path and not path_exists(path):
-            expected_path = expected_collision_paths.get((source_basename, heading))
-            if not expected_path or os.path.abspath(path) == os.path.abspath(expected_path):
+            if has_payloads:
+                expected_path = expected_collision_paths.get((source_basename, heading))
+                if not expected_path or os.path.abspath(path) == os.path.abspath(expected_path):
+                    op["op"] = "write"
+            else:
                 op["op"] = "write"
 
     # 2. Global deduplication
@@ -61,7 +66,7 @@ def validate_operations(ops: list, payloads: list, target_dir: str) -> tuple[lis
     for op in ops:
         op_type = op.get("op")
         path = op.get("path")
-        if op_type in ("write", "patch") and path:
+        if op_type in ("write", "patch", "overwrite") and path:
             norm_path = os.path.abspath(path)
             if norm_path not in path_groups:
                 path_groups[norm_path] = []
@@ -69,14 +74,18 @@ def validate_operations(ops: list, payloads: list, target_dir: str) -> tuple[lis
 
     for norm_path, group in path_groups.items():
         if len(group) > 1:
-            richest_op = max(group, key=lambda o: len(o.get("snippet", "")))
-            has_write = any(o.get("op") == "write" for o in group)
+            richest_op = max(group, key=lambda o: len(o.get("snippet", o.get("content", ""))))
+            has_write = any(o.get("op") in ("write", "overwrite") for o in group)
             for op in group:
                 if op is not richest_op:
                     op["op"] = "skip"
-                    op["reason"] = f"Duplicate write/patch to the same path '{op.get('path')}'"
+                    op["reason"] = f"Duplicate operation to the same path '{op.get('path')}'"
             if has_write:
-                richest_op["op"] = "write"
+                # If there's an overwrite in the group, richest_op becomes overwrite
+                if any(o.get("op") == "overwrite" for o in group):
+                    richest_op["op"] = "overwrite"
+                else:
+                    richest_op["op"] = "write"
 
     validated_ops = []
     rejected_ops = []
@@ -89,21 +98,23 @@ def validate_operations(ops: list, payloads: list, target_dir: str) -> tuple[lis
         source_basename = op.get("source_basename")
         path = op.get("path")
         
-        if not heading or not op_type:
-            rejected_ops.append({"op": op, "reason": "Missing 'heading' or 'op' field"})
+        if not op_type:
+            rejected_ops.append({"op": op, "reason": "Missing 'op' field"})
             continue
 
-        if not source_basename:
-            rejected_ops.append({"op": op, "reason": "Missing 'source_basename' field"})
-            continue
-
-        if source_basename not in valid_concepts:
-            rejected_ops.append({"op": op, "reason": f"Unknown source_basename '{source_basename}'"})
-            continue
-
-        if heading not in valid_concepts[source_basename]:
-            rejected_ops.append({"op": op, "reason": f"Heading '{heading}' not present in payload concepts"})
-            continue
+        if has_payloads:
+            if not heading:
+                rejected_ops.append({"op": op, "reason": "Missing 'heading' field"})
+                continue
+            if not source_basename:
+                rejected_ops.append({"op": op, "reason": "Missing 'source_basename' field"})
+                continue
+            if source_basename not in valid_concepts:
+                rejected_ops.append({"op": op, "reason": f"Unknown source_basename '{source_basename}'"})
+                continue
+            if heading not in valid_concepts[source_basename]:
+                rejected_ops.append({"op": op, "reason": f"Heading '{heading}' not present in payload concepts"})
+                continue
 
         if path:
             path_abs = os.path.abspath(path)
@@ -120,17 +131,17 @@ def validate_operations(ops: list, payloads: list, target_dir: str) -> tuple[lis
                 rejected_ops.append({"op": op, "reason": "Missing 'path' field for patch operation"})
                 continue
                 
-            expected_path = expected_collision_paths.get((source_basename, heading))
             path_abs = os.path.abspath(path)
-            
-            if expected_path:
-                if path_abs != os.path.abspath(expected_path):
-                    rejected_ops.append({"op": op, "reason": f"Path '{path}' does not match expected collision '{expected_path}'"})
-                    continue
-            else:
-                if target_dir_abs and not path_abs.startswith(target_dir_abs):
-                    rejected_ops.append({"op": op, "reason": f"Coerced patch path '{path}' not in target folder"})
-                    continue
+            if has_payloads:
+                expected_path = expected_collision_paths.get((source_basename, heading))
+                if expected_path:
+                    if path_abs != os.path.abspath(expected_path):
+                        rejected_ops.append({"op": op, "reason": f"Path '{path}' does not match expected collision '{expected_path}'"})
+                        continue
+                else:
+                    if target_dir_abs and not path_abs.startswith(target_dir_abs):
+                        rejected_ops.append({"op": op, "reason": f"Coerced patch path '{path}' not in target folder"})
+                        continue
 
             if not path_exists(path):
                 rejected_ops.append({"op": op, "reason": f"Collision path '{path}' does not exist in vault"})
@@ -149,9 +160,25 @@ def validate_operations(ops: list, payloads: list, target_dir: str) -> tuple[lis
                 continue
 
             if path_exists(path):
-                rejected_ops.append({"op": op, "reason": f"Target path '{path}' already exists (should be patch)"})
+                rejected_ops.append({"op": op, "reason": f"Target path '{path}' already exists (should be patch/overwrite)"})
                 continue
 
+            validated_ops.append(op)
+
+        elif op_type == "overwrite":
+            if not path:
+                rejected_ops.append({"op": op, "reason": "Missing 'path' field for overwrite operation"})
+                continue
+            
+            path_abs = os.path.abspath(path)
+            if target_dir_abs and not path_abs.startswith(target_dir_abs):
+                rejected_ops.append({"op": op, "reason": f"Path '{path}' not in target folder"})
+                continue
+
+            if not path_exists(path):
+                # If target note doesn't exist, overwrite degrades to write gracefully
+                op["op"] = "write"
+            
             validated_ops.append(op)
 
         else:

@@ -255,3 +255,48 @@ def test_fsm_recipe_end_to_end_flow(
     assert states_visited == expected_sequence
 
 
+def test_fsm_already_ingested():
+    # We patch get_ledger to return a mock ledger where is_committed is True
+    with patch("silica.kernel.ledger.get_ledger") as mock_get_ledger:
+        mock_ledger = MagicMock()
+        mock_ledger.is_committed.return_value = True
+        mock_get_ledger.return_value = mock_ledger
+
+        fsm = InjectorFSM("Inbox/already_processed.md", "TargetDir")
+        res = fsm.run()
+
+        # Should short-circuit pre-RECON
+        assert fsm.state == InjectorState.INIT
+        assert res.get("final_status") == "already_ingested"
+        mock_ledger.is_committed.assert_called_once_with("already_processed.md")
+
+
+@patch("silica.agent.llm.call_llm")
+def test_worker_read_only(mock_call_llm):
+    # Test 1: Verify that run_distiller calls call_llm with tools=None (single-shot variant)
+    from silica.kernel.prep_delegation import run_distiller
+    
+    mock_response = MagicMock()
+    mock_response.text = '{"updates": []}'
+    mock_call_llm.return_value = mock_response
+
+    payload = {"schema_version": 1, "batches": []}
+    run_distiller(payload, target="TargetDir", hub="Hub")
+
+    mock_call_llm.assert_called_once()
+    _, kwargs = mock_call_llm.call_args
+    assert kwargs.get("tools") is None
+
+    # Test 2: Verify that build_worker_toolset excludes all mutation / wrapped / composed tools
+    from silica.workers import build_worker_toolset, WORKER_BLOCKED_CLASSES, BLOCKED_TOOL_NAMES
+    
+    worker_tools = build_worker_toolset()
+    
+    for name, tool in worker_tools.items():
+        assert tool.cls not in WORKER_BLOCKED_CLASSES
+        assert name not in BLOCKED_TOOL_NAMES
+        # Ensure only atomic read-only operations are returned
+        assert tool.cls == "atomic"
+
+
+
