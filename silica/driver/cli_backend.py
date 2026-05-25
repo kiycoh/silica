@@ -217,10 +217,24 @@ class ObsidianCLIBackend:
         return results
 
     def graph_snapshot(self) -> GraphSnapshot:
-        """Full graph snapshot for non-regression gating."""
+        """Full graph snapshot for non-regression gating.
+
+        Populates link_counts and backlink_counts for parity with the FS backend
+        (required by S1.4 driver-parity test and S3.2 graph-diff gate).
+        """
+        all_notes = self.list_files()
+        link_counts: dict[str, int] = {}
+        backlink_counts: dict[str, int] = {}
+        for ref in all_notes:
+            out = self.links(ref)
+            link_counts[ref.name] = len(out)
+            for target in out:
+                backlink_counts[target.name] = backlink_counts.get(target.name, 0) + 1
         return GraphSnapshot(
             orphans=self.orphans(),
             unresolved=self.unresolved(),
+            link_counts=link_counts,
+            backlink_counts=backlink_counts,
         )
 
     # ------------------------------------------------------------------
@@ -246,13 +260,16 @@ class ObsidianCLIBackend:
         self._run_cli("create", f"path={path}", f"content={escaped}", "overwrite=true")
         name = path.rsplit("/", 1)[-1].removesuffix(".md")
         ref = NoteRef(name=name, path=path)
-        self._wait_for_create(ref)
+        # C2: verify content reflects the write, not just readability
+        self._wait_for_content_reflects(ref, content)
         return ref
 
     def append(self, ref: NoteRef | str, content: str) -> None:
         """Append content to an existing note."""
         escaped = content.replace("\\", "\\\\").replace("\n", "\\n")
         self._run_cli("append", self._ref_arg(ref), f"content={escaped}")
+        # C2: verify content was appended
+        self._wait_for_content_contains(ref, content)
 
     def set_prop(self, ref: NoteRef | str, name: str, value: Any, type_: str = "text") -> None:
         """Set a frontmatter property on a note."""
@@ -273,6 +290,8 @@ class ObsidianCLIBackend:
     def delete(self, ref: NoteRef | str) -> None:
         """Delete a note from the vault."""
         self._run_cli("delete", self._ref_arg(ref))
+        # C2: verify note is gone
+        self._wait_for_gone(ref)
 
     # ------------------------------------------------------------------
     # Advanced
@@ -301,17 +320,35 @@ class ObsidianCLIBackend:
     # ------------------------------------------------------------------
 
     def snapshot_versions(self, refs: list[NoteRef]) -> Txn:
-        """Snapshot current versions for later rollback via history:restore."""
+        """Snapshot current versions for later rollback via history:restore.
+
+        Uses format=json to get real version identifiers from Obsidian history.
+        Falls back to line-count heuristic only if JSON parsing fails.
+        """
         versions: dict[str, int] = {}
         for ref in refs:
             try:
-                raw = self._run_cli("history", self._ref_arg(ref))
-                # Count versions — latest version number is the count
-                count = len([l for l in raw.splitlines() if l.strip()])
-                if count > 0:
-                    versions[ref.path or ref.name] = count
-            except RuntimeError:
-                logger.warning("No history available for %s", ref.name)
+                data = self._run_json("history", self._ref_arg(ref))
+                if isinstance(data, list) and data:
+                    # history format=json returns [{"version": N, ...}, ...] newest-first
+                    # We want the current (latest) version number to restore to.
+                    first = data[0]
+                    if isinstance(first, dict) and "version" in first:
+                        versions[ref.path or ref.name] = int(first["version"])
+                    else:
+                        # Fallback: use list index 1-based (latest = len)
+                        versions[ref.path or ref.name] = len(data)
+                elif isinstance(data, dict) and "version" in data:
+                    versions[ref.path or ref.name] = int(data["version"])
+            except Exception:
+                # Try plain-text fallback
+                try:
+                    raw = self._run_cli("history", self._ref_arg(ref))
+                    count = sum(1 for line in raw.splitlines() if line.strip())
+                    if count > 0:
+                        versions[ref.path or ref.name] = count
+                except RuntimeError:
+                    logger.warning("No history available for %s", ref.name)
 
         txn_id = f"txn_{int(time.time())}"
         return Txn(id=txn_id, refs=refs, versions=versions)
@@ -353,7 +390,8 @@ class ObsidianCLIBackend:
     def _wait_for_create(self, ref: NoteRef, timeout: float = _SETTLE_TIMEOUT) -> None:
         """Poll until Obsidian's cache reflects a newly-created note.
 
-        Postcondition: read(ref) succeeds.
+        Postcondition (C2): read(ref) succeeds.
+        For content convergence after overwrite, use _wait_for_content_reflects instead.
         """
         deadline = time.monotonic() + timeout
         while time.monotonic() < deadline:
@@ -369,11 +407,77 @@ class ObsidianCLIBackend:
             timeout,
         )
 
+    def _wait_for_content_reflects(self, ref: NoteRef, expected_content: str,
+                                   timeout: float = _SETTLE_TIMEOUT) -> None:
+        """Poll until read(ref).content reflects expected_content.
+
+        Postcondition (C2 / overwrite): content is not just readable but matches
+        what was written. Uses a prefix check (first 120 chars) to avoid full-body
+        comparisons on large notes while still catching stale-cache false positives.
+        """
+        prefix = expected_content[:120]
+        deadline = time.monotonic() + timeout
+        while time.monotonic() < deadline:
+            try:
+                nc = self.read_note(ref)
+                if nc.content[:120] == prefix:
+                    return
+            except RuntimeError:
+                pass
+            time.sleep(_SETTLE_POLL_INTERVAL)
+
+        logger.warning(
+            "Settle timeout (overwrite content) for %s after %.1fs — cache may be stale",
+            ref.name,
+            timeout,
+        )
+
+    def _wait_for_content_contains(self, ref: NoteRef | str, fragment: str,
+                                   timeout: float = _SETTLE_TIMEOUT) -> None:
+        """Poll until read(ref).content contains fragment.
+
+        Postcondition (C2 / append): appended content is visible in the note.
+        """
+        deadline = time.monotonic() + timeout
+        while time.monotonic() < deadline:
+            try:
+                nc = self.read_note(ref)
+                if fragment in nc.content:
+                    return
+            except RuntimeError:
+                pass
+            time.sleep(_SETTLE_POLL_INTERVAL)
+
+        logger.warning(
+            "Settle timeout (append) for %s after %.1fs — cache may be stale",
+            ref if isinstance(ref, str) else ref.name,
+            timeout,
+        )
+
+    def _wait_for_gone(self, ref: NoteRef | str, timeout: float = _SETTLE_TIMEOUT) -> None:
+        """Poll until read(ref) raises (note is gone).
+
+        Postcondition (C2 / delete): note is no longer readable.
+        """
+        deadline = time.monotonic() + timeout
+        while time.monotonic() < deadline:
+            try:
+                self._run_cli("read", self._ref_arg(ref), check=False)
+                time.sleep(_SETTLE_POLL_INTERVAL)
+            except RuntimeError:
+                return  # Gone — postcondition satisfied
+
+        logger.warning(
+            "Settle timeout (delete) for %s after %.1fs — note may still be cached",
+            ref if isinstance(ref, str) else ref.name,
+            timeout,
+        )
+
     def _wait_for_prop(self, ref: NoteRef | str, prop_name: str, expected_value: str,
                        timeout: float = _SETTLE_TIMEOUT) -> None:
         """Poll until a frontmatter property reflects the expected value.
 
-        Postcondition: props_of(ref)[prop_name] == expected_value
+        Postcondition (C2 / set_prop): props_of(ref)[prop_name] == expected_value
         """
         deadline = time.monotonic() + timeout
         while time.monotonic() < deadline:
@@ -394,20 +498,30 @@ class ObsidianCLIBackend:
 
     def _wait_for_move(self, original_ref: NoteRef | str, to_path: str,
                        timeout: float = _SETTLE_TIMEOUT) -> None:
-        """Poll until a move is reflected: destination readable, source gone.
+        """Poll until a move is reflected: destination readable AND source gone.
 
-        Postcondition: read(to) succeeds AND read(original_ref) raises.
+        Postcondition (C2 / move): read(to) succeeds AND read(original_ref) raises.
+        Both halves are required — checking only the destination allows a
+        false-positive when Obsidian's cache still holds the old path.
         """
         to_name = to_path.rsplit("/", 1)[-1].removesuffix(".md")
         to_ref = NoteRef(name=to_name, path=to_path)
         deadline = time.monotonic() + timeout
         while time.monotonic() < deadline:
+            dest_ok = False
+            src_gone = False
             try:
                 self._run_cli("read", self._ref_arg(to_ref), check=False)
-                # Destination is readable — move has propagated
-                return
+                dest_ok = True
             except RuntimeError:
                 pass
+            try:
+                self._run_cli("read", self._ref_arg(original_ref), check=False)
+                # Source still readable — not done yet
+            except RuntimeError:
+                src_gone = True
+            if dest_ok and src_gone:
+                return
             time.sleep(_SETTLE_POLL_INTERVAL)
 
         logger.warning(

@@ -73,14 +73,18 @@ class GraphSnapshot:
 class Txn:
     """Transaction handle for snapshot/rollback.
 
-    Two rollback strategies:
-      - versions: existing notes snapshotted before patch → restore via history:restore
-      - created_paths: new notes created during write ops → rollback by deleting them
+    Three rollback strategies (C3 / ADR-009):
+      - inverses:       authoritative list of InverseOp — consumed by silica_restore and
+                        the ROLLBACK state. Single source of truth.
+      - versions:       derived from inverses (restore_version entries); kept for
+                        DRIVER.restore() compatibility until S3.3 unifies on inverses.
+      - created_paths:  derived from inverses (delete_created entries); same reason.
     """
     id: str
     refs: list[NoteRef] = field(default_factory=list)
-    versions: dict[str, int] = field(default_factory=dict)   # path -> version number (for patch rollback)
-    created_paths: list[str] = field(default_factory=list)   # paths created by write ops (for write rollback)
+    versions: dict[str, int] = field(default_factory=dict)   # path -> version number
+    created_paths: list[str] = field(default_factory=list)   # paths created by write ops
+    inverses: list = field(default_factory=list)              # list[InverseOp] — real field, not dynamic attr
 
 
 # ---------------------------------------------------------------------------

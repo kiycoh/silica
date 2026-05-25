@@ -197,7 +197,8 @@ class InjectorFSM:
                 )
                 self.state = InjectorState.ERROR
             else:
-                # C4: ops_path now holds the validated (coerced + deduped) ops
+                # C4: silica_validate_ops has already overwritten ops_path with
+                # the coerced + deduped ops. SNAPSHOT and WRITE read this file.
                 self.context["ops_path"] = ops_path
                 self.state = InjectorState.SNAPSHOT
 

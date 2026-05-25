@@ -123,9 +123,8 @@ def build_txn(ops_data: list[dict]) -> Txn:
         refs=patch_refs,
         versions=base_txn.versions,
         created_paths=created_paths,
+        inverses=inverses,
     )
-    # Attach inverses as a dynamic attribute (Txn is a dataclass, not frozen)
-    txn.inverses = inverses  # type: ignore[attr-defined]
     return txn
 
 
