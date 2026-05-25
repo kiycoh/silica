@@ -105,3 +105,90 @@ def test_fsm_gate_rejection(mock_validate):
     assert "Rejection rate 15.0% >= 10.0%" in fsm.context["abort_reason"]
 
 
+@patch("silica.router.orchestrator.silica_lint")
+@patch("silica.router.orchestrator.DRIVER")
+@patch("silica.tools.wrapped.silica_restore")
+@patch("builtins.open")
+def test_fsm_graph_regression_gate_rollback(mock_open, mock_restore, mock_driver, mock_lint):
+    # Setup mock file reading for ops_path
+    mock_open.return_value.__enter__.return_value.read.return_value = '[]'
+    
+    # Lint passes
+    mock_lint.return_value = {"success": True}
+    
+    # Pre-graph exists
+    pre_graph = MagicMock()
+    post_graph = MagicMock()
+    mock_driver.graph_snapshot.return_value = post_graph
+    
+    fsm = InjectorFSM("Inbox/test.md", "TargetDir")
+    fsm.context["ops_path"] = "dummy_ops.json"
+    fsm._pre_graph = pre_graph
+    fsm._txn = MagicMock()
+    fsm._txn.created_paths = ["notes/NoteA.md"]
+    
+    # Setup snapshot data for rollback inverse application
+    inverses = [{"op": "delete", "path": "notes/NoteA.md"}]
+    fsm.context["snapshot"] = {
+        "txn_id": "txn_123",
+        "inverses": inverses
+    }
+    
+    fsm.state = InjectorState.LINT
+    
+    # Mock the regression check to fail
+    with patch("silica.kernel.graph_diff.check_graph_regression", return_value=(False, ["New orphans detected"])) as mock_check:
+        fsm.step()
+        
+        # Verify check_graph_regression was called with pre_graph, post_graph, and created_paths
+        mock_check.assert_called_once_with(pre_graph, post_graph, ["notes/NoteA.md"])
+        
+        # Verify transition to ROLLBACK on gate rejection
+        assert fsm.state == InjectorState.ROLLBACK
+        assert "Graph regression gate failed: New orphans detected" in fsm.context["abort_reason"]
+        
+    # Now run the ROLLBACK step
+    mock_restore.return_value = {"success": True}
+    fsm.step()
+    
+    # Verify restore was called with the correct parameters
+    mock_restore.assert_called_once_with(txn_id="txn_123", inverses=inverses)
+    
+    # Verify final status transitions to ERROR
+    assert fsm.state == InjectorState.ERROR
+    assert "Rolled Back" in fsm.context["final_status"]
+
+
+def test_fsm_recipe_transition_sequence():
+    fsm = InjectorFSM("Inbox/test.md", "TargetDir")
+    
+    # Verify sequential progression
+    fsm.state = InjectorState.RECON
+    fsm._transition_success()
+    assert fsm.state == InjectorState.PAYLOAD
+    
+    fsm._transition_success()
+    assert fsm.state == InjectorState.DELEGATE
+    
+    fsm._transition_success()
+    assert fsm.state == InjectorState.SANITIZE
+    
+    fsm._transition_success()
+    assert fsm.state == InjectorState.VALIDATE
+    
+    fsm._transition_success()
+    assert fsm.state == InjectorState.SNAPSHOT
+    
+    fsm._transition_success()
+    assert fsm.state == InjectorState.WRITE
+    
+    fsm._transition_success()
+    assert fsm.state == InjectorState.LINT
+    
+    fsm._transition_success()
+    assert fsm.state == InjectorState.CLEANUP
+    
+    fsm._transition_success()
+    assert fsm.state == InjectorState.DONE
+
+

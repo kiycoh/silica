@@ -79,3 +79,22 @@ def test_graph_diff_case_insensitivity_and_path_normalization():
     success, errors = check_graph_regression(pre, post, created_paths=[])
     assert success
     assert not errors
+
+
+def test_graph_diff_broken_backlinks_rejected():
+    # If a pre-existing note has its backlink count decreased, reject it
+    pre = GraphSnapshot(
+        orphans=[],
+        unresolved=[],
+        backlink_counts={"NoteA": 2, "NoteB": 1}
+    )
+    post = GraphSnapshot(
+        orphans=[],
+        unresolved=[],
+        backlink_counts={"NoteA": 1, "NoteB": 1}
+    )
+    
+    success, errors = check_graph_regression(pre, post, created_paths=[])
+    assert not success
+    assert len(errors) == 1
+    assert "Broken backlinks detected for 'NoteA': decreased from 2 to 1" in errors[0]

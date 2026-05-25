@@ -143,8 +143,12 @@ class ObsidianDriver(Protocol):
         """Unresolved wikilinks in the vault."""
         ...
 
-    def graph_snapshot(self) -> GraphSnapshot:
-        """Full graph snapshot for non-regression gating."""
+    def graph_snapshot(self, refs: list[NoteRef] | None = None) -> GraphSnapshot:
+        """Graph snapshot for non-regression gating.
+
+        If refs is provided, performs an incremental snapshot covering only
+        the touched notes and their 1-hop neighborhood.
+        """
         ...
 
     # -- write (graph-safe) ------------------------------------------------

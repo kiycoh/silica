@@ -70,10 +70,13 @@ def validate_operations(ops: list, payloads: list, target_dir: str) -> tuple[lis
     for norm_path, group in path_groups.items():
         if len(group) > 1:
             richest_op = max(group, key=lambda o: len(o.get("snippet", "")))
+            has_write = any(o.get("op") == "write" for o in group)
             for op in group:
                 if op is not richest_op:
                     op["op"] = "skip"
                     op["reason"] = f"Duplicate write/patch to the same path '{op.get('path')}'"
+            if has_write:
+                richest_op["op"] = "write"
 
     validated_ops = []
     rejected_ops = []

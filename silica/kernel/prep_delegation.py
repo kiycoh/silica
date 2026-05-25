@@ -72,27 +72,11 @@ def run_distiller(payload: dict, target: str, hub: str | None = None) -> dict:
 
     logger.info("Calling Distiller LLM (payload checksum %s)", checksum[:12])
 
-    import time
-    import random
-
-    max_retries = 5
-    base_delay = 1.0
-    response = None
-
-    for attempt in range(max_retries):
-        try:
-            response = call_llm(
-                model=CONFIG.model,
-                messages=[{"role": "user", "content": user_message}],
-                tools=None,  # single-turn: no tool calls, output is JSON
-            )
-            break
-        except Exception as e:
-            if attempt == max_retries - 1:
-                return {"error": f"Distiller LLM call failed after {max_retries} attempts: {e}"}
-            delay = base_delay * (2 ** attempt) + random.uniform(0, 0.5)
-            logger.warning("LLM call failed (attempt %d/%d), retrying in %.2fs: %s", attempt + 1, max_retries, delay, e)
-            time.sleep(delay)
+    response = call_llm(
+        model=CONFIG.model,
+        messages=[{"role": "user", "content": user_message}],
+        tools=None,  # single-turn: no tool calls, output is JSON
+    )
 
     raw_output = response.text or ""
     if not raw_output.strip():

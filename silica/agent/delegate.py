@@ -35,5 +35,45 @@ def delegate(
     if not tasks:
         return []
 
+    import time
+    import random
+    import logging
+    import litellm.exceptions
+
+    logger = logging.getLogger(__name__)
+
+    TRANSIENT_EXCEPTIONS = (
+        litellm.exceptions.RateLimitError,
+        litellm.exceptions.APIConnectionError,
+        litellm.exceptions.ServiceUnavailableError,
+        litellm.exceptions.InternalServerError,
+        litellm.exceptions.Timeout,
+        ConnectionError,
+        TimeoutError,
+    )
+
+    def run_one_with_retry(task: dict) -> Any:
+        max_retries = 5
+        base_delay = 1.0
+        for attempt in range(max_retries):
+            try:
+                return run_one(task)
+            except TRANSIENT_EXCEPTIONS as e:
+                if attempt == max_retries - 1:
+                    logger.error("Transient LLM error, retries exhausted: %s", e)
+                    return {"error": f"LLM transient error after {max_retries} attempts: {e}"}
+                delay = base_delay * (2 ** attempt) + random.uniform(0, 0.5)
+                logger.warning(
+                    "Transient LLM error (attempt %d/%d), retrying in %.2fs: %s",
+                    attempt + 1,
+                    max_retries,
+                    delay,
+                    e,
+                )
+                time.sleep(delay)
+            except Exception as e:
+                logger.error("Permanent LLM or execution error: %s", e)
+                return {"error": f"LLM permanent error: {e}"}
+
     with ThreadPoolExecutor(max_workers=min(max_workers, len(tasks))) as ex:
-        return list(ex.map(run_one, tasks))
+        return list(ex.map(run_one_with_retry, tasks))

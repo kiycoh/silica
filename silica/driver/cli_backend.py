@@ -216,23 +216,85 @@ class ObsidianCLIBackend:
                 results.append(Link(source=NoteRef(name=""), target=target))
         return results
 
-    def graph_snapshot(self) -> GraphSnapshot:
-        """Full graph snapshot for non-regression gating.
+    def graph_snapshot(self, refs: list[NoteRef] | None = None) -> GraphSnapshot:
+        """Graph snapshot for non-regression gating.
 
-        Populates link_counts and backlink_counts for parity with the FS backend
-        (required by S1.4 driver-parity test and S3.2 graph-diff gate).
+        If refs is provided, performs an incremental snapshot covering only
+        the touched notes and their 1-hop neighborhood.
         """
-        all_notes = self.list_files()
+        if refs is None:
+            all_notes = self.list_files()
+            link_counts: dict[str, int] = {}
+            backlink_counts: dict[str, int] = {}
+            for ref in all_notes:
+                out = self.links(ref)
+                link_counts[ref.name] = len(out)
+                for target in out:
+                    backlink_counts[target.name] = backlink_counts.get(target.name, 0) + 1
+            return GraphSnapshot(
+                orphans=self.orphans(),
+                unresolved=self.unresolved(),
+                link_counts=link_counts,
+                backlink_counts=backlink_counts,
+            )
+
+        # Incremental snapshot
+        neighborhood: set[str] = set()
+        name_to_ref: dict[str, NoteRef] = {}
+
+        for ref in refs:
+            name = ref.name
+            neighborhood.add(name)
+            name_to_ref[name] = ref
+
+            # Add outgoing links
+            try:
+                out = self.links(ref)
+                for target in out:
+                    neighborhood.add(target.name)
+                    name_to_ref[target.name] = target
+            except Exception:
+                pass
+
+            # Add incoming backlinks
+            try:
+                inc = self.backlinks(ref)
+                for source in inc:
+                    neighborhood.add(source.name)
+                    name_to_ref[source.name] = source
+            except Exception:
+                pass
+
         link_counts: dict[str, int] = {}
         backlink_counts: dict[str, int] = {}
-        for ref in all_notes:
-            out = self.links(ref)
-            link_counts[ref.name] = len(out)
-            for target in out:
-                backlink_counts[target.name] = backlink_counts.get(target.name, 0) + 1
+
+        for name in neighborhood:
+            ref = name_to_ref.get(name, NoteRef(name=name))
+            try:
+                out = self.links(ref)
+                link_counts[name] = len(out)
+            except Exception:
+                link_counts[name] = 0
+
+            try:
+                inc = self.backlinks(ref)
+                backlink_counts[name] = len(inc)
+            except Exception:
+                backlink_counts[name] = 0
+
+        # Filter orphans & unresolved to neighborhood
+        all_orphans = self.orphans()
+        orphans = [r for r in all_orphans if r.name in neighborhood]
+
+        all_unresolved = self.unresolved()
+        unresolved = [
+            link for link in all_unresolved
+            if link.source.name in neighborhood or link.source.path in neighborhood
+        ]
+
         return GraphSnapshot(
-            orphans=self.orphans(),
-            unresolved=self.unresolved(),
+            orphans=orphans,
+            unresolved=unresolved,
             link_counts=link_counts,
             backlink_counts=backlink_counts,
         )

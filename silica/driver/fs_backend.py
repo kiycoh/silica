@@ -249,16 +249,48 @@ class ObsidianFSBackend:
                     results.append(Link(source=source_ref, target=target))
         return results
 
-    def graph_snapshot(self) -> GraphSnapshot:
-        """Full graph snapshot for non-regression gating."""
+    def graph_snapshot(self, refs: list[NoteRef] | None = None) -> GraphSnapshot:
+        """Graph snapshot for non-regression gating.
+
+        If refs is provided, performs an incremental snapshot covering only
+        the touched notes and their 1-hop neighborhood.
+        """
         self._ensure_index()
-        
-        link_counts = {name: len(targets) for name, targets in self._links.items()}
-        backlink_counts = {name: len(sources) for name, sources in self._backlinks.items()}
-        
+        if refs is None:
+            link_counts = {name: len(targets) for name, targets in self._links.items()}
+            backlink_counts = {name: len(sources) for name, sources in self._backlinks.items()}
+            return GraphSnapshot(
+                orphans=self.orphans(),
+                unresolved=self.unresolved(),
+                link_counts=link_counts,
+                backlink_counts=backlink_counts
+            )
+
+        # Incremental snapshot
+        neighborhood = set()
+        for r in refs:
+            name = r.name
+            neighborhood.add(name)
+            # Add outgoing
+            for t in self._links.get(name, []):
+                neighborhood.add(t)
+            # Add incoming
+            for s in self._backlinks.get(name, []):
+                neighborhood.add(s)
+
+        link_counts = {}
+        backlink_counts = {}
+        for name in neighborhood:
+            link_counts[name] = len(self._links.get(name, []))
+            backlink_counts[name] = len(self._backlinks.get(name, []))
+
+        # Filter orphans & unresolved to neighborhood
+        orphans = [r for r in self.orphans() if r.name in neighborhood]
+        unresolved = [l for l in self.unresolved() if l.source.name in neighborhood]
+
         return GraphSnapshot(
-            orphans=self.orphans(),
-            unresolved=self.unresolved(),
+            orphans=orphans,
+            unresolved=unresolved,
             link_counts=link_counts,
             backlink_counts=backlink_counts
         )
