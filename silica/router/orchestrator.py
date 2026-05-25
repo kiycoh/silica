@@ -66,6 +66,26 @@ class InjectorFSM:
         self.context: dict[str, Any] = {}
         self._tmp_files: list[str] = []
         self._txn = None  # holds the live Txn object for ROLLBACK
+        self._pre_graph = None  # S3.2 pre-write graph snapshot
+
+        # S3.3: Load the recipe for dynamic configuration
+        from silica.router.recipe_parser import load_recipe
+        try:
+            self._recipe = load_recipe("injector")
+        except Exception as e:
+            logger.warning("Failed to load recipe 'injector', using defaults: %s", e)
+            self._recipe = {}
+
+    def _get_recipe_gate(self, name: str, default: Any) -> Any:
+        return self._recipe.get("gates", {}).get(name, default)
+
+    def _get_recipe_phase(self, phase_id: str) -> dict:
+        for phase in self._recipe.get("phases", []):
+            if phase.get("id") == phase_id:
+                return phase
+        return {}
+
+
 
     def _make_tmp(self, content: Any, suffix: str = ".json") -> str:
         """Write content as JSON to a temp file and track for cleanup."""
@@ -123,7 +143,9 @@ class InjectorFSM:
         # ------------------------------------------------------------------
         elif self.state == InjectorState.PAYLOAD:
             recon_path = self._make_tmp([self.context["recon"]])
-            res = silica_payload(recon_path, max_concepts=7)
+            phase_conf = self._get_recipe_phase("payload")
+            max_concepts = phase_conf.get("partition_if_over", 7)
+            res = silica_payload(recon_path, max_concepts=max_concepts)
             if "error" in res:
                 raise RuntimeError(f"Payload failed: {res['error']}")
             self.context["payload"] = res
@@ -131,27 +153,57 @@ class InjectorFSM:
 
         # ------------------------------------------------------------------
         elif self.state == InjectorState.DELEGATE:
-            # S2.3: call real Distiller LLM (single worker; fan-out at S3.1).
+            # S3.1: call parallel Distiller LLM workers via delegate
+            from silica.agent.delegate import delegate
             from silica.kernel.prep_delegation import run_distiller
 
             payload_data = self.context["payload"]
 
-            # payload may be chunked (partition) or a single payload dict
             if "chunks" in payload_data:
-                # S2.3: take only the first chunk — fan-out handled at S3.1
-                chunk = payload_data["chunks"][0]
+                chunks = payload_data["chunks"]
             else:
-                chunk = payload_data.get("payload", payload_data)
+                p = payload_data.get("payload", payload_data)
+                chunks = [p]
 
-            distiller_result = run_distiller(
-                payload=chunk,
-                target=self.target_dir,
-                hub=self.hub,
-            )
-            if "error" in distiller_result:
-                raise RuntimeError(f"Distiller failed: {distiller_result['error']}")
+            # run_one closure for delegate
+            def run_one(chunk: dict) -> dict:
+                return run_distiller(
+                    payload=chunk,
+                    target=self.target_dir,
+                    hub=self.hub,
+                )
 
-            distiller_path = self._make_tmp(distiller_result)
+            phase_conf = self._get_recipe_phase("distill")
+            max_workers = phase_conf.get("max_workers", 7)
+            # Parallel fan-out
+            results = delegate(chunks, run_one, max_workers=max_workers)
+
+            merged_updates = []
+            for idx, r in enumerate(results):
+                if "error" in r:
+                    raise RuntimeError(f"Distiller chunk {idx} failed: {r['error']}")
+                merged_updates.extend(r.get("updates", []))
+
+            # Deduplicate by path (C4)
+            path_groups = {}
+            for op in merged_updates:
+                path = op.get("path")
+                if path:
+                    norm = os.path.abspath(path)
+                    if norm not in path_groups:
+                        path_groups[norm] = []
+                    path_groups[norm].append(op)
+
+            for norm, group in path_groups.items():
+                if len(group) > 1:
+                    richest = max(group, key=lambda o: len(o.get("snippet", "")))
+                    for op in group:
+                        if op is not richest:
+                            op["op"] = "skip"
+                            op["reason"] = f"Duplicate write/patch to the same path '{op.get('path')}' during multi-batch merge"
+
+            merged_result = {"updates": merged_updates}
+            distiller_path = self._make_tmp(merged_result)
             self.context["distiller_output_path"] = distiller_path
             self.state = InjectorState.SANITIZE
 
@@ -173,11 +225,12 @@ class InjectorFSM:
 
             ops_path = self._make_tmp(ops_raw)
 
-            # Collect payload paths for concept cross-check
+            # Collect payload paths for concept cross-check (C4: include all chunks)
             payload_paths: list[str] = []
             payload_data = self.context["payload"]
             if "chunks" in payload_data:
-                payload_paths.append(self._make_tmp(payload_data["chunks"][0]))
+                for chunk in payload_data["chunks"]:
+                    payload_paths.append(self._make_tmp(chunk))
             elif "payload" in payload_data:
                 payload_paths.append(self._make_tmp(payload_data["payload"]))
 
@@ -191,9 +244,10 @@ class InjectorFSM:
                 raise RuntimeError(f"Validate failed: {res['error']}")
 
             self.context["validate"] = res
-            if not res["success"]:
+            max_rate = self._get_recipe_gate("rejection_rate_max", 0.10)
+            if not res["success"] or res.get("rejection_rate", 0) >= max_rate:
                 self.context["abort_reason"] = (
-                    f"Rejection rate {res['rejection_rate']:.1%} >= 10%"
+                    f"Rejection rate {res.get('rejection_rate', 0):.1%} >= {max_rate:.1%}"
                 )
                 self.state = InjectorState.ERROR
             else:
@@ -204,16 +258,30 @@ class InjectorFSM:
 
         # ------------------------------------------------------------------
         elif self.state == InjectorState.SNAPSHOT:
-            # C3: build InverseOp-based Txn directly (no _txn_obj leak)
+            from silica.tools.wrapped import silica_snapshot
+            res = silica_snapshot(self.context["ops_path"])
+            if "error" in res:
+                raise RuntimeError(f"SNAPSHOT failed: {res['error']}")
+            
+            self.context["snapshot"] = res
+            self.context["txn_id"] = res["txn_id"]
+
+            # Retain live Txn for internal FSM needs (ledger metadata, etc.)
             try:
                 with open(self.context["ops_path"], "r", encoding="utf-8") as f:
                     ops_data = json.load(f)
                 ops = ops_data if isinstance(ops_data, list) else ops_data.get("updates", [])
+                self._txn = build_txn(ops)
             except Exception as e:
-                raise RuntimeError(f"SNAPSHOT: failed to read ops: {e}")
+                raise RuntimeError(f"SNAPSHOT rebuild failed: {e}")
 
-            self._txn = build_txn(ops)
-            self.context["txn_id"] = self._txn.id
+            # S3.2: Take pre-write graph snapshot
+            try:
+                self._pre_graph = DRIVER.graph_snapshot()
+            except Exception as e:
+                logger.warning("Failed to take pre-write graph snapshot: %s", e)
+                self._pre_graph = None
+
             self.state = InjectorState.WRITE
 
         # ------------------------------------------------------------------
@@ -260,16 +328,32 @@ class InjectorFSM:
                     self.state = InjectorState.ROLLBACK
                     return
 
+            # S3.2: Run graph-diff check
+            regression_rule = self._get_recipe_gate("graph_regression", "forbid_new_orphans")
+            if regression_rule != "allow" and self._pre_graph is not None:
+                try:
+                    post_graph = DRIVER.graph_snapshot()
+                    from silica.kernel.graph_diff import check_graph_regression
+                    
+                    created_paths = self._txn.created_paths if self._txn else []
+                    success, errors = check_graph_regression(self._pre_graph, post_graph, created_paths)
+                    if not success:
+                        self.context["abort_reason"] = (
+                            f"Graph regression gate failed: {'; '.join(errors)}"
+                        )
+                        self.state = InjectorState.ROLLBACK
+                        return
+                except Exception as e:
+                    logger.error("Failed to perform graph-diff check: %s", e)
+
             self.state = InjectorState.CLEANUP
 
         # ------------------------------------------------------------------
         elif self.state == InjectorState.CLEANUP:
             # C5: only reachable from LINT -> CLEANUP (i.e. all gates green)
-            # Move inbox to done/
-            base_name = os.path.basename(self.inbox_file)
-            done_dir = "done"
-            target = f"{done_dir}/{base_name}"
-            res = silica_move(self.inbox_file, target)
+            # Move inbox to done/ using composed tool
+            from silica.tools.wrapped import silica_cleanup
+            res = silica_cleanup(self.inbox_file, "done")
             if "error" in res:
                 self.context["cleanup_warning"] = res["error"]
 
@@ -281,16 +365,26 @@ class InjectorFSM:
 
         # ------------------------------------------------------------------
         elif self.state == InjectorState.ROLLBACK:
-            txn = self._txn
-            if txn is not None:
+            snapshot_res = self.context.get("snapshot", {})
+            inverses = snapshot_res.get("inverses", [])
+            txn_id = snapshot_res.get("txn_id")
+            
+            if txn_id and inverses:
+                from silica.tools.wrapped import silica_restore
                 try:
-                    DRIVER.restore(txn)
-                    logger.info("Rollback complete for txn %s", txn.id)
+                    # S3.3: Use silica_restore with inverses list as the single source of truth
+                    res = silica_restore(txn_id=txn_id, inverses=inverses)
+                    if not res.get("success", False):
+                        err_msg = "; ".join(res.get("errors", []))
+                        logger.error("Rollback partially failed: %s", err_msg)
+                        self.context["rollback_error"] = err_msg
+                    else:
+                        logger.info("Rollback complete for txn %s", txn_id)
                 except Exception as e:
                     logger.error("Rollback failed: %s", e)
                     self.context["rollback_error"] = str(e)
                 # C5: mark ops as rolled_back in ledger
-                self._write_ledger_rollback(txn.id)
+                self._write_ledger_rollback(txn_id)
 
             self.context["final_status"] = (
                 f"Rolled Back: {self.context.get('abort_reason', 'unknown reason')}"

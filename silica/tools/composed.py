@@ -91,9 +91,10 @@ def silica_recon(inbox_file: str, limit: int = 0) -> dict[str, Any]:
 class PayloadArgs(BaseModel):
     recon_report_path: str = Field(description="Path al JSON report di recon")
     max_concepts: int = Field(default=7, description="Massimo concetti per batch")
+    max_bytes: int = Field(default=80 * 1024, description="Massimo byte (dimensione JSON) per chunk")
 
 @tool(PayloadArgs, cls="composed")
-def silica_payload(recon_report_path: str, max_concepts: int = 7) -> dict[str, Any]:
+def silica_payload(recon_report_path: str, max_concepts: int = 7, max_bytes: int = 80 * 1024) -> dict[str, Any]:
     """Assembla i payload per il Distiller pre-estraendo estratti dal vault."""
     import json
     from silica.kernel.payload import build_payload
@@ -108,8 +109,9 @@ def silica_payload(recon_report_path: str, max_concepts: int = 7) -> dict[str, A
     # We use a default window of 450 chars
     payload = build_payload(recon_reports, window=450)
     
-    if max_concepts > 0:
-        chunks = partition_by_concepts(payload, max_concepts)
+    # C4/S3.1: Always run partition_by_concepts if we have constraints
+    if max_concepts > 0 or max_bytes > 0:
+        chunks = partition_by_concepts(payload, max_concepts, max_bytes)
         return {"chunks": chunks}
         
     return {"payload": payload}
