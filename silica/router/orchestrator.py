@@ -17,12 +17,12 @@ S2.3 change: ledger.py integrated (CLEANUP writes 'committed', ROLLBACK marks 'r
 """
 from __future__ import annotations
 
-import json
 import logging
 import os
 import tempfile
 from enum import Enum, auto
 from typing import Any, TYPE_CHECKING
+import orjson
 
 if TYPE_CHECKING:
     from silica.driver.base import Txn, GraphSnapshot
@@ -37,7 +37,6 @@ from silica.tools.composed import (
     silica_sanitize,
     silica_validate_ops,
 )
-from silica.tools.wrapped import silica_move, build_txn
 from silica.kernel.ops import OpType
 from silica.kernel.ops_io import load_ops
 
@@ -146,8 +145,13 @@ class InjectorFSM:
         """Write content as JSON to a temp file and track for cleanup."""
         fd, path = tempfile.mkstemp(suffix=suffix)
         try:
-            with os.fdopen(fd, "w", encoding="utf-8") as f:
-                json.dump(content, f, ensure_ascii=False)
+            with os.fdopen(fd, "wb") as f:
+                if isinstance(content, list) and len(content) > 0 and hasattr(content[0], "model_dump"):
+                    f.write(orjson.dumps([item.model_dump() for item in content], option=orjson.OPT_INDENT_2))
+                elif hasattr(content, "model_dump"):
+                    f.write(orjson.dumps(content.model_dump(), option=orjson.OPT_INDENT_2))
+                else:
+                    f.write(orjson.dumps(content, option=orjson.OPT_INDENT_2))
         except Exception:
             os.close(fd)
             raise

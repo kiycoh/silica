@@ -9,6 +9,7 @@ Key invariant: touched_ref() returns op.path — NEVER a field named 'name'
 from __future__ import annotations
 
 from enum import Enum
+from typing import Any
 
 from pydantic import BaseModel, Field, model_validator
 
@@ -134,4 +135,9 @@ class BulkResult(BaseModel):
         if item == "success":
             return self.ok
         return getattr(self, item, default)
+
+
+class DistillerOutput(BaseModel):
+    updates: list[Op]
+
 

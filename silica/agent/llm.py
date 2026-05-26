@@ -1,8 +1,8 @@
-"""LLM wrapper — provider-agnostic function-calling via litellm.
+"""LLM wrapper — agentic loop calls via litellm.
 
-This is the ONLY module that imports litellm. The rest of Silica talks to
-call_llm() and receives structured responses. Provider selection is handled
-entirely by litellm's model string routing (e.g. "openrouter/...", "anthropic/...").
+Handles the interactive agentic loop (tool-calling, multi-turn). Provider
+selection for the Distiller's constrained decoding path is in agent/providers.py
+(openai SDK directly, per ADR-008 §M2). This module handles everything else.
 """
 from __future__ import annotations
 

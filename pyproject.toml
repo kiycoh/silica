@@ -17,6 +17,10 @@ dependencies = [
   "python-dotenv>=1.0",
   "rich",
   "pyfiglet",
+  "networkx",
+  "markdown-it-py",
+  "orjson",
+  "openai",
 ]
 
 [project.optional-dependencies]

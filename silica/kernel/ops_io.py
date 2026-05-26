@@ -1,4 +1,4 @@
-import json
+import orjson
 from typing import Any
 from silica.kernel.ops import Op
 
@@ -20,11 +20,12 @@ def parse_ops(raw: list | dict | Any) -> list[Op]:
     return ops
 
 def load_ops(path: str) -> list[Op]:
-    with open(path, "r", encoding="utf-8") as f:
-        data = json.load(f)
+    with open(path, "rb") as f:
+        data = orjson.loads(f.read())
     return parse_ops(data)
 
 def dump_ops(path: str, ops: list[Op]) -> None:
     data = [op.model_dump() for op in ops]
-    with open(path, "w", encoding="utf-8") as f:
-        json.dump(data, f, ensure_ascii=False, indent=2)
+    serialized = orjson.dumps(data, option=orjson.OPT_INDENT_2)
+    with open(path, "wb") as f:
+        f.write(serialized)

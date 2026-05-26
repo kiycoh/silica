@@ -52,8 +52,9 @@ def run_distiller(payload: dict, target: str, hub: str | None = None) -> dict:
     Returns:
         parsed dict with {"updates": [...]} or {"error": ...}
     """
-    from silica.agent.llm import call_llm
+    from silica.agent.providers import get_provider
     from silica.config import CONFIG
+    from silica.kernel.ops import DistillerOutput
     from silica.kernel.sanitize import parse_json
 
     prompt_text = render_prompt(target=target, hub=hub)
@@ -72,11 +73,21 @@ def run_distiller(payload: dict, target: str, hub: str | None = None) -> dict:
 
     logger.info("Calling Distiller LLM (payload checksum %s)", checksum[:12])
 
-    response = call_llm(
-        model=CONFIG.model,
-        messages=[{"role": "user", "content": user_message}],
-        tools=None,  # single-turn: no tool calls, output is JSON
-    )
+    try:
+        provider = get_provider(CONFIG)
+        response = provider.call_llm(
+            messages=[{"role": "user", "content": user_message}],
+            tools=None,
+            response_schema=DistillerOutput,
+        )
+    except Exception as e:
+        logger.warning("Distiller provider call failed, falling back to litellm: %s", e)
+        from silica.agent.llm import call_llm
+        response = call_llm(
+            model=CONFIG.model,
+            messages=[{"role": "user", "content": user_message}],
+            tools=None,
+        )
 
     raw_output = response.text or ""
     if not raw_output.strip():

@@ -38,6 +38,11 @@ class SilicaConfig:
         )
     )
 
+    # Provider preset name (e.g. "lmstudio", "openrouter")
+    provider: str = field(
+        default_factory=lambda: os.getenv("SILICA_PROVIDER", "lmstudio")
+    )
+
     # Vault path — used by the fs backend and for context.
     vault_path: str = field(
         default_factory=lambda: os.getenv("SILICA_VAULT", "")

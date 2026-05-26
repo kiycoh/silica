@@ -14,17 +14,7 @@ def wikilink(name):
 def has_wikilink(content, name):
     return f"[[{name}]]" in content
 
-HEADING_RE = re.compile(r'^(#{1,6})\s+(.*?)\s*$', re.MULTILINE)
-FENCE_RE = re.compile(r'^(`{3,}|~{3,}).*?\n.*?^\1\s*$', re.MULTILINE | re.DOTALL)
-
-def parse_headings(body):
-    """Parse headings, ignoring any inside fenced code blocks."""
-    # Build set of character ranges covered by fences
-    fenced = set()
-    for m in FENCE_RE.finditer(body):
-        fenced.update(range(m.start(), m.end()))
-    return [{"level": len(m.group(1)), "text": m.group(2), "pos": m.start()}
-            for m in HEADING_RE.finditer(body) if m.start() not in fenced]
+from silica.kernel.ast import parse_headings, _balanced
 
 def sections_by_h2(body):
     """Split body at H2 boundaries. Each section's content includes nested H3+.
@@ -64,22 +54,7 @@ DATE_PREFIX_RE = re.compile(r'^\s*\d{4},\s*\d{1,2},\s*\d{1,2}')
 CALLOUT_RE = re.compile(r'^>\s*\[!([A-Za-z]+)\][+-]?', re.MULTILINE)
 
 
-def _balanced(body):
-    """Check for unbalanced OFM structural delimiters (fence-aware)."""
-    issues = []
-    # Strip fenced code blocks to avoid false positives on $$ / [[ inside code
-    naked = FENCE_RE.sub("", body)
-    # Strip inline code spans (`...`) — e.g. `if x == y` would false-positive ==
-    naked = re.sub(r'`[^`\n]*`', '', naked)
-    if naked.count("$$") % 2:
-        issues.append("unbalanced $$ block")
-    if naked.count("==") % 2:
-        issues.append("unbalanced == highlight")
-    if naked.count("[[") != naked.count("]]"):
-        issues.append("unbalanced [[wikilink]]")
-    if body.count("```") % 2:
-        issues.append("unclosed code fence")
-    return issues
+# _balanced is imported from ast.py
 
 
 def ofm_lint(content, stem=None):
@@ -132,12 +107,12 @@ def ofm_lint(content, stem=None):
     V += _balanced(body)
 
     # Detect literal '\n' character sequence in non-code body
-    naked = FENCE_RE.sub("", body)
-    naked = re.sub(r'`[^`\n]*`', '', naked)
+    from .ast import get_non_code_text, extract_callouts
+    naked = get_non_code_text(body)
     if "\\n" in naked:
         V.append("literal '\\n' character sequence detected in body")
 
-    for t in CALLOUT_RE.findall(body):
+    for t in extract_callouts(body):
         if t.lower() not in CALLOUT_TYPES:
             V.append(f"unknown callout type [!{t}]")
 

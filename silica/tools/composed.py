@@ -7,14 +7,13 @@ From SILICA.md §4.2:
 """
 from __future__ import annotations
 
-from pathlib import Path
 from typing import Any
 
 from pydantic import BaseModel, Field
 
 from silica.driver import DRIVER
 from silica.kernel.ops import OpType
-from silica.kernel.ops_io import load_ops, dump_ops, parse_ops
+from silica.kernel.ops_io import load_ops, dump_ops
 from silica.tools import tool
 
 
@@ -107,13 +106,13 @@ class PayloadArgs(BaseModel):
 @tool(PayloadArgs, cls="composed")
 def silica_payload(recon_report_path: str, max_concepts: int = 7, max_bytes: int = 80 * 1024) -> dict[str, Any]:
     """Assembla i payload per il Distiller pre-estraendo estratti dal vault."""
-    import json
+    import orjson
     from silica.kernel.payload import build_payload
     from silica.kernel.partition import partition_by_concepts
     
     try:
-        with open(recon_report_path, 'r', encoding='utf-8') as f:
-            recon_reports = json.load(f)
+        with open(recon_report_path, 'rb') as f:
+            recon_reports = orjson.loads(f.read())
     except Exception as e:
         return {"error": f"Failed to read recon report: {e}"}
         
@@ -167,7 +166,7 @@ def silica_validate_ops(ops_json_path: str, payload_paths: list[str] | None = No
     validated ops. Snapshot and bulk_write MUST read from the same ops_json_path
     after this call — never from a pre-validation snapshot.
     """
-    import json
+    import orjson
     from silica.kernel.validate import validate_operations
 
     if payload_paths is None:
@@ -181,8 +180,8 @@ def silica_validate_ops(ops_json_path: str, payload_paths: list[str] | None = No
     payloads = []
     for path in payload_paths:
         try:
-            with open(path, 'r', encoding='utf-8') as f:
-                payloads.append(json.load(f))
+            with open(path, 'rb') as f:
+                payloads.append(orjson.loads(f.read()))
         except Exception as e:
             return {"error": f"Failed to load payload {path}: {e}"}
 

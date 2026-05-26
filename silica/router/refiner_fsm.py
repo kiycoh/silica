@@ -5,12 +5,12 @@ Deterministic state machine for the Refiner pipeline.
 from __future__ import annotations
 
 import datetime
-import json
 import logging
 import os
 import tempfile
 from enum import Enum, auto
 from typing import Any
+import orjson
 
 from silica.driver import DRIVER
 from silica.driver.base import NoteRef, Txn, GraphSnapshot
@@ -19,9 +19,8 @@ from silica.tools.composed import (
     silica_lint,
     silica_validate_ops,
 )
-from silica.tools.wrapped import build_txn
-from silica.kernel.ops import Op, OpType
-from silica.kernel.ops_io import load_ops, dump_ops, parse_ops
+from silica.kernel.ops import OpType
+from silica.kernel.ops_io import load_ops, parse_ops
 from silica.kernel.ledger import get_ledger
 from silica.kernel import frontmatter, ofm, templates
 
@@ -119,11 +118,13 @@ class RefinerFSM:
     def _make_tmp(self, content: Any, suffix: str = ".json") -> str:
         fd, path = tempfile.mkstemp(suffix=suffix)
         try:
-            with os.fdopen(fd, "w", encoding="utf-8") as f:
+            with os.fdopen(fd, "wb") as f:
                 if isinstance(content, list) and len(content) > 0 and hasattr(content[0], "model_dump"):
-                    json.dump([item.model_dump() for item in content], f, ensure_ascii=False)
+                    f.write(orjson.dumps([item.model_dump() for item in content], option=orjson.OPT_INDENT_2))
+                elif hasattr(content, "model_dump"):
+                    f.write(orjson.dumps(content.model_dump(), option=orjson.OPT_INDENT_2))
                 else:
-                    json.dump(content, f, ensure_ascii=False)
+                    f.write(orjson.dumps(content, option=orjson.OPT_INDENT_2))
         except Exception:
             os.close(fd)
             raise

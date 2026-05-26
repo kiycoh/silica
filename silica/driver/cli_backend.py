@@ -20,6 +20,7 @@ import re
 import subprocess
 import time
 from typing import Any
+import networkx as nx
 from silica.kernel.wikilink import extract_links
 
 from silica.driver.base import (
@@ -45,6 +46,49 @@ class ObsidianCLIBackend:
 
     def __init__(self, vault_name: str = ""):
         self._vault_name = vault_name
+        self._graph = nx.DiGraph()
+        self._unresolved_links: set[tuple[str, str]] = set()
+        self._notes: dict[str, NoteRef] = {}
+        self._notes_by_name: dict[str, list[NoteRef]] = {}
+        self._is_graph_built = False
+
+    def _node_ref(self, path: str) -> NoteRef:
+        if path in self._notes:
+            return self._notes[path]
+        name = path.rsplit("/", 1)[-1].removesuffix(".md")
+        return NoteRef(name=name, path=path)
+
+    def _ensure_graph(self):
+        if self._is_graph_built:
+            return
+        
+        self._graph.clear()
+        self._unresolved_links.clear()
+        self._notes.clear()
+        self._notes_by_name.clear()
+        
+        all_notes = self.list_files()
+        for ref in all_notes:
+            self._notes[ref.path] = ref
+            self._graph.add_node(ref.path, ref=ref)
+            
+            name_lower = ref.name.lower()
+            if name_lower not in self._notes_by_name:
+                self._notes_by_name[name_lower] = []
+            self._notes_by_name[name_lower].append(ref)
+            
+        for ref in all_notes:
+            try:
+                out = self.links(ref)
+                for target in out:
+                    if target.path and target.path in self._notes:
+                        self._graph.add_edge(ref.path, target.path)
+                    else:
+                        self._unresolved_links.add((ref.path, target.name))
+            except Exception:
+                pass
+                
+        self._is_graph_built = True
 
     # ------------------------------------------------------------------
     # Internal helpers
@@ -321,17 +365,29 @@ class ObsidianCLIBackend:
         the touched notes and their 1-hop neighborhood.
         """
         if refs is None:
-            all_notes = self.list_files()
-            link_counts: dict[str, int] = {}
-            backlink_counts: dict[str, int] = {}
-            for ref in all_notes:
-                out = self.links(ref)
-                link_counts[ref.name] = len(out)
-                for target in out:
-                    backlink_counts[target.name] = backlink_counts.get(target.name, 0) + 1
+            self._ensure_graph()
+            link_counts = {}
+            for path, ref in self._notes.items():
+                resolved_count = self._graph.out_degree(path) if path in self._graph else 0
+                unresolved_count = sum(1 for s, t in self._unresolved_links if s == path)
+                # Key by canonical path (no .md) — unique even with duplicate basenames.
+                key = path.removesuffix(".md")
+                link_counts[key] = resolved_count + unresolved_count
+
+            backlink_counts = {
+                path.removesuffix(".md"): d
+                for path, d in self._graph.in_degree()
+            }
+
+            orphans = [self._graph.nodes[n]["ref"] for n, d in self._graph.in_degree() if d == 0]
+            unresolved = [
+                Link(source=self._node_ref(s), target=t.removesuffix(".md"))
+                for s, t in self._unresolved_links
+            ]
+
             return GraphSnapshot(
-                orphans=self.orphans(),
-                unresolved=self.unresolved(),
+                orphans=orphans,
+                unresolved=unresolved,
                 link_counts=link_counts,
                 backlink_counts=backlink_counts,
             )
@@ -418,6 +474,7 @@ class ObsidianCLIBackend:
 
     def create(self, path: str, content: str) -> NoteRef:
         """Create a new note at the given vault-relative path."""
+        self._is_graph_built = False
         if len(content) > 30000:
             self._write_large_content(path, content, append_mode=False)
         else:
@@ -436,6 +493,7 @@ class ObsidianCLIBackend:
         Uses `obsidian create ... overwrite=true` which keeps the file's block-refs
         and history intact — unlike delete+create which destroys both.
         """
+        self._is_graph_built = False
         if len(content) > 30000:
             self._write_large_content(path, content, append_mode=False)
         else:
@@ -449,6 +507,7 @@ class ObsidianCLIBackend:
 
     def append(self, ref: NoteRef | str, content: str) -> None:
         """Append content to an existing note."""
+        self._is_graph_built = False
         if len(content) > 30000:
             path = self._resolve_path(ref)
             self._write_large_content(path, content, append_mode=True)
@@ -460,6 +519,7 @@ class ObsidianCLIBackend:
 
     def set_prop(self, ref: NoteRef | str, name: str, value: Any, type_: str = "text") -> None:
         """Set a frontmatter property on a note."""
+        self._is_graph_built = False
         self._run_cli(
             "property:set",
             self._ref_arg(ref),
@@ -471,11 +531,13 @@ class ObsidianCLIBackend:
 
     def move(self, ref: NoteRef | str, to: str) -> None:
         """Move/rename a note. Obsidian updates all wikilinks (graph-safe)."""
+        self._is_graph_built = False
         self._run_cli("move", self._ref_arg(ref), f"to={to}")
         self._wait_for_move(ref, to)
 
     def delete(self, ref: NoteRef | str) -> None:
         """Delete a note from the vault."""
+        self._is_graph_built = False
         self._run_cli("delete", self._ref_arg(ref))
         # C2: verify note is gone
         self._wait_for_gone(ref)

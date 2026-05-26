@@ -13,10 +13,10 @@ from __future__ import annotations
 
 import logging
 import os
-import re
 import time
 from pathlib import Path
 from typing import Any
+import networkx as nx
 from silica.kernel.wikilink import extract_links
 
 from silica.driver.base import (
@@ -31,14 +31,7 @@ from silica.driver.base import (
 )
 from silica.kernel import frontmatter as fm
 from silica.kernel import ofm
-
 logger = logging.getLogger(__name__)
-
-# Basic wikilink extraction: [[target]] or [[target|display]]
-WIKILINK_RE = re.compile(r'\[\[([^\]|#]+)(?:[|#][^\]]*)?\]\]')
-
-# Heading extraction fallback if OFM fails
-HEADING_RE = re.compile(r'^(#{1,6})\s+(.*?)\s*$', re.MULTILINE)
 
 class ObsidianFSBackend:
     """ObsidianDriver implementation using direct filesystem access."""
@@ -52,9 +45,25 @@ class ObsidianFSBackend:
         self._notes: dict[str, NoteRef] = {}          # path -> NoteRef
         self._notes_by_name: dict[str, list[NoteRef]] = {}  # lower_name -> list of NoteRefs
         self._links: dict[str, set[str]] = {}         # source_path -> set(target_name)
-        self._backlinks: dict[str, set[str]] = {}     # target_path -> set(source_path)
-        self._last_index_time: float = 0.0
+        self._graph = nx.DiGraph()
+        self._unresolved_links: set[tuple[str, str]] = set() # (source_path, raw_target)
         self._needs_reindex: bool = True
+
+    def _path_of(self, ref: NoteRef | str) -> str | None:
+        if isinstance(ref, NoteRef):
+            return ref.path
+        if ref.endswith(".md"):
+            return ref
+        matched = self._notes_by_name.get(ref.lower(), [])
+        if matched:
+            return matched[0].path
+        return None
+
+    def _node_ref(self, path: str) -> NoteRef:
+        if path in self._notes:
+            return self._notes[path]
+        name = path.rsplit("/", 1)[-1].removesuffix(".md")
+        return NoteRef(name=name, path=path)
 
     # ------------------------------------------------------------------
     # Indexing (in-memory graph)
@@ -68,19 +77,47 @@ class ObsidianFSBackend:
         """Resolve a link target to an existing NoteRef or None if unresolved.
 
         Obsidian link resolution rules:
-        1. If target contains '/', it is a path link. We check if target (or target + '.md')
-           matches the path of an existing note exactly.
-        2. If target does not contain '/', it is a name link. We check if target matches
-           the name of any note in the vault.
+        1. If target starts with '#' or '^', it is an internal link. It resolves to the
+           source file itself.
+        2. If target contains '/', it is a path link. We check if target (or target + '.md')
+           matches the end of the path of any existing note (with a leading slash or exact match).
+        3. If target does not contain '/', it is a name link. We check if target matches
+           the name of any note in the vault. If multiple exist, we prioritize the one in
+           the same directory as source_path, then by shortest path.
         """
+        if target.startswith('#') or target.startswith('^'):
+            if source_path:
+                return self._notes.get(source_path)
+            return None
+
         target_no_ext = target.removesuffix(".md")
         if "/" in target:
             p1 = target_no_ext + ".md"
             p1_norm = os.path.normcase(p1.replace("\\", "/").strip("/")).lower()
+            
+            # Try exact match first
             for path, ref in self._notes.items():
                 path_norm = os.path.normcase(path.replace("\\", "/").strip("/")).lower()
                 if path_norm == p1_norm:
                     return ref
+                    
+            # Try matching end of path (suffix matching with /)
+            suffix = "/" + p1_norm
+            candidates = []
+            for path, ref in self._notes.items():
+                path_norm = os.path.normcase(path.replace("\\", "/").strip("/")).lower()
+                if path_norm.endswith(suffix):
+                    candidates.append(ref)
+            if candidates:
+                # Prioritize same directory as source_path if available
+                if source_path and "/" in source_path:
+                    source_dir = source_path.rsplit("/", 1)[0]
+                    same_dir_candidates = [c for c in candidates if c.path.startswith(source_dir + "/")]
+                    if same_dir_candidates:
+                        sorted_same = sorted(same_dir_candidates, key=lambda r: (r.path.count("/"), r.path.lower()))
+                        return sorted_same[0]
+                sorted_candidates = sorted(candidates, key=lambda r: (r.path.count("/"), r.path.lower()))
+                return sorted_candidates[0]
             return None
         else:
             refs = self._notes_by_name.get(target_no_ext.lower(), [])
@@ -88,8 +125,16 @@ class ObsidianFSBackend:
                 return None
             if len(refs) == 1:
                 return refs[0]
-            # Prioritize the one with the shortest vault-relative path (fewer path segments)
-            # breaking ties alphabetically/lexicographically
+                
+            # Prioritize the one in the same directory as source_path
+            if source_path and "/" in source_path:
+                source_dir = source_path.rsplit("/", 1)[0]
+                same_dir_refs = [r for r in refs if r.path.startswith(source_dir + "/")]
+                if same_dir_refs:
+                    sorted_same = sorted(same_dir_refs, key=lambda r: (r.path.count("/"), r.path.lower()))
+                    return sorted_same[0]
+                    
+            # Prioritize the one with the shortest vault-relative path
             sorted_refs = sorted(refs, key=lambda r: (r.path.count("/"), r.path.lower()))
             return sorted_refs[0]
 
@@ -98,14 +143,15 @@ class ObsidianFSBackend:
         self._notes.clear()
         self._notes_by_name.clear()
         self._links.clear()
-        self._backlinks.clear()
+        self._graph.clear()
+        self._unresolved_links.clear()
 
         from silica.config import CONFIG
         inbox_norm = os.path.normcase(CONFIG.inbox_dir.replace("\\", "/").strip("/")) if CONFIG.inbox_dir else None
 
         files_to_process = []
 
-        # Pass 1: Find all markdown files and populate self._notes
+        # Pass 1: Find all markdown files and populate self._notes and self._graph nodes
         for root, dirs, files in os.walk(self.vault_path):
             rel_path = Path(root).relative_to(self.vault_path).as_posix()
 
@@ -140,6 +186,7 @@ class ObsidianFSBackend:
                 name = file[:-3]
                 ref = NoteRef(name=name, path=rel_path_file)
                 self._notes[rel_path_file] = ref
+                self._graph.add_node(rel_path_file, ref=ref)
                 
                 name_lower = name.lower()
                 if name_lower not in self._notes_by_name:
@@ -157,14 +204,13 @@ class ObsidianFSBackend:
                 for target in targets:
                     ref = self._resolve_target(target, source_path=rel_path_file)
                     if ref:
-                        if ref.path not in self._backlinks:
-                            self._backlinks[ref.path] = set()
-                        self._backlinks[ref.path].add(rel_path_file)
+                        self._graph.add_edge(rel_path_file, ref.path)
+                    else:
+                        self._unresolved_links.add((rel_path_file, target))
             except Exception as e:
                 logger.warning("Failed to index %s: %s", rel_path_file, e)
 
         self._needs_reindex = False
-        self._last_index_time = time.time()
         logger.debug("Indexed %d notes", len(self._notes))
 
     def _resolve_path(self, ref: NoteRef | str) -> Path:
@@ -289,63 +335,42 @@ class ObsidianFSBackend:
     def links(self, ref: NoteRef | str) -> list[NoteRef]:
         """Outgoing links from a note."""
         self._ensure_index()
-        path = ref.path if isinstance(ref, NoteRef) else ref
-        if not path.endswith(".md"):
-            matched = self._notes_by_name.get(path.lower(), [])
-            if matched:
-                path = matched[0].path
-            else:
-                return []
-                
-        targets = self._links.get(path, set())
+        path = self._path_of(ref)
+        if not path:
+            return []
+        
+        # Resolved outgoing links from graph
         results = []
-        for t in targets:
-            target_ref = self._resolve_target(t, source_path=path)
-            if target_ref:
-                results.append(target_ref)
-            else:
+        if path in self._graph:
+            results.extend([self._node_ref(t) for t in self._graph.successors(path)])
+        
+        # Unresolved outgoing links
+        for s, t in self._unresolved_links:
+            if s == path:
                 t_name = t.rsplit("/", 1)[-1].removesuffix(".md")
                 results.append(NoteRef(name=t_name, path=f"{t_name}.md"))
+                
         return results
 
     def backlinks(self, ref: NoteRef | str) -> list[NoteRef]:
         """Incoming links to a note."""
         self._ensure_index()
-        path = ref.path if isinstance(ref, NoteRef) else ref
-        if not path.endswith(".md"):
-            matched = self._notes_by_name.get(path.lower(), [])
-            if matched:
-                path = matched[0].path
-            else:
-                return []
-                
-        sources = self._backlinks.get(path, set())
-        results = []
-        for s in sources:
-            source_ref = self._notes.get(s)
-            if source_ref:
-                results.append(source_ref)
-        return results
+        path = self._path_of(ref)
+        if not path or path not in self._graph:
+            return []
+        return [self._node_ref(s) for s in self._graph.predecessors(path)]
 
     def orphans(self) -> list[NoteRef]:
         """Notes with no incoming links."""
         self._ensure_index()
-        results = []
-        for path, ref in self._notes.items():
-            if path not in self._backlinks or not self._backlinks[path]:
-                results.append(ref)
-        return results
+        return [self._graph.nodes[n]["ref"] for n, d in self._graph.in_degree() if d == 0]
 
     def unresolved(self) -> list[Link]:
         """Unresolved wikilinks in the vault."""
         self._ensure_index()
         results = []
-        for source_path, targets in self._links.items():
-            source_ref = self._notes.get(source_path, NoteRef(name=os.path.basename(source_path)[:-3], path=source_path))
-            for target in targets:
-                ref = self._resolve_target(target, source_path=source_path)
-                if not ref:
-                    results.append(Link(source=source_ref, target=target.removesuffix(".md")))
+        for s, t in self._unresolved_links:
+            results.append(Link(source=self._node_ref(s), target=t.removesuffix(".md")))
         return results
 
     def graph_snapshot(self, refs: list[NoteRef] | None = None) -> GraphSnapshot:
@@ -356,8 +381,20 @@ class ObsidianFSBackend:
         """
         self._ensure_index()
         if refs is None:
-            link_counts = {ref.name: len(self._links.get(path, [])) for path, ref in self._notes.items()}
-            backlink_counts = {ref.name: len(self._backlinks.get(path, [])) for path, ref in self._notes.items()}
+            link_counts = {}
+            for path, ref in self._notes.items():
+                resolved_count = self._graph.out_degree(path) if path in self._graph else 0
+                unresolved_count = sum(1 for s, t in self._unresolved_links if s == path)
+                # Key by canonical path (no .md) — unique even with duplicate basenames.
+                # graph_diff.normalize_path() strips .md and lowercases, so path-keyed
+                # snapshots compare identically to name-keyed ones in the diff.
+                key = path.removesuffix(".md")
+                link_counts[key] = resolved_count + unresolved_count
+
+            backlink_counts = {
+                path.removesuffix(".md"): d
+                for path, d in self._graph.in_degree()
+            }
             return GraphSnapshot(
                 orphans=self.orphans(),
                 unresolved=self.unresolved(),
@@ -368,37 +405,40 @@ class ObsidianFSBackend:
         # Incremental snapshot
         neighborhood = set()
         for r in refs:
-            neighborhood.add(r.path)
-            # Add outgoing
-            for t in self._links.get(r.path, []):
-                ref = self._resolve_target(t, source_path=r.path)
-                if ref:
-                    neighborhood.add(ref.path)
-            # Add incoming
-            for s in self._backlinks.get(r.path, []):
-                neighborhood.add(s)
+            if r.path:
+                neighborhood.add(r.path)
+                # Add outgoing
+                if r.path in self._graph:
+                    for t in self._graph.successors(r.path):
+                        neighborhood.add(t)
+                # Add incoming
+                if r.path in self._graph:
+                    for s in self._graph.predecessors(r.path):
+                        neighborhood.add(s)
 
         link_counts = {}
         backlink_counts = {}
         for path in neighborhood:
             ref = self._notes.get(path)
             if ref:
-                link_counts[ref.name] = len(self._links.get(path, []))
-                backlink_counts[ref.name] = len(self._backlinks.get(path, []))
+                resolved_count = self._graph.out_degree(path) if path in self._graph else 0
+                unresolved_count = sum(1 for s, t in self._unresolved_links if s == path)
+                key = path.removesuffix(".md")
+                link_counts[key] = resolved_count + unresolved_count
+                backlink_counts[key] = self._graph.in_degree(path) if path in self._graph else 0
 
         # Filter orphans & unresolved to neighborhood incrementally
         orphans = [
             self._notes[path] for path in neighborhood
-            if path in self._notes and (path not in self._backlinks or not self._backlinks[path])
+            if path in self._notes and (path not in self._graph or self._graph.in_degree(path) == 0)
         ]
         unresolved = []
         for path in neighborhood:
             if path in self._notes:
                 source_ref = self._notes[path]
-                for target in self._links.get(path, []):
-                    ref = self._resolve_target(target, source_path=path)
-                    if not ref:
-                        unresolved.append(Link(source=source_ref, target=target.removesuffix(".md")))
+                for s, t in self._unresolved_links:
+                    if s == path:
+                        unresolved.append(Link(source=source_ref, target=t.removesuffix(".md")))
 
         return GraphSnapshot(
             orphans=orphans,
