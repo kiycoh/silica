@@ -10,6 +10,9 @@ import json
 import logging
 from dataclasses import dataclass, field
 
+# Quiet down Bedrock/SageMaker missing botocore warnings during import
+logging.getLogger("LiteLLM").setLevel(logging.ERROR)
+
 import litellm
 
 logger = logging.getLogger(__name__)

@@ -28,5 +28,8 @@ silica = "silica.cli:main"
 [tool.setuptools.packages.find]
 include = ["silica", "silica.*"]
 
+[tool.setuptools.package-data]
+"silica.ui" = ["assets/*.txt"]
+
 [tool.pytest.ini_options]
 testpaths = ["tests"]

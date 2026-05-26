@@ -1,4 +1,4 @@
-from unittest.mock import patch, MagicMock
+from unittest.mock import patch, MagicMock, PropertyMock
 import pytest
 from silica.config import CONFIG
 from silica.cli import _handle_slash_command
@@ -238,4 +238,29 @@ def test_thinking_slash_toggle():
         assert CONFIG.show_thinking is True
     finally:
         CONFIG.show_thinking = orig_thinking
+
+
+def test_print_banner_styles(capsys):
+    from silica.ui.banner import print_banner
+    from rich.console import Console, ConsoleDimensions
+    
+    orig_style = CONFIG.banner_style
+    try:
+        # Minimal style
+        CONFIG.banner_style = "minimal"
+        print_banner()
+        captured = capsys.readouterr()
+        assert "silica" in captured.out
+        assert "agente Obsidian-nativo" in captured.out
+
+        # Crystal style with large terminal
+        with patch.object(Console, "width", new_callable=PropertyMock, return_value=100), \
+             patch.object(Console, "size", new_callable=PropertyMock, return_value=ConsoleDimensions(100, 40)):
+            CONFIG.banner_style = "crystal"
+            print_banner()
+            captured = capsys.readouterr()
+            assert "░" in captured.out or "█" in captured.out or "▓" in captured.out
+    finally:
+        CONFIG.banner_style = orig_style
+
 

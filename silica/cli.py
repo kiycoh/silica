@@ -36,6 +36,7 @@ def _setup_logging(debug: bool = False) -> None:
     # Quiet down noisy libraries unless debug logging is requested
     logging.getLogger("httpx").setLevel(level)
     logging.getLogger("litellm").setLevel(level)
+    logging.getLogger("LiteLLM").setLevel(logging.ERROR if level == logging.WARNING else level)
     logging.getLogger("openai").setLevel(level)
 
 
@@ -83,7 +84,8 @@ def _handle_slash_command(cmd: str, messages: list[dict]) -> bool:
         return True
 
     if cmd == "/verbose":
-        modes = ("off", "new", "all", "verbose")
+        from typing import Literal
+        modes: tuple[Literal["off", "new", "all", "verbose"], ...] = ("off", "new", "all", "verbose")
         current = CONFIG.tool_progress
         next_mode = modes[(modes.index(current) + 1) % len(modes)]
         CONFIG.tool_progress = next_mode
