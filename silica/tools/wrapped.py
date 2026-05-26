@@ -207,8 +207,15 @@ def silica_restore(txn_id: str, inverses: list[dict]) -> dict[str, Any]:
         path = inv.path
         try:
             if inv.kind == InverseOpKind.delete_created:
-                DRIVER.delete(path)
-                applied.append(f"deleted_created:{path}")
+                try:
+                    DRIVER.delete(path)
+                    applied.append(f"deleted_created:{path}")
+                except Exception as e:
+                    err_str = str(e).lower()
+                    if "not found" in err_str or "no such file" in err_str:
+                        applied.append(f"deleted_created:{path} (already_absent)")
+                    else:
+                        raise
 
             elif inv.kind == InverseOpKind.restore_version:
                 if inv.version is not None:

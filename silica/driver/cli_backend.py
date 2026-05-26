@@ -68,7 +68,14 @@ class ObsidianCLIBackend:
             )
             if result.stderr:
                 logger.debug("CLI stderr: %s", result.stderr.strip())
-            return result.stdout.strip()
+            
+            stdout_str = result.stdout.strip()
+            # Intercept Obsidian CLI errors that are printed to stdout with exit code 0
+            if (stdout_str.startswith("Error: File") and "not found" in stdout_str) or \
+               (stdout_str.startswith("Error:") and "not found" in stdout_str):
+                raise RuntimeError(stdout_str)
+                
+            return stdout_str
         except subprocess.TimeoutExpired:
             raise RuntimeError(f"Obsidian CLI timeout: {' '.join(cmd)}")
         except subprocess.CalledProcessError as e:
@@ -162,24 +169,30 @@ class ObsidianCLIBackend:
 
     def props_of(self, ref: NoteRef | str) -> dict:
         """Read frontmatter properties."""
-        data = self._run_json("properties", self._ref_arg(ref))
-        if isinstance(data, dict):
-            return data
+        try:
+            data = self._run_json("properties", self._ref_arg(ref))
+            if isinstance(data, dict):
+                return data
+        except Exception:
+            pass
         return {}
 
     def outline(self, ref: NoteRef | str) -> list[Heading]:
         """Get the heading tree of a note."""
-        data = self._run_json("outline", self._ref_arg(ref))
-        headings = []
-        if isinstance(data, list):
-            for item in data:
-                if isinstance(item, dict):
-                    headings.append(Heading(
-                        level=item.get("level", 1),
-                        text=str(item.get("heading", item.get("text", ""))),
-                        position=item.get("position", 0),
-                    ))
-        return headings
+        try:
+            data = self._run_json("outline", self._ref_arg(ref))
+            headings = []
+            if isinstance(data, list):
+                for item in data:
+                    if isinstance(item, dict):
+                        headings.append(Heading(
+                            level=item.get("level", 1),
+                            text=str(item.get("heading", item.get("text", ""))),
+                            position=item.get("position", 0),
+                        ))
+            return headings
+        except Exception:
+            return []
 
     # ------------------------------------------------------------------
     # Graph
@@ -187,30 +200,36 @@ class ObsidianCLIBackend:
 
     def links(self, ref: NoteRef | str) -> list[NoteRef]:
         """Outgoing links from a note."""
-        raw = self._run_cli("links", self._ref_arg(ref))
-        results = []
-        for line in raw.splitlines():
-            line = line.strip()
-            if line and not line.startswith("No ") and "found" not in line:
-                name = line.rsplit("/", 1)[-1].removesuffix(".md")
-                results.append(NoteRef(name=name, path=line))
-        return results
+        try:
+            raw = self._run_cli("links", self._ref_arg(ref))
+            results = []
+            for line in raw.splitlines():
+                line = line.strip()
+                if line and not line.startswith("No ") and "found" not in line:
+                    name = line.rsplit("/", 1)[-1].removesuffix(".md")
+                    results.append(NoteRef(name=name, path=line))
+            return results
+        except Exception:
+            return []
 
     def backlinks(self, ref: NoteRef | str) -> list[NoteRef]:
         """Incoming links to a note."""
-        raw = self._run_cli("backlinks", self._ref_arg(ref))
-        results = []
-        for line in raw.splitlines():
-            line = line.strip()
-            if not line or (line.startswith("No ") and "found" in line):
-                continue
-            # Format may be "path\tcount" with counts flag
-            parts = line.split("\t")
-            path = parts[0].strip()
-            if path:
-                name = path.rsplit("/", 1)[-1].removesuffix(".md")
-                results.append(NoteRef(name=name, path=path))
-        return results
+        try:
+            raw = self._run_cli("backlinks", self._ref_arg(ref))
+            results = []
+            for line in raw.splitlines():
+                line = line.strip()
+                if not line or (line.startswith("No ") and "found" in line):
+                    continue
+                # Format may be "path\tcount" with counts flag
+                parts = line.split("\t")
+                path = parts[0].strip()
+                if path:
+                    name = path.rsplit("/", 1)[-1].removesuffix(".md")
+                    results.append(NoteRef(name=name, path=path))
+            return results
+        except Exception:
+            return []
 
     def orphans(self) -> list[NoteRef]:
         """Notes with no incoming links."""
@@ -488,7 +507,10 @@ class ObsidianCLIBackend:
                 self._run_cli("delete", f"path={path}")
                 logger.info("Rolled back created note: %s", path)
             except RuntimeError as e:
-                logger.error("Failed to delete created note %s during rollback: %s", path, e)
+                if "not found" in str(e).lower():
+                    logger.info("Rolled back created note %s (already absent)", path)
+                else:
+                    logger.error("Failed to delete created note %s during rollback: %s", path, e)
 
     # ------------------------------------------------------------------
     # Freshness contract — per-operation postconditions (B5)

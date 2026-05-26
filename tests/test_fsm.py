@@ -6,6 +6,76 @@ def test_injector_fsm_initialization():
     fsm = InjectorFSM("Inbox/test.md", "TargetDir")
     assert fsm.state.name == "INIT"
 
+
+def test_injector_fsm_hub_inheritance():
+    # If hub is None and target_dir is provided, it should inherit from target_dir's basename
+    fsm = InjectorFSM("Inbox/test.md", "Deep Learning/Concepts")
+    assert fsm.hub == "Concepts"
+
+    # If hub is provided explicitly, it should preserve it
+    fsm_explicit = InjectorFSM("Inbox/test.md", "Deep Learning/Concepts", hub="MyExplicitHub")
+    assert fsm_explicit.hub == "MyExplicitHub"
+
+
+def test_validate_operations_hub_inheritance():
+    from silica.kernel.validate import validate_operations
+    ops = [
+        {"op": "write", "path": "Deep Learning/Concepts/Neural Network.md", "heading": "Neural Network", "source_basename": "inbox.md"}
+    ]
+    # We patch path_exists to return False so that the write operation is validated as a creation
+    with patch("silica.kernel.validate.DRIVER.read_note", side_effect=RuntimeError("File not found")):
+        validated, rejected = validate_operations(ops, [], "Deep Learning/Concepts")
+    assert len(rejected) == 0
+    # Returns 2: 1 for the auto-generated Hub note and 1 for the Neural Network spoke note
+    assert len(validated) == 2
+    assert validated[0]["heading"] == "Concepts"
+    assert validated[0]["op"] == "write"
+    assert validated[1]["heading"] == "Neural Network"
+    assert validated[1]["hub"] == "Concepts"
+
+
+def test_validate_operations_auto_creates_missing_hub():
+    from silica.kernel.validate import validate_operations
+
+    # Case A: Hub note doesn't exist anywhere in the vault
+    ops_missing = [
+        {"op": "write", "path": "Deep Learning/Concepts/Neural Network.md", "heading": "Neural Network", "hub": "Concepts", "source_basename": "inbox.md"}
+    ]
+    with patch("silica.kernel.validate.DRIVER.read_note", side_effect=RuntimeError("File not found")):
+        validated, _ = validate_operations(ops_missing, [], "Deep Learning/Concepts")
+    assert len(validated) == 2
+    assert validated[0]["heading"] == "Concepts"
+    assert validated[0]["path"] == "Deep Learning/Concepts/Concepts.md"
+
+    # Case B: Hub note already exists in the vault
+    ops_exists = [
+        {"op": "write", "path": "Deep Learning/Concepts/Neural Network.md", "heading": "Neural Network", "hub": "Concepts", "source_basename": "inbox.md"}
+    ]
+    # Here read_note succeeds for the hub "Concepts" but fails for the spoke note
+    def mock_read_note(ref):
+        if ref == "Concepts":
+            return MagicMock()
+        raise RuntimeError("File not found")
+
+    with patch("silica.kernel.validate.DRIVER.read_note", side_effect=mock_read_note):
+        validated, _ = validate_operations(ops_exists, [], "Deep Learning/Concepts")
+    # Only 1 because Hub note already exists
+    assert len(validated) == 1
+    assert validated[0]["heading"] == "Neural Network"
+
+    # Case C: Hub note is already being created by another write operation in the list
+    ops_already_creating = [
+        {"op": "write", "path": "Deep Learning/Concepts/Concepts.md", "heading": "Concepts", "hub": "Concepts", "source_basename": "inbox.md"},
+        {"op": "write", "path": "Deep Learning/Concepts/Neural Network.md", "heading": "Neural Network", "hub": "Concepts", "source_basename": "inbox.md"}
+    ]
+    with patch("silica.kernel.validate.DRIVER.read_note", side_effect=RuntimeError("File not found")):
+        validated, _ = validate_operations(ops_already_creating, [], "Deep Learning/Concepts")
+    # 2 because the explicit creation is preserved, and no duplicate is injected
+    assert len(validated) == 2
+
+
+
+
 def test_silica_run_injector_is_registered():
     assert "silica_run_injector" in TOOLS
     tool = TOOLS["silica_run_injector"]

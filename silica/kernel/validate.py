@@ -1,5 +1,9 @@
 import os
+import logging
 from silica.driver import DRIVER
+
+logger = logging.getLogger(__name__)
+
 
 def validate_operations(ops: list, payloads: list, target_dir: str) -> tuple[list, list]:
     """Validates operations against payloads and target_dir using DRIVER."""
@@ -45,12 +49,17 @@ def validate_operations(ops: list, payloads: list, target_dir: str) -> tuple[lis
         except RuntimeError:
             return False
 
-    # 1. Coerce write <-> patch
+    # 1. Coerce write <-> patch and enforce default hub fallback
     for op in ops:
         op_type = op.get("op")
         path = op.get("path")
         source_basename = op.get("source_basename")
         heading = op.get("heading")
+        
+        # Ensure a default hub is present if missing/empty
+        if not op.get("hub") and target_dir:
+            op["hub"] = os.path.basename(target_dir.rstrip("/\\"))
+            
         if op_type == "write" and path and path_exists(path):
             op["op"] = "patch"
         elif op_type == "patch" and path and not path_exists(path):
@@ -183,5 +192,47 @@ def validate_operations(ops: list, payloads: list, target_dir: str) -> tuple[lis
 
         else:
             rejected_ops.append({"op": op, "reason": f"Unknown operation type '{op_type}'"})
+
+    # 3. Auto-create missing Hub notes
+    hubs_to_check = set()
+    for op in validated_ops:
+        op_type = op.get("op")
+        if op_type in ("write", "patch", "overwrite"):
+            hub = op.get("hub")
+            if hub:
+                clean_hub = hub.strip("[]")
+                if clean_hub:
+                    hubs_to_check.add(clean_hub)
+
+    hub_ops = []
+    for hub in sorted(hubs_to_check):
+        if not path_exists(hub):
+            hub_filename = f"{hub}.md"
+            hub_path = os.path.join(target_dir, hub_filename).replace("\\", "/")
+            
+            already_creating = any(
+                (o.get("op") == "write" and o.get("heading") == hub) or
+                (o.get("path") and os.path.abspath(o.get("path")) == os.path.abspath(hub_path))
+                for o in validated_ops
+            )
+            
+            if not already_creating:
+                source_basename = "auto_generated"
+                if validated_ops:
+                    source_basename = validated_ops[0].get("source_basename", "auto_generated")
+                
+                hub_op = {
+                    "op": "write",
+                    "heading": hub,
+                    "path": hub_path,
+                    "snippet": f"Hub generato automaticamente dalla pipeline Injector.",
+                    "hub": hub,
+                    "source_basename": source_basename
+                }
+                hub_ops.append(hub_op)
+                logger.info("Validation: l'hub '%s' non esiste. Iniettata operazione di creazione in %s", hub, hub_path)
+
+    if hub_ops:
+        validated_ops = hub_ops + validated_ops
 
     return validated_ops, rejected_ops

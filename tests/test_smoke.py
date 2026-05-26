@@ -173,3 +173,43 @@ def test_inbox_blacklisting_and_external_reads(tmp_path):
         CONFIG.vault_path = orig_vault
 
 
+def test_cli_backend_error_handling():
+    """Verify that ObsidianCLIBackend raises RuntimeError when the CLI returns an error message on stdout."""
+    from silica.driver.cli_backend import ObsidianCLIBackend
+    from unittest.mock import patch, MagicMock
+    import pytest
+
+    cli = ObsidianCLIBackend(vault_name="TestVault")
+
+    # Mock subprocess.run to return the error message on stdout with exit code 0
+    mock_response = MagicMock()
+    mock_response.stdout = 'Error: File "Deep Learning/Backpropagation.md" not found.'
+    mock_response.stderr = ''
+    mock_response.returncode = 0
+
+    with patch("subprocess.run", return_value=mock_response) as mock_run:
+        with pytest.raises(RuntimeError) as exc_info:
+            cli.read_note("Deep Learning/Backpropagation.md")
+        assert "not found" in str(exc_info.value)
+        mock_run.assert_called_once()
+
+
+def test_silica_restore_idempotent():
+    """Verify that silica_restore ignores file-not-found errors during delete_created rollback operations."""
+    from silica.tools.wrapped import silica_restore
+    from unittest.mock import patch
+
+    inverses = [
+        {"kind": "delete_created", "path": "Deep Learning/Backpropagation.md"}
+    ]
+
+    with patch("silica.tools.wrapped.DRIVER.delete", side_effect=RuntimeError("Error: File \"Deep Learning/Backpropagation.md\" not found.")):
+        res = silica_restore(txn_id="txn_123", inverses=inverses)
+
+    assert res["success"] is True
+    assert "deleted_created:Deep Learning/Backpropagation.md (already_absent)" in res["applied"]
+    assert len(res["errors"]) == 0
+
+
+
+

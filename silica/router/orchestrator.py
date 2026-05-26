@@ -64,6 +64,11 @@ class InjectorFSM:
     def __init__(self, inbox_file: str, target_dir: str, hub: str | None = None):
         self.inbox_file = inbox_file
         self.target_dir = target_dir
+        
+        # Hub sanity check: if not specified, inherit the folder name of target_dir
+        if not hub and target_dir:
+            import os
+            hub = os.path.basename(target_dir.rstrip("/\\"))
         self.hub = hub
 
         self.state = InjectorState.INIT
