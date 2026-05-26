@@ -23,6 +23,8 @@ from silica.agent.events import (
     ToolStartEvent,
     ToolCompleteEvent,
     ToolErrorEvent,
+    ReasoningEvent,
+    RenderEvent,
 )
 from silica.agent.llm import call_llm
 from silica.config import CONFIG
@@ -31,7 +33,7 @@ from silica.tools import TOOLS
 logger = logging.getLogger(__name__)
 
 
-ToolProgressCallback = Callable[[ToolProgressEvent], None] | None
+ToolProgressCallback = Callable[[RenderEvent], None] | None
 
 
 def run_agent(
@@ -58,7 +60,7 @@ def run_agent(
     iteration = 0
     max_iterations = 50  # Hard safety cap
 
-    def _emit(event: ToolProgressEvent) -> None:
+    def _emit(event: RenderEvent) -> None:
         """Best-effort event emission — swallows all consumer exceptions."""
         if tool_progress_callback is None:
             return
@@ -73,6 +75,9 @@ def run_agent(
 
         resp = call_llm(model, messages, tools=schemas)
         messages.append(resp.assistant_message)
+
+        if resp.reasoning:
+            _emit(ReasoningEvent(text=resp.reasoning, iteration=iteration))
 
         # No tool calls → model produced a final text response
         if not resp.tool_calls:

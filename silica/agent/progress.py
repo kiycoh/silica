@@ -2,8 +2,11 @@ from __future__ import annotations
 import re
 import json
 import logging
-from silica.agent.events import ToolStartEvent, ToolCompleteEvent, ToolErrorEvent, ToolProgressEvent
+from silica.agent.events import ToolStartEvent, ToolCompleteEvent, ToolErrorEvent, ToolProgressEvent, ReasoningEvent, RenderEvent
 from silica.config import CONFIG
+from silica.ui.console import CONSOLE
+from rich.panel import Panel
+from rich.text import Text
 
 logger = logging.getLogger(__name__)
 
@@ -66,12 +69,28 @@ _RED   = "\033[31m"
 _RESET = "\033[0m"
 _BOLD  = "\033[1m"
 
+_REASONING_MAX_LINES = 20
+
+def _head_cap(text: str, max_lines: int = _REASONING_MAX_LINES) -> str:
+    lines = text.splitlines()
+    if len(lines) <= max_lines:
+        return text
+    extra = len(lines) - max_lines
+    return "\n".join(lines[:max_lines]) + f"\n[… +{extra} righe]"
+
+
 def make_progress_callback():
     """Costruisce il callback adatto alla mode corrente in CONFIG.tool_progress."""
     # State per mode 'new': evita di ristampare lo stesso tool consecutivamente
     _last_tool_name: list[str] = [""]  # lista mutabile per closure
 
-    def callback(event: ToolProgressEvent) -> None:
+    def callback(event: RenderEvent) -> None:
+        if isinstance(event, ReasoningEvent):
+            if CONFIG.show_thinking:
+                body = Text(_head_cap(event.text).strip(), style="dim")
+                CONSOLE.print(Panel(body, title="thinking", title_align="left", border_style="dim", padding=(0, 1)))
+            return
+
         if isinstance(event, ToolErrorEvent):
             # Errori sempre visibili indipendentemente dalla mode (force-show)
             _safe_print(f"  {_RED}✗ {event.name}: {event.error}{_RESET}")

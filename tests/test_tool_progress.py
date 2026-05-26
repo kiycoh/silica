@@ -157,3 +157,85 @@ def test_callback_modes_output(capsys):
         
     finally:
         CONFIG.tool_progress = orig_mode
+
+
+def test_reasoning_event_renders_when_enabled(capsys):
+    from silica.agent.events import ReasoningEvent
+    from silica.agent.progress import make_progress_callback
+    orig_thinking = CONFIG.show_thinking
+    try:
+        cb = make_progress_callback()
+        event = ReasoningEvent(text="This is my deep reasoning process.", iteration=1)
+
+        CONFIG.show_thinking = True
+        cb(event)
+        captured = capsys.readouterr()
+        assert "thinking" in captured.out.lower()
+        assert "reasoning" in captured.out.lower()
+
+        CONFIG.show_thinking = False
+        cb(event)
+        captured = capsys.readouterr()
+        assert captured.out == ""
+    finally:
+        CONFIG.show_thinking = orig_thinking
+
+
+@patch("litellm.completion")
+def test_llm_captures_reasoning(mock_completion):
+    from silica.agent.llm import call_llm
+    
+    mock_message = MagicMock()
+    mock_message.content = "My answer"
+    mock_message.tool_calls = []
+    mock_message.reasoning_content = "Thinking hard..."
+    
+    mock_choice = MagicMock()
+    mock_choice.message = mock_message
+    
+    mock_resp = MagicMock()
+    mock_resp.choices = [mock_choice]
+    mock_resp.usage = {}
+    
+    mock_completion.return_value = mock_resp
+    
+    messages = [{"role": "user", "content": "hello"}]
+    res = call_llm(model="test_model", messages=messages)
+    
+    assert res.reasoning == "Thinking hard..."
+    assert res.text == "My answer"
+    assert res.assistant_message == {"role": "assistant", "content": "My answer"}
+
+    mock_message2 = MagicMock()
+    mock_message2.content = "Answer with blocks"
+    mock_message2.tool_calls = []
+    mock_message2.reasoning_content = None
+    mock_message2.thinking_blocks = [{"thinking": "Block reasoning"}]
+    
+    mock_choice2 = MagicMock()
+    mock_choice2.message = mock_message2
+    
+    mock_resp2 = MagicMock()
+    mock_resp2.choices = [mock_choice2]
+    mock_resp2.usage = {}
+    
+    mock_completion.return_value = mock_resp2
+    
+    res2 = call_llm(model="test_model", messages=messages)
+    assert res2.reasoning == "Block reasoning"
+    assert res2.assistant_message == {"role": "assistant", "content": "Answer with blocks"}
+
+
+def test_thinking_slash_toggle():
+    orig_thinking = CONFIG.show_thinking
+    try:
+        messages = []
+        CONFIG.show_thinking = True
+        _handle_slash_command("/thinking", messages)
+        assert CONFIG.show_thinking is False
+        
+        _handle_slash_command("/thinking", messages)
+        assert CONFIG.show_thinking is True
+    finally:
+        CONFIG.show_thinking = orig_thinking
+

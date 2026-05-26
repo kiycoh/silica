@@ -13,6 +13,7 @@ from __future__ import annotations
 import os
 from dataclasses import dataclass, field
 from pathlib import Path
+from typing import Literal
 
 from dotenv import load_dotenv
 
@@ -67,7 +68,6 @@ class SilicaConfig:
     # new     — mostra il nome del tool solo quando cambia
     # all     — ogni tool call con preview degli args (default)
     # verbose — args completi, risultato troncato, durata
-    from typing import Literal
     tool_progress: Literal["off", "new", "all", "verbose"] = field(
         default_factory=lambda: os.getenv("SILICA_TOOL_PROGRESS", "all")  # type: ignore
     )
@@ -75,6 +75,16 @@ class SilicaConfig:
     # Debug logging su stderr (--verbose / -v flag CLI, non ciclabile)
     debug_logging: bool = field(
         default_factory=lambda: os.getenv("SILICA_VERBOSE", "False").lower() in ("true", "1", "t")
+    )
+
+    # Mostra i blocchi di reasoning del modello (toggle a runtime con /thinking)
+    show_thinking: bool = field(
+        default_factory=lambda: os.getenv("SILICA_SHOW_THINKING", "True").lower() in ("true", "1", "t")
+    )
+
+    # Font pyfiglet del banner di avvio
+    banner_font: str = field(
+        default_factory=lambda: os.getenv("SILICA_BANNER_FONT", "slant")
     )
 
     @property

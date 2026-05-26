@@ -15,6 +15,8 @@ dependencies = [
   "prompt_toolkit>=3.0",
   "pyyaml>=6.0",
   "python-dotenv>=1.0",
+  "rich",
+  "pyfiglet",
 ]
 
 [project.optional-dependencies]

@@ -26,3 +26,11 @@ class ToolErrorEvent:
     iteration: int
 
 ToolProgressEvent = ToolStartEvent | ToolCompleteEvent | ToolErrorEvent
+
+@dataclass(slots=True)
+class ReasoningEvent:
+    text: str
+    iteration: int
+
+RenderEvent = ToolProgressEvent | ReasoningEvent
+

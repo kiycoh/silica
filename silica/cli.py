@@ -9,12 +9,12 @@ from __future__ import annotations
 import logging
 import sys
 
-from prompt_toolkit import PromptSession
-from prompt_toolkit.history import InMemoryHistory
-
 from silica.agent.loop import run_agent
 from silica.config import CONFIG
 from silica.prompts import SYSTEM_PROMPT
+from silica.ui.banner import print_banner
+from silica.ui.console import CONSOLE
+from silica.ui.prompt import build_session, bottom_toolbar, prompt_text
 
 # Import tools to trigger registration via @tool decorator
 import silica.tools.atomic  # noqa: F401
@@ -22,12 +22,6 @@ import silica.tools.composed  # noqa: F401
 import silica.tools.wrapped  # noqa: F401
 
 logger = logging.getLogger(__name__)
-
-BANNER = """\
-\033[1;36m╭─────────────────────────────────────────╮
-│  silica v0.1.0 — agente Obsidian-nativo │
-│  /exit per uscire · /model per cambiare │
-╰─────────────────────────────────────────╯\033[0m"""
 
 
 def _setup_logging(debug: bool = False) -> None:
@@ -78,7 +72,14 @@ def _handle_slash_command(cmd: str, messages: list[dict]) -> bool:
         print("  /tools   — elenca i tool registrati")
         print("  /clear   — resetta la conversazione")
         print(f"  /verbose — cicla tool progress: off → new → all → verbose  (attuale: {CONFIG.tool_progress})")
+        print("  /thinking — toggle display dei blocchi reasoning")
         print("  /help    — mostra questo messaggio")
+        return True
+
+    if cmd == "/thinking":
+        CONFIG.show_thinking = not CONFIG.show_thinking
+        state = "on" if CONFIG.show_thinking else "off"
+        CONSOLE.print(f"  Thinking display: [bold]{state}[/]")
         return True
 
     if cmd == "/verbose":
@@ -98,13 +99,13 @@ def main():
     debug_mode = "--verbose" in sys.argv or "-v" in sys.argv or CONFIG.debug_logging
     _setup_logging(debug=debug_mode)
 
-    print(BANNER)
-    print(f"  Modello: \033[1m{CONFIG.model}\033[0m")
+    print_banner()
+    CONSOLE.print(f"  Modello: [bold]{CONFIG.model}[/]")
     if CONFIG.vault_name:
-        print(f"  Vault:   \033[1m{CONFIG.vault_name}\033[0m")
-    print()
+        CONSOLE.print(f"  Vault:   [bold]{CONFIG.vault_name}[/]")
+    CONSOLE.print()
 
-    session = PromptSession(history=InMemoryHistory())
+    session = build_session()
     messages: list[dict] = [{"role": "system", "content": SYSTEM_PROMPT}]
 
     from silica.agent.progress import make_progress_callback
@@ -112,7 +113,7 @@ def main():
 
     while True:
         try:
-            user_input = session.prompt("silica> ")
+            user_input = session.prompt(prompt_text(), bottom_toolbar=bottom_toolbar)
         except (EOFError, KeyboardInterrupt):
             print("\n  Arrivederci.")
             break

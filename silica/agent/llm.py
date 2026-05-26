@@ -37,6 +37,8 @@ class LLMResponse:
     tool_calls: list[ToolCall] = field(default_factory=list)
     assistant_message: dict = field(default_factory=dict)
     usage: dict = field(default_factory=dict)
+    reasoning: str | None = None
+
 
 
 def call_llm(
@@ -111,12 +113,19 @@ def call_llm(
                 ToolCall(id=tc.id, name=tc.function.name, args=args)
             )
 
+    reasoning = getattr(message, "reasoning_content", None)
+    if not reasoning:
+        blocks = getattr(message, "thinking_blocks", None)
+        if blocks:
+            reasoning = "\n".join(b.get("thinking", "") for b in blocks if isinstance(b, dict))
+
     if CONFIG.verbose:
         logger.info(
-            "[DEBUG LLM Response]: Text: %s | Tool Calls: %s | Usage: %s",
+            "[DEBUG LLM Response]: Text: %s | Tool Calls: %s | Usage: %s | Reasoning: %s",
             message.content,
             [(tc.name, tc.args) for tc in parsed_calls],
             dict(response.usage) if response.usage else {},
+            reasoning,
         )
 
     return LLMResponse(
@@ -124,4 +133,5 @@ def call_llm(
         tool_calls=parsed_calls,
         assistant_message=assistant_msg,
         usage=dict(response.usage) if response.usage else {},
+        reasoning=reasoning,
     )
