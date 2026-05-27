@@ -34,6 +34,21 @@ def test_validate_operations_hub_inheritance():
     assert validated[1]["hub"] == "Concepts"
 
 
+def test_validate_operations_hub_coercion():
+    from silica.kernel.validate import validate_operations
+    ops = [
+        {"op": "write", "path": "Deep Learning/Concepts/Neural Network.md", "heading": "Neural Network", "hub": "import_from_inbox", "source_basename": "inbox.md"}
+    ]
+    with patch("silica.kernel.validate.DRIVER.read_note", side_effect=RuntimeError("File not found")):
+        validated, rejected = validate_operations(ops, [], "Deep Learning/Concepts", hub="CustomConceptsHub")
+    assert len(rejected) == 0
+    assert len(validated) == 2
+    assert validated[0]["heading"] == "CustomConceptsHub"
+    assert validated[0]["hub"] == "CustomConceptsHub"
+    assert validated[1]["heading"] == "Neural Network"
+    assert validated[1]["hub"] == "CustomConceptsHub"
+
+
 def test_validate_operations_auto_creates_missing_hub():
     from silica.kernel.validate import validate_operations
 

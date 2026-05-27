@@ -157,9 +157,10 @@ class ValidateOpsArgs(BaseModel):
     ops_json_path: str = Field(description="Operazioni consolidate da validare")
     payload_paths: list[str] = Field(default_factory=list, description="Percorsi ai file payload originali")
     target_dir: str = Field(default="", description="Target folder in the vault")
+    hub: str = Field(default="", description="Hub note name")
 
 @tool(ValidateOpsArgs, cls="composed")
-def silica_validate_ops(ops_json_path: str, payload_paths: list[str] | None = None, target_dir: str = "") -> dict[str, Any]:
+def silica_validate_ops(ops_json_path: str, payload_paths: list[str] | None = None, target_dir: str = "", hub: str = "") -> dict[str, Any]:
     """Gate pre-scrittura: controlla validità strutturale e applica threshold rigetti (10%).
 
     C4: After validation, OVERWRITES ops_json_path with the coerced + deduped
@@ -185,7 +186,7 @@ def silica_validate_ops(ops_json_path: str, payload_paths: list[str] | None = No
         except Exception as e:
             return {"error": f"Failed to load payload {path}: {e}"}
 
-    validated_ops, rejected_ops = validate_operations(ops, payloads, target_dir)
+    validated_ops, rejected_ops = validate_operations(ops, payloads, target_dir, hub=hub)
 
     total = len(ops)
     rejected_count = len(rejected_ops)

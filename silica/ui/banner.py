@@ -7,7 +7,7 @@ from rich.text import Text
 from silica.config import CONFIG
 from silica.ui.console import CONSOLE
 
-_VERSION = "0.1.0"
+_VERSION = "0.2.0"
 _CAPTION = f"  [dim]v{_VERSION} · agente Obsidian-nativo[/]"
 
 

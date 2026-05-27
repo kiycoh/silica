@@ -81,6 +81,58 @@ def test_graph_diff_case_insensitivity_and_path_normalization():
     assert not errors
 
 
+def test_graph_diff_ghost_links_from_created_notes_allowed():
+    """Ghost links (unresolved wikilinks) from newly created notes must NOT
+    trigger the regression gate. A created note that references a concept not
+    yet in the vault is an intentional forward reference — exactly the pattern
+    the injector produces (e.g. [[Stochastic Gradient Descent]] inside a newly
+    created Gradient Descent note). Mirrors the planned-orphans exemption in Rule 1."""
+    pre = GraphSnapshot(orphans=[], unresolved=[])
+    post = GraphSnapshot(
+        orphans=[],
+        unresolved=[
+            Link(
+                source=NoteRef(name="Gradient Descent", path="DL/Gradient Descent.md"),
+                target="Stochastic Gradient Descent",
+            ),
+            Link(
+                source=NoteRef(name="Learning Rate", path="DL/Learning Rate.md"),
+                target="Stochastic Gradient Descent",
+            ),
+        ],
+    )
+    # Both source notes were created in this transaction
+    success, errors = check_graph_regression(
+        pre,
+        post,
+        created_paths=[
+            "DL/Gradient Descent.md",
+            "DL/Learning Rate.md",
+        ],
+    )
+    assert success, f"Ghost links from created notes should be allowed. Errors: {errors}"
+    assert not errors
+
+
+def test_graph_diff_ghost_links_from_existing_notes_rejected():
+    """A new ghost link whose source is a PRE-EXISTING note is still a regression
+    and must be rejected (e.g. a patch op silently nuked a previously-resolved link)."""
+    pre = GraphSnapshot(orphans=[], unresolved=[])
+    post = GraphSnapshot(
+        orphans=[],
+        unresolved=[
+            Link(
+                source=NoteRef(name="ExistingNote", path="notes/ExistingNote.md"),
+                target="NowMissing",
+            ),
+        ],
+    )
+    # ExistingNote was NOT created — it was already in the vault
+    success, errors = check_graph_regression(pre, post, created_paths=[])
+    assert not success
+    assert "New unresolved links introduced" in errors[0]
+
+
 def test_graph_diff_broken_backlinks_rejected():
     # If a pre-existing note has its backlink count decreased, reject it
     pre = GraphSnapshot(

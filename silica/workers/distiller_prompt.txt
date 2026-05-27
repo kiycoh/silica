@@ -15,8 +15,9 @@ Your output will be rejected by the post-distillation validator if it violates a
 1. **Targeting Inbox Files**: You MUST NOT write or patch to any path containing `/0 Inbox/` or pointing to the inbox directory.
 2. **Invalid Paths for Patch**: Every `path` for a `patch` operation MUST equal the corresponding `vault_collision.path` from the payload. Do not invent vault paths.
 3. **Invalid Paths for Write**: Every `path` for a `write` operation MUST be `{TARGET}/<heading>.md`.
-4. **Heading Hallucinations**: Every `heading` in your output MUST match a concept name listed in the payload batch. Do not invent concept names.
-5. **Wrong Source Attribution**: Every operation must specify `source_basename` = the filename (basename) of the `inbox_file` from the batch containing that concept.
+4. **Incorrect Hub**: Every `hub` field for a `write` operation MUST be exactly `"{HUB_NAME}"`. For other operations, set it to null or omit it.
+5. **Heading Hallucinations**: Every `heading` in your output MUST match a concept name listed in the payload batch. Do not invent concept names.
+6. **Wrong Source Attribution**: Every operation must specify `source_basename` = the filename (basename) of the `inbox_file` from the batch containing that concept.
    * **Negative Example (Incorrect Source Attribution)**:
      - Input concept has `inbox_file: "/0 Inbox/economia_finanza/Lezione 04.md"`.
      - Output has `"path": "{TARGET}/Costo marginale.md"`.
@@ -70,6 +71,7 @@ The `action_hint` field is the Router's mechanical guess based on collision tier
 - Every `heading` in your output MUST appear in the input payload. Do not invent concept names.
 - Every `path` for a `patch` operation MUST equal the corresponding `vault_collision.path` from the payload. Do not invent vault paths.
 - Every `path` for a `write` operation MUST be `{TARGET}/<heading>.md`. Preserve spaces and case in the heading (Obsidian permits both); strip only path-illegal characters (`/`, `\`, `:`, `*`, `?`, `"`, `<`, `>`, `|`).
+- Every `hub` field in a `write` operation MUST match the hub name `"{HUB_NAME}"`.
 - Every distilled fact MUST be traceable to inbox_excerpt content. Do not insert outside knowledge, plausible-sounding definitions, or web-recalled examples.
 - If inbox_excerpt is empty or uninformative for a concept, emit a `skip` with `"reason": "empty or uninformative excerpt"`. Do not fabricate content to fill it.
 
@@ -136,6 +138,7 @@ Respond with ONLY the JSON object below. No prose preamble. No markdown fences (
       "op": "write",
       "path": "{TARGET}/Adam Optimizer.md",
       "source_basename": "Lezione 04.md",
+      "hub": "{HUB_NAME}",
       "snippet": "Adam (Adaptive Moment Estimation) è un algoritmo di ottimizzazione stocastica che combina i vantaggi di AdaGrad e RMSProp mantenendo medie mobili sia del gradiente (primo momento) sia del suo quadrato (secondo momento).\n\n- Iperparametri tipici: $\\beta_1 = 0.9$, $\\beta_2 = 0.999$, $\\epsilon = 10^{-8}$"
     },
     {

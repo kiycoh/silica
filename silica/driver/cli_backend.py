@@ -725,15 +725,46 @@ class ObsidianCLIBackend:
         )
 
     def _wait_for_links_indexed(self, ref: NoteRef, expected_targets: list[str], timeout: float = _SETTLE_TIMEOUT) -> None:
-        """Poll until outgoing links of ref contain all expected_targets."""
+        """Poll until Obsidian has *registered* ref's outgoing wikilinks.
+
+        Registration ≠ resolution. A wikilink to a note that does not (yet)
+        exist is a legitimate unresolved link and counts as registered here;
+        the cache has processed the file, which is the only freshness
+        invariant a single-note write can guarantee. True graph-resolution
+        quality (ghost-link audit, new-orphan detection) is the job of the
+        batch-level LINT / graph-regression gate downstream.
+
+        The previous "issubset-of-resolved-names" predicate was unsatisfiable
+        in practice because of four compounding defects:
+          (a) ``extract_links(content)`` includes wikilinks to non-existent
+              concepts — these remain unresolved by design, so the subset
+              check spins until timeout;
+          (b) ``self.links(ref)`` reports unresolved targets with a trailing
+              ``(unresolved)`` marker that the raw subset check never strips;
+          (c) expected targets come from the source text (often snake_case /
+              lowercase) while ``links()`` returns the *resolved* note name
+              (title-case), so even resolvable links failed the case-
+              sensitive comparison;
+          (d) per-note settle + sequential batch writes means forward
+              references to siblings not yet created can't possibly resolve.
+        The canonicalization below — strip status marker, drop path/ext,
+        casefold — collapses (b), (c), and (d); accepting registered-but-
+        unresolved as a passing state closes (a).
+        """
         if not expected_targets:
             return
-        expected_set = set(expected_targets)
+
+        def _canon(name: str) -> str:
+            name = re.sub(r"\s*\(unresolved\)\s*$", "", name)
+            return name.rsplit("/", 1)[-1].removesuffix(".md").casefold()
+
+        expected = {_canon(t) for t in expected_targets}
         deadline = time.monotonic() + timeout
+        registered: set[str] = set()
         while time.monotonic() < deadline:
             try:
-                current_links = {link_ref.name for link_ref in self.links(ref)}
-                if expected_set.issubset(current_links):
+                registered = {_canon(l.name) for l in self.links(ref)}
+                if expected.issubset(registered):
                     return
             except Exception:
                 pass
@@ -741,7 +772,7 @@ class ObsidianCLIBackend:
 
         raise SettleTimeout(
             f"Settle timeout (links indexing) for {ref.name} after {timeout:.1f}s. "
-            f"Expected: {expected_set}, Indexed: {current_links if 'current_links' in locals() else None}"
+            f"Expected: {expected}, Registered: {registered}"
         )
 
     def _wait_for_content_reflects(self, ref: NoteRef, expected_content: str,

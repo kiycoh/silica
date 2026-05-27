@@ -40,6 +40,7 @@ from silica.tools.composed import (
 )
 from silica.kernel.ops import OpType
 from silica.kernel.ops_io import load_ops
+from silica.kernel.paths import to_vault_relative
 
 logger = logging.getLogger(__name__)
 
@@ -64,9 +65,14 @@ class InjectorFSM:
     """Deterministic state machine for the Injector pipeline (S2.3 complete)."""
 
     def __init__(self, inbox_file: str, target_dir: str, hub: str | None = None):
-        self.inbox_file = inbox_file
+        # Canonicalize to vault-relative POSIX once at ingress so the RECON
+        # driver read, _source_canonical (ledger key), and every downstream
+        # consumer operate on the same form. Absolute paths under the vault
+        # are relativized; absolute paths outside the vault fail loudly here
+        # instead of degrading into a silent "File not found" at RECON.
+        self.inbox_file = to_vault_relative(inbox_file)
         self.target_dir = target_dir
-        
+
         # Hub sanity check: if not specified, inherit the folder name of target_dir
         if not hub and target_dir:
             import os
@@ -377,6 +383,7 @@ class InjectorFSM:
             ops_path,
             payload_paths=payload_paths,
             target_dir=self.target_dir,
+            hub=self.hub,
         )
 
         if "error" in res:

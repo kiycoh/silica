@@ -54,7 +54,7 @@ coverage.xml
 *.py,cover
 .hypothesis/
 .run/
-fixtures/synthetic_vault/*
+tests/fixtures/synthetic_vault/*
 
 # Translations
 *.mo

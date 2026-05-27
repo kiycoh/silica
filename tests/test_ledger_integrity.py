@@ -198,10 +198,14 @@ def test_ledger_null_hash_is_stale(ledger, tmp_path):
 # C2.2 — Orchestrator propagates content_hash to ledger
 # ---------------------------------------------------------------------------
 
-def test_orchestrator_writes_content_hash(tmp_path):
+def test_orchestrator_writes_content_hash(tmp_path, monkeypatch):
     """InjectorFSM._write_ledger passes the source content_hash from context."""
     from silica.router.orchestrator import InjectorFSM
     from silica.kernel.ops import Op, OpType
+    from silica.config import CONFIG
+
+    # Point the vault at tmp_path so to_vault_relative can relativize the inbox path
+    monkeypatch.setattr(CONFIG, "vault_path", str(tmp_path))
 
     # Set up a minimal inbox file
     inbox = tmp_path / "Lezione.md"

@@ -4,7 +4,7 @@ build-backend = "setuptools.build_meta"
 
 [project]
 name = "silica"
-version = "0.1.0"
+version = "0.2.0"
 description = "Obsidian-native agentic CLI — vault curation with quality gates"
 readme = "SILICA.md"
 requires-python = ">=3.11"

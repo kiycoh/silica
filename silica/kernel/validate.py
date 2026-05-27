@@ -12,7 +12,7 @@ class Rejection(BaseModel):
     reason: str
 
 
-def validate_operations(ops: list[Op] | list[dict], payloads: list, target_dir: str) -> tuple[list[Op], list[Rejection]]:
+def validate_operations(ops: list[Op] | list[dict], payloads: list, target_dir: str, hub: str | None = None) -> tuple[list[Op], list[Rejection]]:
     """Validates operations against payloads and target_dir using DRIVER."""
     from silica.kernel.ops_io import parse_ops
     ops = parse_ops(ops)
@@ -58,10 +58,12 @@ def validate_operations(ops: list[Op] | list[dict], payloads: list, target_dir: 
             return False
 
     # 1. Coerce write <-> patch and enforce default hub fallback
+    if not hub and target_dir:
+        hub = os.path.basename(target_dir.rstrip("/\\"))
+
     for op in ops:
-        # Ensure a default hub is present if missing/empty
-        if not op.hub and target_dir:
-            op.hub = os.path.basename(target_dir.rstrip("/\\"))
+        if op.op in (OpType.write, OpType.patch, OpType.overwrite) and hub:
+            op.hub = hub
             
         if op.op == OpType.write and op.path and path_exists(op.path):
             op.op = OpType.patch

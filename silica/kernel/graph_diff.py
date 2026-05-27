@@ -29,14 +29,18 @@ def check_graph_regression(
     created_paths: list[str],
 ) -> tuple[bool, list[str]]:
     """Verify that the changes do not introduce structural regressions.
-    
+
     Rules (S3.2):
       1. Rifiuta se aumentano gli orfani non dichiarati (unplanned orphans).
          An orphan is unplanned if it is in post.orphans, was NOT in pre.orphans,
          and was NOT explicitly created by this payload (created_paths).
-      2. Rifiuta se aumentano i link irrisolti (new unresolved links).
-         Any unresolved link in post.unresolved that was not in pre.unresolved is rejected.
-         
+      2. Rifiuta se aumentano i link irrisolti da note PRE-ESISTENTI.
+         A new unresolved link is only a regression when its *source* is a
+         pre-existing note. Ghost links from *newly created* notes are
+         intentional forward references to concepts not yet in the vault —
+         they mirror the same exemption that Rule 1 already grants to newly
+         created orphans (unplanned_orphans = new_orphans - norm_created).
+
     Returns:
       (success, list_of_errors)
     """
@@ -63,11 +67,17 @@ def check_graph_regression(
     post_unres = {normalize_link(link.source, link.target) for link in post.unresolved}
     
     new_unres = post_unres - pre_unres
-    if new_unres:
+    # Exempt links whose source is a newly created note — same carve-out that
+    # Rule 1 grants to planned orphans. norm_created is already computed above.
+    new_unres_blocking = {
+        (src, tgt) for src, tgt in new_unres
+        if src not in norm_created
+    }
+    if new_unres_blocking:
         detail_links = []
         for link in post.unresolved:
             normalized = normalize_link(link.source, link.target)
-            if normalized in new_unres:
+            if normalized in new_unres_blocking:
                 detail_links.append(f"[[{link.source.name}]] -> [[{link.target}]]")
         errors.append(f"New unresolved links introduced: {', '.join(detail_links)}")
         
