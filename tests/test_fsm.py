@@ -96,59 +96,114 @@ def test_silica_run_injector_is_registered():
     tool = TOOLS["silica_run_injector"]
     assert tool.cls == "composed"
 
-@patch("silica.agent.delegate.delegate")
 @patch("silica.kernel.prep_delegation.run_distiller")
-def test_fsm_delegate_merge_dedup(mock_run_distiller, mock_delegate):
-    # Setup mock to return multiple chunks
+def test_fsm_delegate_single_chunk(mock_run_distiller):
     fsm = InjectorFSM("Inbox/test.md", "TargetDir")
-    fsm.context["payload"] = {
-        "chunks": [
-            {"chunk_id": 0},
-            {"chunk_id": 1}
-        ]
-    }
+    fsm._chunks = [
+        {"chunk_id": 0, "concepts": ["a"]},
+        {"chunk_id": 1, "concepts": ["b"]}
+    ]
+    fsm._current_chunk_idx = 0
     fsm.state = InjectorState.DELEGATE
 
-    # mock delegate to return results from two workers
-    # chunk 0 writes to note1.md
-    # chunk 1 patches note1.md (shorter snippet) and writes to note2.md
-    mock_delegate.return_value = [
-        {"updates": [{"op": "write", "path": "notes/note1.md", "heading": "Note 1", "snippet": "Long snippet"}]},
-        {"updates": [
-            {"op": "patch", "path": "notes/note1.md", "heading": "Note 1", "snippet": "Short"},
-            {"op": "write", "path": "notes/note2.md", "heading": "Note 2", "snippet": "Snippet 2"}
-        ]}
-    ]
+    mock_run_distiller.return_value = {"updates": [{"op": "write", "path": "notes/note1.md", "heading": "Note 1"}]}
 
-    with patch.object(fsm, "_make_tmp", return_value="temp_merged_path.json") as mock_make_tmp:
+    with patch.object(fsm, "_make_tmp", return_value="temp_chunk_path.json") as mock_make_tmp:
         fsm.step()
         
-        # Verify delegate was called with the 2 chunks and run_one function
-        mock_delegate.assert_called_once()
-        args, kwargs = mock_delegate.call_args
-        assert len(args[0]) == 2
-        assert kwargs["max_workers"] == 7
-
-        # Verify that merged results are passed to make_tmp
-        mock_make_tmp.assert_called_once()
-        merged_data = mock_make_tmp.call_args[0][0]
-        
-        # Check that note1.md patch was marked as "skip" because note1.md write has the richer snippet
-        updates = merged_data["updates"]
-        assert len(updates) == 3
-        
-        note1_write = next(u for u in updates if u["path"] == "notes/note1.md" and u["op"] == "write")
-        note1_patch = next(u for u in updates if u["path"] == "notes/note1.md" and u["op"] == "skip")
-        note2_write = next(u for u in updates if u["path"] == "notes/note2.md" and u["op"] == "write")
-
-        assert note1_write["snippet"] == "Long snippet"
-        assert note1_patch["op"] == "skip"
-        assert "Duplicate" in note1_patch["reason"]
-        assert note2_write["snippet"] == "Snippet 2"
-
-        # Verify state transition to SANITIZE
+        mock_run_distiller.assert_called_once_with(
+            payload={"chunk_id": 0, "concepts": ["a"]},
+            target="TargetDir",
+            hub="TargetDir"
+        )
+        mock_make_tmp.assert_called_once_with({"updates": [{"op": "write", "path": "notes/note1.md", "heading": "Note 1"}]})
         assert fsm.state == InjectorState.SANITIZE
-        assert fsm.context["distiller_output_path"] == "temp_merged_path.json"
+        assert fsm.context["distiller_output_path"] == "temp_chunk_path.json"
+
+
+@patch("silica.router.orchestrator.silica_recon")
+@patch("silica.router.orchestrator.silica_payload")
+@patch("silica.kernel.prep_delegation.run_distiller")
+@patch("silica.router.orchestrator.silica_sanitize")
+@patch("silica.router.orchestrator.silica_validate_ops")
+@patch("silica.router.orchestrator.DRIVER")
+@patch("silica.tools.wrapped.silica_snapshot")
+@patch("silica.router.orchestrator.silica_bulk_write")
+@patch("silica.router.orchestrator.silica_lint")
+@patch("silica.tools.wrapped.silica_cleanup")
+def test_fsm_multi_chunk_loop(
+    mock_cleanup, mock_lint, mock_write, mock_snapshot, mock_driver,
+    mock_validate, mock_sanitize, mock_run_distiller, mock_payload, mock_recon
+):
+    # Setup mock payload with 2 chunks
+    mock_recon.return_value = {"success": True}
+    mock_payload.return_value = {
+        "chunks": [
+            {"chunk_id": 0, "concepts": ["a"]},
+            {"chunk_id": 1, "concepts": ["b"]}
+        ]
+    }
+    mock_run_distiller.return_value = {"updates": [{"op": "write", "path": "notes/NoteA.md"}]}
+    mock_sanitize.return_value = {"parsed": []}
+    mock_validate.return_value = {"success": True, "rejection_rate": 0.0, "validated_count": 1, "rejected_count": 0}
+    mock_snapshot.return_value = {"txn_id": "txn_123", "inverses": []}
+    mock_write.return_value = {"success": True}
+    mock_lint.return_value = {"success": True}
+    mock_cleanup.return_value = {"success": True}
+
+    # Setup graph mocks
+    pre_graph = MagicMock()
+    post_graph = MagicMock()
+    mock_driver.graph_snapshot.return_value = post_graph
+
+    # Initialize FSM
+    fsm = InjectorFSM("Inbox/test.md", "TargetDir")
+    
+    # Track states visited
+    states_visited = []
+    original_step = fsm.step
+    def step_wrapper():
+        states_visited.append(fsm.state)
+        original_step()
+    fsm.step = step_wrapper
+
+    with patch("silica.kernel.graph_diff.check_graph_regression", return_value=(True, [])):
+        res = fsm.run()
+
+    # Check that it reached DONE state
+    assert fsm.state == InjectorState.DONE
+    assert res.get("final_status") == "Success"
+
+    # Verify that the sequence of states visited loops back to DELEGATE
+    expected_sequence = [
+        # First chunk cycle
+        InjectorState.RECON,
+        InjectorState.PAYLOAD,
+        InjectorState.DELEGATE,
+        InjectorState.SANITIZE,
+        InjectorState.VALIDATE,
+        InjectorState.SNAPSHOT,
+        InjectorState.WRITE,
+        InjectorState.LINT,
+        InjectorState.CLEANUP,
+        # Second chunk cycle
+        InjectorState.DELEGATE,
+        InjectorState.SANITIZE,
+        InjectorState.VALIDATE,
+        InjectorState.SNAPSHOT,
+        InjectorState.WRITE,
+        InjectorState.LINT,
+        InjectorState.CLEANUP,
+    ]
+    assert states_visited == expected_sequence
+
+    # Verify run_distiller was called twice, once for each chunk
+    assert mock_run_distiller.call_count == 2
+    mock_run_distiller.assert_any_call(payload={"chunk_id": 0, "concepts": ["a"]}, target="TargetDir", hub="TargetDir")
+    mock_run_distiller.assert_any_call(payload={"chunk_id": 1, "concepts": ["b"]}, target="TargetDir", hub="TargetDir")
+
+    # Verify cleanup (file move) was only called once (on the final chunk completion)
+    mock_cleanup.assert_called_once_with("Inbox/test.md", "done")
 
 
 def test_fsm_recipe_configuration():
@@ -162,7 +217,7 @@ def test_fsm_recipe_configuration():
 
     # Check phases configuration
     payload_conf = fsm._get_recipe_phase("payload")
-    assert payload_conf.get("partition_if_over") == 200
+    assert payload_conf.get("partition_if_over") == 7
     
     distill_conf = fsm._get_recipe_phase("distill")
     assert distill_conf.get("max_workers") == 7

@@ -163,22 +163,51 @@ def test_reasoning_event_renders_when_enabled(capsys):
     from silica.agent.events import ReasoningEvent
     from silica.agent.progress import make_progress_callback
     orig_thinking = CONFIG.show_thinking
+    orig_tool_progress = CONFIG.tool_progress
+    orig_verbose = CONFIG.verbose
     try:
         cb = make_progress_callback()
         event = ReasoningEvent(text="This is my deep reasoning process.", iteration=1)
 
+        # Case 1: show_thinking=True, verbose=False, progress=all
         CONFIG.show_thinking = True
+        CONFIG.verbose = False
+        CONFIG.tool_progress = "all"
         cb(event)
         captured = capsys.readouterr()
         assert "thinking" in captured.out.lower()
         assert "reasoning" in captured.out.lower()
 
+        # Case 2: show_thinking=False, verbose=False, progress=all
         CONFIG.show_thinking = False
+        CONFIG.verbose = False
+        CONFIG.tool_progress = "all"
         cb(event)
         captured = capsys.readouterr()
         assert captured.out == ""
+
+        # Case 3: show_thinking=False, verbose=True, progress=all
+        CONFIG.show_thinking = False
+        CONFIG.verbose = True
+        CONFIG.tool_progress = "all"
+        cb(event)
+        captured = capsys.readouterr()
+        assert "thinking" in captured.out.lower()
+        assert "reasoning" in captured.out.lower()
+
+        # Case 4: show_thinking=False, verbose=False, progress=verbose
+        CONFIG.show_thinking = False
+        CONFIG.verbose = False
+        CONFIG.tool_progress = "verbose"
+        cb(event)
+        captured = capsys.readouterr()
+        assert "thinking" in captured.out.lower()
+        assert "reasoning" in captured.out.lower()
+
     finally:
         CONFIG.show_thinking = orig_thinking
+        CONFIG.tool_progress = orig_tool_progress
+        CONFIG.verbose = orig_verbose
 
 
 @patch("litellm.completion")
@@ -224,6 +253,58 @@ def test_llm_captures_reasoning(mock_completion):
     res2 = call_llm(model="test_model", messages=messages)
     assert res2.reasoning == "Block reasoning"
     assert res2.assistant_message == {"role": "assistant", "content": "Answer with blocks"}
+
+
+@patch("litellm.completion")
+def test_llm_openrouter_include_reasoning(mock_completion):
+    from silica.agent.llm import call_llm
+    
+    mock_message = MagicMock()
+    mock_message.content = "My answer"
+    mock_message.tool_calls = []
+    mock_message.reasoning_content = "Thinking hard..."
+    
+    mock_choice = MagicMock()
+    mock_choice.message = mock_message
+    
+    mock_resp = MagicMock()
+    mock_resp.choices = [mock_choice]
+    mock_resp.usage = {}
+    mock_completion.return_value = mock_resp
+    
+    messages = [{"role": "user", "content": "hello"}]
+    
+    orig_thinking = CONFIG.show_thinking
+    orig_verbose = CONFIG.verbose
+    try:
+        # Test openrouter model with show_thinking=True
+        CONFIG.show_thinking = True
+        CONFIG.verbose = False
+        call_llm(model="openrouter/some-model", messages=messages)
+        mock_completion.assert_called_with(
+            model="openrouter/some-model",
+            messages=messages,
+            include_reasoning=True
+        )
+        
+        # Test openrouter model with show_thinking=False and verbose=True
+        CONFIG.show_thinking = False
+        CONFIG.verbose = True
+        call_llm(model="openrouter/some-model", messages=messages)
+        mock_completion.assert_called_with(
+            model="openrouter/some-model",
+            messages=messages,
+            include_reasoning=True
+        )
+        
+        # Test non-openrouter model
+        call_llm(model="openai/gpt-4o", messages=messages)
+        args, kwargs = mock_completion.call_args
+        assert "include_reasoning" not in kwargs
+        
+    finally:
+        CONFIG.show_thinking = orig_thinking
+        CONFIG.verbose = orig_verbose
 
 
 def test_thinking_slash_toggle():

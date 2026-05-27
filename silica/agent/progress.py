@@ -86,7 +86,7 @@ def make_progress_callback():
 
     def callback(event: RenderEvent) -> None:
         if isinstance(event, ReasoningEvent):
-            if CONFIG.show_thinking:
+            if CONFIG.show_thinking or CONFIG.tool_progress == "verbose" or CONFIG.verbose:
                 body = Text(_head_cap(event.text).strip(), style="dim")
                 CONSOLE.print(Panel(body, title="thinking", title_align="left", border_style="dim", padding=(0, 1)))
             return

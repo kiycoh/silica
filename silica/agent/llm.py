@@ -21,6 +21,7 @@ from silica.config import CONFIG
 
 # Suppress litellm's verbose logging by default
 litellm.suppress_debug_info = True
+litellm.drop_params = True
 
 
 @dataclass
@@ -80,6 +81,8 @@ def call_llm(
         kwargs["tool_choice"] = "auto"
     if max_tokens is not None:
         kwargs["max_tokens"] = max_tokens
+    if model.startswith("openrouter/") and (CONFIG.show_thinking or CONFIG.verbose):
+        kwargs["include_reasoning"] = True
 
     try:
         response = litellm.completion(**kwargs)

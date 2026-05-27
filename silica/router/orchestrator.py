@@ -85,6 +85,10 @@ class InjectorFSM:
         self._txn: Txn | None = None  # holds the live Txn object for ROLLBACK
         self._pre_graph: GraphSnapshot | None = None  # S3.2 pre-write graph snapshot
 
+        # Iterative chunk processing state fields
+        self._chunks: list[dict] = []
+        self._current_chunk_idx: int = 0
+
         # S3.3: Load the recipe for dynamic configuration
         from silica.router.recipe_parser import load_recipe
         try:
@@ -138,6 +142,17 @@ class InjectorFSM:
             InjectorState.WRITE: InjectorState.ROLLBACK,
             InjectorState.LINT: InjectorState.ROLLBACK,
         }
+
+    def _get_chunks_from_context_if_empty(self) -> None:
+        """Helper to extract chunks from self.context['payload'] if self._chunks is empty."""
+        if not self._chunks and "payload" in self.context:
+            res = self.context["payload"]
+            if "chunks" in res:
+                self._chunks = res["chunks"]
+            elif "payload" in res:
+                self._chunks = [res["payload"]]
+            else:
+                self._chunks = [res]
 
     def _get_recipe_gate(self, name: str, default: Any) -> Any:
         return self._recipe.get("gates", {}).get(name, default)
@@ -255,15 +270,27 @@ class InjectorFSM:
                 next_phase_id = sequence[idx + 1]
                 self.state = PHASE_TO_STATE[next_phase_id]
             else:
-                # After the sequence, go to cleanup if defined, else DONE
+                # After the sequence, go to cleanup if defined, else DONE/LOOP
                 if "cleanup" in [p["id"] for p in phases]:
                     self.state = InjectorState.CLEANUP
                 else:
-                    self.state = InjectorState.DONE
+                    self._eval_loop_or_done()
         elif self.state == InjectorState.CLEANUP:
-            self.state = InjectorState.DONE
+            self._eval_loop_or_done()
         elif self.state == InjectorState.ROLLBACK:
             self.state = InjectorState.ERROR
+
+    def _eval_loop_or_done(self) -> None:
+        """Check if there are more chunks to process or if the queue is empty."""
+        self._get_chunks_from_context_if_empty()
+        if self._current_chunk_idx + 1 < len(self._chunks):
+            self._current_chunk_idx += 1
+            logger.info(f"✔ Batch completed successfully. Advancing to batch {self._current_chunk_idx + 1}")
+            # Reset FSM state back to DELEGATE to process next chunk
+            self.state = InjectorState.DELEGATE
+        else:
+            logger.info("🎉 All batched chunks have been successfully injected and verified!")
+            self.state = InjectorState.DONE
 
     # ------------------------------------------------------------------
     # State Handlers
@@ -298,63 +325,45 @@ class InjectorFSM:
         if "error" in res:
             raise RuntimeError(f"Payload failed: {res['error']}")
         self.context["payload"] = res
+
+        # Deterministically isolate chunks at payload source
+        if "chunks" in res:
+            self._chunks = res["chunks"]
+        elif "payload" in res:
+            self._chunks = [res["payload"]]
+        else:
+            self._chunks = [res]
+
+        self._current_chunk_idx = 0
+        logger.info(f"Pipeline initialized with {len(self._chunks)} independent chunks.")
         self._transition_success()
 
     def _handle_delegate(self) -> None:
-        from silica.agent.delegate import delegate
         from silica.kernel.prep_delegation import run_distiller
 
-        payload_data = self.context["payload"]
-        if "chunks" in payload_data:
-            chunks = payload_data["chunks"]
-        elif "payload" in payload_data:
-            chunks = [payload_data["payload"]]
-        else:
-            chunks = [payload_data]
+        self._get_chunks_from_context_if_empty()
 
-        def run_one(chunk: dict) -> dict:
-            return run_distiller(
-                payload=chunk,
+        if not self._chunks or self._current_chunk_idx >= len(self._chunks):
+            raise RuntimeError("No chunks available for iterative processing.")
+
+        current_chunk = self._chunks[self._current_chunk_idx]
+        logger.info(f"--- DISTILLING BATCH {self._current_chunk_idx + 1}/{len(self._chunks)} ---")
+
+        try:
+            chunk_result = run_distiller(
+                payload=current_chunk,
                 target=self.target_dir,
                 hub=self.hub,
             )
-
-        phase_conf = self._get_recipe_phase("distill")
-        max_workers = phase_conf.get("max_workers", 7)
-
-        results = delegate(chunks, run_one, max_workers=max_workers)
-
-        merged_updates = []
-        for idx, r in enumerate(results):
-            if "error" in r:
-                raise RuntimeError(f"Distiller chunk {idx} failed: {r['error']}")
-            merged_updates.extend(r.get("updates", []))
-
-        # Deduplicate by path (C4)
-        path_groups: dict[str, list[dict]] = {}
-        for op in merged_updates:
-            path = op.get("path")
-            if path:
-                norm = os.path.abspath(path)
-                if norm not in path_groups:
-                    path_groups[norm] = []
-                path_groups[norm].append(op)
-
-        for norm, group in path_groups.items():
-            if len(group) > 1:
-                richest = max(group, key=lambda o: len(o.get("snippet", "")))
-                has_write = any(op.get("op") == "write" for op in group)
-                for op in group:
-                    if op is not richest:
-                        op["op"] = "skip"
-                        op["reason"] = f"Duplicate write/patch to the same path '{op.get('path')}' during multi-batch merge"
-                if has_write:
-                    richest["op"] = "write"
-
-        merged_result = {"updates": merged_updates}
-        distiller_path = self._make_tmp(merged_result)
-        self.context["distiller_output_path"] = distiller_path
-        self._transition_success()
+            if "error" in chunk_result:
+                raise RuntimeError(f"Distiller error on batch {self._current_chunk_idx}: {chunk_result['error']}")
+                
+            distiller_path = self._make_tmp(chunk_result)
+            self.context["distiller_output_path"] = distiller_path
+            self._transition_success()
+            
+        except Exception as e:
+            raise RuntimeError(f"Critical failure delegating batch {self._current_chunk_idx}: {e}")
 
     def _handle_sanitize(self) -> None:
         res = silica_sanitize(self.context["distiller_output_path"])
@@ -371,13 +380,19 @@ class InjectorFSM:
 
         ops_path = self._make_tmp(ops_raw)
 
+        self._get_chunks_from_context_if_empty()
+
         payload_paths: list[str] = []
-        payload_data = self.context["payload"]
-        if "chunks" in payload_data:
-            for chunk in payload_data["chunks"]:
-                payload_paths.append(self._make_tmp(chunk))
-        elif "payload" in payload_data:
-            payload_paths.append(self._make_tmp(payload_data["payload"]))
+        if self._chunks and self._current_chunk_idx < len(self._chunks):
+            payload_paths.append(self._make_tmp(self._chunks[self._current_chunk_idx]))
+        else:
+            # Fallback to general payload if _chunks is not populated
+            payload_data = self.context.get("payload", {})
+            if "chunks" in payload_data:
+                for chunk in payload_data["chunks"]:
+                    payload_paths.append(self._make_tmp(chunk))
+            elif "payload" in payload_data:
+                payload_paths.append(self._make_tmp(payload_data["payload"]))
 
         res = silica_validate_ops(
             ops_path,
@@ -582,9 +597,16 @@ class InjectorFSM:
 
     def _handle_cleanup(self) -> None:
         from silica.tools.wrapped import silica_cleanup
-        res = silica_cleanup(self.inbox_file, "done")
-        if "error" in res:
-            self.context["cleanup_warning"] = res["error"]
+
+        self._get_chunks_from_context_if_empty()
+
+        # Only archive the physical inbox file on the very last chunk
+        if not self._chunks or self._current_chunk_idx + 1 >= len(self._chunks):
+            res = silica_cleanup(self.inbox_file, "done")
+            if "error" in res:
+                self.context["cleanup_warning"] = res["error"]
+        else:
+            logger.info("Batch %d completed. Skipping file move cleanup until final batch.", self._current_chunk_idx + 1)
 
         self._write_ledger("committed")
         if self.context.get("final_status") != "no_ops":

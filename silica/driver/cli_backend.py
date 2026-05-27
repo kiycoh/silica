@@ -52,12 +52,6 @@ class ObsidianCLIBackend:
         self._notes_by_name: dict[str, list[NoteRef]] = {}
         self._is_graph_built = False
 
-        # Warmup search plugin to prevent cold-start search issue
-        try:
-            self._run_cli("eval", "code=app.internalPlugins.plugins['global-search']?.instance?.openGlobalSearch?.('x')", check=False)
-        except Exception:
-            pass
-
     def _node_ref(self, path: str) -> NoteRef:
         if path in self._notes:
             return self._notes[path]

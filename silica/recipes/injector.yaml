@@ -7,7 +7,7 @@ gates:
   graph_regression: forbid_new_orphans
 phases:
   - { id: recon,        kind: mechanical, tool: silica_recon }
-  - { id: payload,      kind: mechanical, tool: silica_payload, partition_if_over: 200 }
+  - { id: payload,      kind: mechanical, tool: silica_payload, partition_if_over: 7 }
   - { id: distill,      kind: semantic,   worker: distiller, fanout: true, max_workers: 7 }
   - { id: sanitize,     kind: mechanical, tool: silica_sanitize }
   - { id: validate,     kind: gate,       tool: silica_validate_ops, abort_code: 2 }
