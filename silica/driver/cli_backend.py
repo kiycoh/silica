@@ -52,6 +52,12 @@ class ObsidianCLIBackend:
         self._notes_by_name: dict[str, list[NoteRef]] = {}
         self._is_graph_built = False
 
+        # Warmup search plugin to prevent cold-start search issue
+        try:
+            self._run_cli("eval", "code=app.internalPlugins.plugins['global-search']?.instance?.openGlobalSearch?.('x')", check=False)
+        except Exception:
+            pass
+
     def _node_ref(self, path: str) -> NoteRef:
         if path in self._notes:
             return self._notes[path]
@@ -172,8 +178,7 @@ class ObsidianCLIBackend:
             
             stdout_str = result.stdout.strip()
             # Intercept Obsidian CLI errors that are printed to stdout with exit code 0
-            if (stdout_str.startswith("Error: File") and "not found" in stdout_str) or \
-               (stdout_str.startswith("Error:") and "not found" in stdout_str):
+            if stdout_str.startswith("Error:") or stdout_str == "No matches found.":
                 raise RuntimeError(stdout_str)
                 
             return stdout_str
@@ -186,19 +191,24 @@ class ObsidianCLIBackend:
 
     def _run_json(self, *args: str) -> Any:
         """Execute a CLI command with format=json and parse the result."""
-        raw = self._run_cli(*args, "format=json")
-        if not raw:
+        try:
+            raw = self._run_cli(*args, "format=json")
+        except RuntimeError as e:
+            if "no matches" in str(e).lower() or "not found" in str(e).lower() or "error" in str(e).lower():
+                return []
+            raise
+        if not raw or raw.lower().startswith("no matches"):
             return []
         try:
             return json.loads(raw)
         except json.JSONDecodeError as e:
-            logger.error("Failed to parse CLI JSON output: %s\n%s", e, raw[:500])
-            raise
+            logger.warning("Failed to parse CLI JSON output: %s\n%s", e, raw[:500])
+            return []
 
     def _ref_arg(self, ref: NoteRef | str) -> str:
         """Convert a NoteRef or string to a file= CLI argument."""
         if isinstance(ref, str):
-            return f"file={ref}"
+            return f"path={ref}" if ("/" in ref or ref.endswith(".md")) else f"file={ref}"
         if ref.path:
             return f"path={ref.path}"
         return f"file={ref.name}"
@@ -231,7 +241,49 @@ class ObsidianCLIBackend:
         from silica.config import CONFIG
         inbox_norm = os.path.normcase(CONFIG.inbox_dir.replace("\\", "/").strip("/")) if CONFIG.inbox_dir else None
 
-        data = self._run_json("search:context", f"query={query}")
+        escaped_query = query.replace('\\', '\\\\').replace("'", "\\'").replace('\n', '\\n')
+        js_code = """(async () => {
+  const query = 'QUERY_PLACEHOLDER';
+  const queryLower = query.toLowerCase();
+  const files = app.vault.getMarkdownFiles();
+  const results = [];
+  await Promise.all(files.map(async (file) => {
+    try {
+      const content = await app.vault.read(file);
+      if (content.toLowerCase().includes(queryLower)) {
+        const lines = content.split('\\n');
+        const matches = [];
+        for (let i = 0; i < lines.length; i++) {
+          if (lines[i].toLowerCase().includes(queryLower)) {
+            matches.push({
+              line: i + 1,
+              content: lines[i].trim()
+            });
+          }
+        }
+        if (matches.length > 0) {
+          results.push({
+            file: file.path,
+            path: file.path,
+            name: file.basename,
+            matches: matches
+          });
+        }
+      }
+    } catch (e) {}
+  }));
+  return JSON.stringify(results);
+})()""".replace('QUERY_PLACEHOLDER', escaped_query)
+
+        try:
+            raw = self._run_cli("eval", f"code={js_code}")
+            if raw.startswith("=> "):
+                raw = raw[3:].strip()
+            data = json.loads(raw)
+        except Exception as e:
+            logger.error("Failed to execute or parse eval search: %s", e)
+            data = []
+
         results = []
         if isinstance(data, list):
             for item in data:
@@ -554,7 +606,7 @@ class ObsidianCLIBackend:
 
         args = ["files", "ext=md"]
         if folder:
-            args.append(f"path={folder}")
+            args.append(f"folder={folder}")
         raw = self._run_cli(*args)
         results = []
         for line in raw.splitlines():
@@ -564,6 +616,22 @@ class ObsidianCLIBackend:
                     line_norm = os.path.normcase(line.replace("\\", "/").strip("/"))
                     if line_norm == inbox_norm or line_norm.startswith(inbox_norm + "/"):
                         continue
+                name = line.rsplit("/", 1)[-1].removesuffix(".md")
+                results.append(NoteRef(name=name, path=line))
+        return results
+
+    def list_inbox_files(self) -> list[NoteRef]:
+        """List all files in the inbox directory."""
+        import os
+        from silica.config import CONFIG
+        if not CONFIG.inbox_dir:
+            return []
+        args = ["files", f"folder={CONFIG.inbox_dir}", "ext=md"]
+        raw = self._run_cli(*args)
+        results = []
+        for line in raw.splitlines():
+            line = line.strip()
+            if line:
                 name = line.rsplit("/", 1)[-1].removesuffix(".md")
                 results.append(NoteRef(name=name, path=line))
         return results

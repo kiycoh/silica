@@ -211,5 +211,91 @@ def test_silica_restore_idempotent():
     assert len(res["errors"]) == 0
 
 
+def test_list_inbox_files_fs(tmp_path):
+    """Verify that list_inbox_files lists notes inside inbox_dir on FS backend."""
+    import os
+    from silica.config import CONFIG
+    from silica.driver.fs_backend import ObsidianFSBackend
+    
+    vault_dir = tmp_path / "vault"
+    vault_dir.mkdir()
+    
+    inbox_dir = vault_dir / "Inbox"
+    inbox_dir.mkdir()
+    
+    (inbox_dir / "lezione_15.md").write_text("Hello from lezione 15", encoding="utf-8")
+    (inbox_dir / "subfolder").mkdir()
+    (inbox_dir / "subfolder" / "lezione_16.md").write_text("Hello from lezione 16", encoding="utf-8")
+    
+    orig_inbox = CONFIG.inbox_dir
+    orig_vault = CONFIG.vault_path
+    
+    CONFIG.inbox_dir = "Inbox"
+    CONFIG.vault_path = str(vault_dir)
+    
+    try:
+        backend = ObsidianFSBackend(vault_path=str(vault_dir))
+        
+        inbox_files = backend.list_inbox_files()
+        paths = {ref.path for ref in inbox_files}
+        names = {ref.name for ref in inbox_files}
+        
+        assert "Inbox/lezione_15.md" in paths
+        assert "Inbox/subfolder/lezione_16.md" in paths
+        assert "lezione_15" in names
+        assert "lezione_16" in names
+    finally:
+        CONFIG.inbox_dir = orig_inbox
+        CONFIG.vault_path = orig_vault
+
+
+def test_cli_backend_ref_arg_resolution():
+    """Verify that cli backend _ref_arg generates path= when string has slashes or .md suffix."""
+    from silica.driver.cli_backend import ObsidianCLIBackend
+    from silica.driver.base import NoteRef
+    
+    backend = ObsidianCLIBackend()
+    assert backend._ref_arg("Inbox/lezione_15.md") == "path=Inbox/lezione_15.md"
+    assert backend._ref_arg("Deep Learning/lezione.md") == "path=Deep Learning/lezione.md"
+    assert backend._ref_arg("lezione.md") == "path=lezione.md"
+    assert backend._ref_arg("lezione") == "file=lezione"
+    assert backend._ref_arg(NoteRef(name="lezione", path="Folder/lezione.md")) == "path=Folder/lezione.md"
+    assert backend._ref_arg(NoteRef(name="lezione")) == "file=lezione"
+
+
+def test_cli_backend_sentinel_handling():
+    """Verify that cli backend _run_cli raises RuntimeError on No matches found."""
+    from silica.driver.cli_backend import ObsidianCLIBackend
+    from unittest.mock import patch, MagicMock
+    import pytest
+    
+    cli = ObsidianCLIBackend()
+    
+    # 1. Test _run_cli raises error on "No matches found."
+    mock_resp = MagicMock()
+    mock_resp.stdout = "No matches found."
+    mock_resp.stderr = ""
+    mock_resp.returncode = 0
+    
+    with patch("subprocess.run", return_value=mock_resp):
+        with pytest.raises(RuntimeError) as exc:
+            cli._run_cli("read", "file=SomeNote")
+        assert "No matches found." in str(exc.value)
+
+    # 2. Test _run_json handles "No matches found." gracefully
+    with patch("subprocess.run", return_value=mock_resp):
+        res = cli._run_json("search:context", "query=something")
+        assert res == []
+
+
+def test_new_tools_registration():
+    """Verify that silica_exists and silica_inbox_ls are registered in the registry."""
+    from silica.tools import TOOLS
+    import silica.tools.atomic  # noqa: F401
+    assert "silica_exists" in TOOLS
+    assert "silica_inbox_ls" in TOOLS
+
+
+
 
 

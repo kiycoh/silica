@@ -89,32 +89,34 @@ def call_llm(
     assistant_msg: dict = {"role": "assistant"}
     if message.content:
         assistant_msg["content"] = message.content
-    if message.tool_calls:
-        assistant_msg["tool_calls"] = [
-            {
-                "id": tc.id,
-                "type": "function",
-                "function": {"name": tc.function.name, "arguments": tc.function.arguments},
-            }
-            for tc in message.tool_calls
-        ]
 
-    # Parse tool calls
+    # Parse tool calls and build sanitized history
     parsed_calls: list[ToolCall] = []
     if message.tool_calls:
+        assistant_msg_tool_calls = []
         for tc in message.tool_calls:
             try:
                 args = json.loads(tc.function.arguments)
+                valid_args_str = tc.function.arguments
             except json.JSONDecodeError:
                 args = {}
+                valid_args_str = "{}"  # Sanitize to prevent API rejection
                 logger.warning(
                     "Failed to parse tool args for %s: %s",
                     tc.function.name,
                     tc.function.arguments,
                 )
+            
             parsed_calls.append(
                 ToolCall(id=tc.id, name=tc.function.name, args=args)
             )
+            assistant_msg_tool_calls.append({
+                "id": tc.id,
+                "type": "function",
+                "function": {"name": tc.function.name, "arguments": valid_args_str},
+            })
+            
+        assistant_msg["tool_calls"] = assistant_msg_tool_calls
 
     reasoning = getattr(message, "reasoning_content", None)
     if not reasoning:

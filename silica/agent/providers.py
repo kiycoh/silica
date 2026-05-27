@@ -148,4 +148,7 @@ def get_provider(config: Any) -> Provider:
     if "api_key_env" in preset:
         api_key = os.getenv(preset["api_key_env"], "dummy-key")
         
+    if provider_name == "openrouter" and model_name.startswith("openrouter/"):
+        model_name = model_name.removeprefix("openrouter/")
+        
     return OpenAICompatibleProvider(base_url=base_url, api_key=api_key, model=model_name)

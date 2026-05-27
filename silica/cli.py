@@ -32,7 +32,9 @@ def _setup_logging(debug: bool = False) -> None:
         level=level,
         format="%(asctime)s [%(name)s] %(levelname)s: %(message)s",
         datefmt="%H:%M:%S",
+        force=True,
     )
+    logging.getLogger().setLevel(level)
     # Quiet down noisy libraries unless debug logging is requested
     logging.getLogger("httpx").setLevel(level)
     logging.getLogger("litellm").setLevel(level)
@@ -90,6 +92,14 @@ def _handle_slash_command(cmd: str, messages: list[dict]) -> bool:
         next_mode = modes[(modes.index(current) + 1) % len(modes)]
         CONFIG.tool_progress = next_mode
         print(f"  Tool progress: \033[1m{next_mode}\033[0m")
+        
+        if next_mode == "verbose":
+            _setup_logging(debug=True)
+            print("  Log di sistema: \033[1mDEBUG\033[0m")
+        else:
+            _setup_logging(debug=False)
+            print("  Log di sistema: \033[1mWARNING\033[0m")
+            
         return True
 
     print(f"  Comando sconosciuto: {cmd}. Usa /help per la lista.")

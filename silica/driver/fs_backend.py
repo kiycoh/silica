@@ -573,6 +573,27 @@ class ObsidianFSBackend:
                 
         return results
 
+    def list_inbox_files(self) -> list[NoteRef]:
+        """List all files in the inbox directory."""
+        from silica.config import CONFIG
+        if not CONFIG.inbox_dir:
+            return []
+        inbox_path = self.vault_path / CONFIG.inbox_dir
+        if not inbox_path.exists() or not inbox_path.is_dir():
+            return []
+        results = []
+        for root, _, files in os.walk(inbox_path):
+            for file in files:
+                if file.endswith(".md"):
+                    full_p = Path(root) / file
+                    try:
+                        rel_p = full_p.relative_to(self.vault_path).as_posix()
+                    except ValueError:
+                        rel_p = full_p.resolve().as_posix()
+                    name = file.removesuffix(".md")
+                    results.append(NoteRef(name=name, path=rel_p))
+        return results
+
     def base_query(self, base: str, view: str) -> list[dict]:
         """Query an Obsidian Base (not implemented in FS backend)."""
         logger.warning("base_query not implemented in FS backend")

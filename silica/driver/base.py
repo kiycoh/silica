@@ -209,6 +209,10 @@ class ObsidianDriver(Protocol):
         """List all markdown files, optionally filtered by folder."""
         ...
 
+    def list_inbox_files(self) -> list[NoteRef]:
+        """List all files in the inbox directory."""
+        ...
+
     def base_query(self, base: str, view: str) -> list[dict]:
         """Query an Obsidian Base (DB on frontmatter)."""
         ...

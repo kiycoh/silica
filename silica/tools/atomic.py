@@ -122,3 +122,23 @@ def silica_files(folder: str = "") -> list:
     """Elenca tutti i file markdown nel vault, opzionalmente filtrati per cartella."""
     refs = DRIVER.list_files(folder)
     return [{"name": r.name, "path": r.path} for r in refs]
+
+
+class ExistsArgs(BaseModel):
+    path: str = Field(description="Percorso relativo della nota nel vault")
+
+@tool(ExistsArgs, cls="atomic")
+def silica_exists(path: str) -> bool:
+    """Verifica se una nota esiste nel vault (incluso l'inbox) dato il suo percorso relativo."""
+    try:
+        DRIVER.read_note(path)
+        return True
+    except Exception:
+        return False
+
+
+@tool(EmptyArgs, cls="atomic")
+def silica_inbox_ls() -> list:
+    """Elenca tutti i file presenti nella cartella Inbox (inbox_dir)."""
+    refs = DRIVER.list_inbox_files()
+    return [{"name": r.name, "path": r.path} for r in refs]

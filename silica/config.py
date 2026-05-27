@@ -34,7 +34,7 @@ class SilicaConfig:
     #           "openai/gpt-4o"
     model: str = field(
         default_factory=lambda: os.getenv(
-            "SILICA_MODEL", "openrouter/anthropic/claude-sonnet-4-20250514"
+            "SILICA_MODEL", "openrouter/google/gemma-4-31b-it"
         )
     )
 

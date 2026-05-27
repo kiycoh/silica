@@ -342,9 +342,12 @@ def test_fsm_already_ingested():
 
 
 @patch("silica.agent.llm.call_llm")
-def test_worker_read_only(mock_call_llm):
+@patch("silica.agent.providers.get_provider")
+def test_worker_read_only(mock_get_provider, mock_call_llm):
     # Test 1: Verify that run_distiller calls call_llm with tools=None (single-shot variant)
     from silica.kernel.prep_delegation import run_distiller
+    
+    mock_get_provider.side_effect = Exception("Mocked provider failure")
     
     mock_response = MagicMock()
     mock_response.text = '{"updates": []}'
