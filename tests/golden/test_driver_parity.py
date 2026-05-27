@@ -139,13 +139,15 @@ def test_synthetic_vault_incremental_snapshot_parity(fs_backend):
 # Live CLI-vs-FS parity (requires running Obsidian + VAULT_PATH env var)
 # ---------------------------------------------------------------------------
 
+from tests.fixtures.vault_factory import _resolve_root
+
 VAULT_PATH = os.environ.get(
     "SILICA_LIVE_VAULT_PATH",
-    "/home/kiycoh/Documents/Obsidian/Alex's Second Brain Sync"
+    str(_resolve_root().resolve())
 )
 VAULT_NAME = os.environ.get(
     "SILICA_LIVE_VAULT_NAME",
-    "Alex's Second Brain Sync"
+    _resolve_root().name
 )
 
 
@@ -169,10 +171,12 @@ def live_backends():
                     "Set SILICA_LIVE_VAULT_PATH to enable CLI-vs-FS parity tests.")
     import subprocess
     try:
-        subprocess.run(
+        res = subprocess.run(
             ["obsidian", f"vault={VAULT_NAME}", "files", "ext=md"],
-            capture_output=True, timeout=3, check=True
+            capture_output=True, text=True, timeout=3, check=True
         )
+        if "vault not found" in res.stdout.lower() or "vault not found" in res.stderr.lower():
+            pytest.skip(f"Vault '{VAULT_NAME}' is not open/registered in Obsidian.")
     except Exception:
         pytest.skip("Obsidian CLI not reachable (app not running or not installed). "
                     "Start Obsidian to run live parity tests.")

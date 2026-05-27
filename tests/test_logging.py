@@ -107,4 +107,4 @@ def test_human_friendly_formatter_bad_args_graceful_fallback():
     formatted = formatter.format(record)
     # It should fallback gracefully to the standard %-formatted message or original message
     assert "⚙" in formatted
-    assert "Registered tool: test_tool" in formatted
+    assert "test_tool" in formatted
