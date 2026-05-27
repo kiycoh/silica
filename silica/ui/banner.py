@@ -8,11 +8,11 @@ from silica.config import CONFIG
 from silica.ui.console import CONSOLE
 
 _VERSION = "0.2.0"
-_CAPTION = f"  [dim]v{_VERSION} · agente Obsidian-nativo[/]"
+_CAPTION = f"  [dim]v{_VERSION} · Obsidian-native agent[/]"
 
 
 def _load_wordmark() -> list[str]:
-    # Carica la scritta d'arte statica dall'asset
+    # Load the static wordmark from the asset
     text = (files("silica.ui") / "assets" / "ascii-art-font.txt").read_text(encoding="utf-8")
     return text.rstrip("\n").split("\n") + [""]
 
@@ -45,5 +45,5 @@ def print_banner() -> None:
     style = CONFIG.banner_style
     if style in ("crystal", "wordmark") and _print_wordmark():
         return
-    # minimal o fallback da guard fallita
-    CONSOLE.print(f"  [bold cyan]silica[/] [dim]v{_VERSION} · agente Obsidian-nativo[/]")
+    # minimal or fallback from failed guard
+    CONSOLE.print(f"  [bold cyan]silica[/] [dim]v{_VERSION} · Obsidian-native agent[/]")

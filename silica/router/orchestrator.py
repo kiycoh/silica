@@ -178,7 +178,7 @@ class InjectorFSM:
             os.close(fd)
             raise
         self._tmp_files.append(path)
-        logger.debug("Creato file temporaneo di stage in: %s", path)
+        logger.debug("Created temporary staging file at: %s", path)
         return path
 
     def _cleanup_tmp(self) -> None:
@@ -212,7 +212,7 @@ class InjectorFSM:
         try:
             while self.state not in (InjectorState.DONE, InjectorState.ERROR):
                 try:
-                    logger.debug("FSM Transizione: %s -> eseguendo handler", self.state.name)
+                    logger.debug("FSM Transition: %s -> executing handler", self.state.name)
                     self.step()
                 except Exception as e:
                     logger.error("FSM Error in state %s: %s", self.state, e)
@@ -575,8 +575,8 @@ class InjectorFSM:
                 if CONFIG.verbose:
                     logger.info(
                         "[DEBUG Graph Regression Gate]: Pre-write graph size: %d nodes | Post-write graph size: %d nodes | Rule: %s | Result: %s",
-                        len(self._pre_graph.notes) if self._pre_graph and self._pre_graph.notes else 0,
-                        len(post_graph.notes) if post_graph and post_graph.notes else 0,
+                        len(self._pre_graph.link_counts) if self._pre_graph and self._pre_graph.link_counts else 0,
+                        len(post_graph.link_counts) if post_graph and post_graph.link_counts else 0,
                         regression_rule,
                         "PASSED" if success else f"FAILED: {errors}"
                     )

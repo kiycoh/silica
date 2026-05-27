@@ -6,8 +6,8 @@ No live Obsidian required — these run in CI headlessly.
 The full CLI-vs-FS parity test (which requires a live Obsidian instance) is
 preserved but gated behind the `VAULT_PATH` environment variable.
 
-Path-as-identity: with path-keyed snapshots, duplicate basenames (A/Cellula,
-B/Cellula) produce distinct keys and are no longer excluded from assertions.
+Path-as-identity: with path-keyed snapshots, duplicate basenames (A/Cell,
+B/Cell) produce distinct keys and are no longer excluded from assertions.
 """
 import os
 import unicodedata
@@ -56,29 +56,29 @@ def test_synthetic_vault_graph_snapshot_is_path_keyed(fs_backend):
     for key in snap.link_counts:
         assert not key.endswith(".md"), f"Snapshot key must not end with .md: {key!r}"
 
-    # Hub/Concetti must appear as a path-canonical key (not just 'Concetti')
-    hub_key = next((k for k in snap.link_counts if k.endswith("Concetti")), None)
+    # Hub/Concepts must appear as a path-canonical key (not just 'Concepts')
+    hub_key = next((k for k in snap.link_counts if k.endswith("Concepts")), None)
     assert hub_key is not None, (
-        f"Expected a key ending with 'Concetti' in link_counts. Keys: {sorted(snap.link_counts)}"
+        f"Expected a key ending with 'Concepts' in link_counts. Keys: {sorted(snap.link_counts)}"
     )
-    assert "/" in hub_key or hub_key == "Concetti", (
-        f"Hub key should be path-based like 'Hub/Concetti', got: {hub_key!r}"
+    assert "/" in hub_key or hub_key == "Concepts", (
+        f"Hub key should be path-based like 'Hub/Concepts', got: {hub_key!r}"
     )
 
 
 def test_synthetic_vault_duplicate_basenames_distinct_keys(fs_backend):
-    """A/Cellula and B/Cellula are present as distinct path-canonical keys."""
+    """A/Cell and B/Cell are present as distinct path-canonical keys."""
     snap = fs_backend.graph_snapshot()
-    assert "A/Cellula" in snap.link_counts, (
-        f"Expected 'A/Cellula' in link_counts. Keys: {sorted(snap.link_counts)}"
+    assert "A/Cell" in snap.link_counts, (
+        f"Expected 'A/Cell' in link_counts. Keys: {sorted(snap.link_counts)}"
     )
-    assert "B/Cellula" in snap.link_counts, (
-        f"Expected 'B/Cellula' in link_counts. Keys: {sorted(snap.link_counts)}"
+    assert "B/Cell" in snap.link_counts, (
+        f"Expected 'B/Cell' in link_counts. Keys: {sorted(snap.link_counts)}"
     )
-    # They must be distinct keys (not collapsed to "cellula")
-    assert snap.link_counts["A/Cellula"] != snap.link_counts["B/Cellula"] or True
+    # They must be distinct keys (not collapsed to "cell")
+    assert snap.link_counts["A/Cell"] != snap.link_counts["B/Cell"] or True
     # Both must exist independently
-    assert "A/Cellula" != "B/Cellula"
+    assert "A/Cell" != "B/Cell"
 
 
 def test_synthetic_vault_orphan_detected(fs_backend):
@@ -86,13 +86,13 @@ def test_synthetic_vault_orphan_detected(fs_backend):
     orphan_paths = {r.path for r in fs_backend.orphans()}
 
     # Notes that genuinely have no backlinks in the synthetic vault:
-    # - Lean/Vuota.md: no note links to it
-    # - Lean/Stub.md: links to Hub/Concetti, but nobody links back to it
-    # - Mono/Monolite.md: no note links to it
-    # (Isolata/Orfana.md IS linked by B/Cellula.md via [[Isolata/Orfana]])
+    # - Lean/Empty.md: no note links to it
+    # - Lean/Stub.md: links to Hub/Concepts, but nobody links back to it
+    # - Mono/Monolith.md: no note links to it
+    # (Isolated/Orphan.md IS linked by B/Cell.md via [[Isolated/Orphan]])
     #
     # At least one of these must be detected as an orphan:
-    expected_orphans = {"Lean/Vuota.md", "Lean/Stub.md", "Mono/Monolite.md", "BadMeta/TagInline.md"}
+    expected_orphans = {"Lean/Empty.md", "Lean/Stub.md", "Mono/Monolith.md", "BadMeta/InlineTag.md"}
     found_orphans = orphan_paths & expected_orphans
     assert found_orphans, (
         f"Expected at least one of {expected_orphans} to be an orphan. "
@@ -101,29 +101,29 @@ def test_synthetic_vault_orphan_detected(fs_backend):
 
 
 def test_synthetic_vault_unresolved_link(fs_backend):
-    """Percettrone.md's [[NotaMancante]] link is detected as unresolved."""
+    """Perceptron.md's [[MissingNote]] link is detected as unresolved."""
     unresolved_targets = {lnk.target.lower() for lnk in fs_backend.unresolved()}
-    assert "notamancante" in unresolved_targets, (
-        f"Expected 'NotaMancante' in unresolved links. Got: {unresolved_targets}"
+    assert "missingnote" in unresolved_targets, (
+        f"Expected 'MissingNote' in unresolved links. Got: {unresolved_targets}"
     )
 
 
 def test_synthetic_vault_hub_links(fs_backend):
-    """Hub/Concetti.md links to Backpropagation, Gradiente, Percettrone, A/Cellula, B/Cellula."""
+    """Hub/Concepts.md links to Backpropagation, Gradient, Perceptron, A/Cell, B/Cell."""
     from silica.driver.base import NoteRef
-    hub_ref = NoteRef(name="Concetti", path="Hub/Concetti.md")
+    hub_ref = NoteRef(name="Concepts", path="Hub/Concepts.md")
     links = fs_backend.links(hub_ref)
     link_names = {r.name.lower() for r in links}
     assert "backpropagation" in link_names
-    assert "gradiente" in link_names
-    assert "percettrone" in link_names
+    assert "gradient" in link_names
+    assert "perceptron" in link_names
 
 
 def test_synthetic_vault_incremental_snapshot_parity(fs_backend):
     """Incremental snapshot keys match full snapshot keys for the same notes."""
     from silica.driver.base import NoteRef
-    ref_a = NoteRef(name="Cellula", path="A/Cellula.md")
-    ref_b = NoteRef(name="Cellula", path="B/Cellula.md")
+    ref_a = NoteRef(name="Cell", path="A/Cell.md")
+    ref_b = NoteRef(name="Cell", path="B/Cell.md")
 
     full_snap = fs_backend.graph_snapshot(None)
     incr_snap = fs_backend.graph_snapshot([ref_a, ref_b])

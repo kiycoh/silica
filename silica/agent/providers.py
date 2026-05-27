@@ -37,7 +37,8 @@ class Provider(Protocol):
 
 class OpenAICompatibleProvider:
     def __init__(self, base_url: str, api_key: str, model: str):
-        self.client = openai.OpenAI(base_url=base_url, api_key=api_key)
+        # Configure client with 120-second timeout to prevent hanging indefinitely
+        self.client = openai.OpenAI(base_url=base_url, api_key=api_key, timeout=120.0)
         self.model = model
 
     def call_llm(
@@ -57,90 +58,112 @@ class OpenAICompatibleProvider:
         if max_tokens is not None:
             kwargs["max_tokens"] = max_tokens
 
-        if response_schema:
-            try:
-                response = self.client.beta.chat.completions.parse(
-                    **kwargs,
-                    response_format=response_schema
-                )
-                choice = response.choices[0]
-                message = choice.message
-                finish_reason = getattr(choice, "finish_reason", None)
-                
-                parsed_object = message.parsed
-                content_str = message.content if message.content else ""
-                if not content_str and parsed_object:
-                    content_str = orjson.dumps(parsed_object.model_dump()).decode("utf-8")
-                
-                assistant_msg = {"role": "assistant"}
-                if message.content:
-                    assistant_msg["content"] = message.content
-                if message.tool_calls:
-                    assistant_msg["tool_calls"] = [
-                        {
-                            "id": tc.id,
-                            "type": "function",
-                            "function": {"name": tc.function.name, "arguments": tc.function.arguments},
-                        }
-                        for tc in message.tool_calls
-                    ]
-                
-                parsed_calls = []
-                if message.tool_calls:
-                    for tc in message.tool_calls:
-                        try:
-                            args = orjson.loads(tc.function.arguments)
-                        except Exception:
-                            args = {}
-                        parsed_calls.append(ToolCall(id=tc.id, name=tc.function.name, args=args))
-                
-                return LLMResponse(
-                    text=content_str,
-                    tool_calls=parsed_calls,
-                    assistant_message=assistant_msg,
-                    usage=dict(response.usage) if response.usage else {},
-                    reasoning=getattr(message, "reasoning_content", None),
-                    finish_reason=finish_reason,
-                )
-            except Exception as e:
-                logger.warning("Constrained decoding failed, falling back to non-structured: %s", e)
+        import time
 
-        # Non-structured fallback
-        response = self.client.chat.completions.create(**kwargs)
-        choice = response.choices[0]
-        message = choice.message
-        finish_reason = getattr(choice, "finish_reason", None)
-        
-        assistant_msg = {"role": "assistant"}
-        if message.content:
-            assistant_msg["content"] = message.content
-        if message.tool_calls:
-            assistant_msg["tool_calls"] = [
-                {
-                    "id": tc.id,
-                    "type": "function",
-                    "function": {"name": tc.function.name, "arguments": tc.function.arguments},
-                }
-                for tc in message.tool_calls
-            ]
-        
-        parsed_calls = []
-        if message.tool_calls:
-            for tc in message.tool_calls:
+        def _execute_call() -> LLMResponse:
+            if response_schema:
                 try:
-                    args = orjson.loads(tc.function.arguments)
-                except Exception:
-                    args = {}
-                parsed_calls.append(ToolCall(id=tc.id, name=tc.function.name, args=args))
-        
-        return LLMResponse(
-            text=message.content,
-            tool_calls=parsed_calls,
-            assistant_message=assistant_msg,
-            usage=dict(response.usage) if response.usage else {},
-            reasoning=getattr(message, "reasoning_content", None),
-            finish_reason=finish_reason,
-        )
+                    response = self.client.beta.chat.completions.parse(
+                        **kwargs,
+                        response_format=response_schema
+                    )
+                    choice = response.choices[0]
+                    message = choice.message
+                    finish_reason = getattr(choice, "finish_reason", None)
+                    
+                    parsed_object = message.parsed
+                    content_str = message.content if message.content else ""
+                    if not content_str and parsed_object:
+                        content_str = orjson.dumps(parsed_object.model_dump()).decode("utf-8")
+                    
+                    assistant_msg = {"role": "assistant"}
+                    if message.content:
+                        assistant_msg["content"] = message.content
+                    if message.tool_calls:
+                        assistant_msg["tool_calls"] = [
+                            {
+                                "id": tc.id,
+                                "type": "function",
+                                "function": {"name": tc.function.name, "arguments": tc.function.arguments},
+                            }
+                            for tc in message.tool_calls
+                        ]
+                    
+                    parsed_calls = []
+                    if message.tool_calls:
+                        for tc in message.tool_calls:
+                            try:
+                                args = orjson.loads(tc.function.arguments)
+                            except Exception:
+                                args = {}
+                            parsed_calls.append(ToolCall(id=tc.id, name=tc.function.name, args=args))
+                    
+                    return LLMResponse(
+                        text=content_str,
+                        tool_calls=parsed_calls,
+                        assistant_message=assistant_msg,
+                        usage=dict(response.usage) if response.usage else {},
+                        reasoning=getattr(message, "reasoning_content", None),
+                        finish_reason=finish_reason,
+                    )
+                except (openai.APITimeoutError, openai.APIConnectionError):
+                    # Re-raise transient/network errors to be retried in the outer loop
+                    raise
+                except Exception as e:
+                    logger.warning("Constrained decoding failed, falling back to non-structured: %s", e)
+
+            # Non-structured fallback
+            response = self.client.chat.completions.create(**kwargs)
+            choice = response.choices[0]
+            message = choice.message
+            finish_reason = getattr(choice, "finish_reason", None)
+            
+            assistant_msg = {"role": "assistant"}
+            if message.content:
+                assistant_msg["content"] = message.content
+            if message.tool_calls:
+                assistant_msg["tool_calls"] = [
+                    {
+                        "id": tc.id,
+                        "type": "function",
+                        "function": {"name": tc.function.name, "arguments": tc.function.arguments},
+                    }
+                    for tc in message.tool_calls
+                ]
+            
+            parsed_calls = []
+            if message.tool_calls:
+                for tc in message.tool_calls:
+                    try:
+                        args = orjson.loads(tc.function.arguments)
+                    except Exception:
+                        args = {}
+                    parsed_calls.append(ToolCall(id=tc.id, name=tc.function.name, args=args))
+            
+            return LLMResponse(
+                text=message.content,
+                tool_calls=parsed_calls,
+                assistant_message=assistant_msg,
+                usage=dict(response.usage) if response.usage else {},
+                reasoning=getattr(message, "reasoning_content", None),
+                finish_reason=finish_reason,
+            )
+
+        max_attempts = 3
+        for attempt in range(1, max_attempts + 1):
+            try:
+                return _execute_call()
+            except (openai.APITimeoutError, openai.APIConnectionError) as e:
+                logger.warning(
+                    "LLM API network error or timeout (attempt %d/%d): %s",
+                    attempt,
+                    max_attempts,
+                    e
+                )
+                if attempt < max_attempts:
+                    time.sleep(2 ** attempt)
+                    continue
+                raise
 
 
 def get_provider(config: Any) -> Provider:

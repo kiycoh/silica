@@ -188,14 +188,14 @@ def run_agent(
                 if failures_count >= 3:
                     logger.error("Convergence guard: tool '%s' with args %s failed %d times consecutively. Aborting agent run.", tc.name, tc.args, failures_count)
                     raise RuntimeError(
-                        f"Il tool '{tc.name}' ha fallito 3 volte consecutivamente con gli stessi argomenti: {tc.args}"
+                        f"Tool '{tc.name}' failed 3 consecutive times with the same arguments: {tc.args}"
                     )
                 elif failures_count == 2:
                     logger.warning("Convergence guard: tool '%s' with args %s failed consecutively. Injecting warning message.", tc.name, tc.args)
                     messages.append(
                         {
                             "role": "system",
-                            "content": f"IMPORTANTE: Il tool '{tc.name}' ha fallito consecutivamente con questi parametri. NON richiamare questo tool con gli stessi identici argomenti."
+                            "content": f"IMPORTANT: Tool '{tc.name}' failed consecutively with these parameters. DO NOT call this tool again with the exact same arguments."
                         }
                     )
             else:
@@ -204,4 +204,4 @@ def run_agent(
         # Loop continues: re-call LLM with tool results
 
     logger.warning("Agent loop hit max iterations (%d)", max_iterations)
-    return "(silica: raggiunto il limite massimo di iterazioni)"
+    return "(silica: maximum iterations reached)"

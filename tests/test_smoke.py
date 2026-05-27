@@ -105,7 +105,7 @@ def test_verbose_fsm_logging(caplog):
         
         with caplog.at_level(logging.DEBUG):
             fsm._make_tmp({"test": "data"})
-            assert any("Creato file temporaneo di stage" in rec.message for rec in caplog.records)
+            assert any("Created temporary staging file" in rec.message for rec in caplog.records)
             
         shutil.rmtree(tmp_dir)
     finally:
@@ -227,9 +227,9 @@ def test_list_inbox_files_fs(tmp_path):
     inbox_dir = vault_dir / "Inbox"
     inbox_dir.mkdir()
     
-    (inbox_dir / "lezione_15.md").write_text("Hello from lezione 15", encoding="utf-8")
+    (inbox_dir / "lecture_15.md").write_text("Hello from lecture 15", encoding="utf-8")
     (inbox_dir / "subfolder").mkdir()
-    (inbox_dir / "subfolder" / "lezione_16.md").write_text("Hello from lezione 16", encoding="utf-8")
+    (inbox_dir / "subfolder" / "lecture_16.md").write_text("Hello from lecture 16", encoding="utf-8")
     
     orig_inbox = CONFIG.inbox_dir
     orig_vault = CONFIG.vault_path
@@ -244,10 +244,10 @@ def test_list_inbox_files_fs(tmp_path):
         paths = {ref.path for ref in inbox_files}
         names = {ref.name for ref in inbox_files}
         
-        assert "Inbox/lezione_15.md" in paths
-        assert "Inbox/subfolder/lezione_16.md" in paths
-        assert "lezione_15" in names
-        assert "lezione_16" in names
+        assert "Inbox/lecture_15.md" in paths
+        assert "Inbox/subfolder/lecture_16.md" in paths
+        assert "lecture_15" in names
+        assert "lecture_16" in names
     finally:
         CONFIG.inbox_dir = orig_inbox
         CONFIG.vault_path = orig_vault
@@ -259,12 +259,12 @@ def test_cli_backend_ref_arg_resolution():
     from silica.driver.base import NoteRef
     
     backend = ObsidianCLIBackend()
-    assert backend._ref_arg("Inbox/lezione_15.md") == "path=Inbox/lezione_15.md"
-    assert backend._ref_arg("Deep Learning/lezione.md") == "path=Deep Learning/lezione.md"
-    assert backend._ref_arg("lezione.md") == "path=lezione.md"
-    assert backend._ref_arg("lezione") == "file=lezione"
-    assert backend._ref_arg(NoteRef(name="lezione", path="Folder/lezione.md")) == "path=Folder/lezione.md"
-    assert backend._ref_arg(NoteRef(name="lezione")) == "file=lezione"
+    assert backend._ref_arg("Inbox/lecture_15.md") == "path=Inbox/lecture_15.md"
+    assert backend._ref_arg("Deep Learning/lecture.md") == "path=Deep Learning/lecture.md"
+    assert backend._ref_arg("lecture.md") == "path=lecture.md"
+    assert backend._ref_arg("lecture") == "file=lecture"
+    assert backend._ref_arg(NoteRef(name="lecture", path="Folder/lecture.md")) == "path=Folder/lecture.md"
+    assert backend._ref_arg(NoteRef(name="lecture")) == "file=lecture"
 
 
 def test_cli_backend_sentinel_handling():

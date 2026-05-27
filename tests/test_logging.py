@@ -15,7 +15,7 @@ def test_human_friendly_formatter_mapped_debug():
     )
     formatted = formatter.format(record)
     assert "⚙" in formatted
-    assert "Tool registrato nel sistema: test_tool (implementato dalla classe TestClass)" in formatted
+    assert "Tool registered in system: test_tool (implemented by class TestClass)" in formatted
 
 def test_human_friendly_formatter_mapped_info():
     formatter = HumanFriendlyFormatter()
@@ -30,7 +30,7 @@ def test_human_friendly_formatter_mapped_info():
     )
     formatted = formatter.format(record)
     assert "ℹ" in formatted
-    assert "Ripristinato file note.md alla versione 3" in formatted
+    assert "Restored file note.md to version 3" in formatted
 
 def test_human_friendly_formatter_mapped_warning():
     formatter = HumanFriendlyFormatter()
@@ -45,7 +45,7 @@ def test_human_friendly_formatter_mapped_warning():
     )
     formatted = formatter.format(record)
     assert "⚠️" in formatted
-    assert "Impossibile indicizzare la nota my_note.md: Permission Denied" in formatted
+    assert "Failed to index note my_note.md: Permission Denied" in formatted
 
 def test_human_friendly_formatter_mapped_error():
     formatter = HumanFriendlyFormatter()
@@ -60,7 +60,7 @@ def test_human_friendly_formatter_mapped_error():
     )
     formatted = formatter.format(record)
     assert "❌" in formatted
-    assert "Annullamento modifiche (rollback) fallito: Connection timed out" in formatted
+    assert "Annulling changes (rollback) failed: Connection timed out" in formatted
 
 def test_human_friendly_formatter_unmapped_fallback():
     formatter = HumanFriendlyFormatter()

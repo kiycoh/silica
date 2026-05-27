@@ -100,3 +100,37 @@ class TestProviders(unittest.TestCase):
         mock_client.chat.completions.create.assert_called_once()
         self.assertIsInstance(response, LLMResponse)
         self.assertEqual(response.text, '{"key": "fallback", "value": 456}')
+
+    @patch("openai.OpenAI")
+    @patch("time.sleep", return_value=None)
+    def test_call_llm_retries_on_timeout(self, mock_sleep, mock_openai_cls):
+        import openai
+        # Setup mock client
+        mock_client = MagicMock()
+        mock_openai_cls.return_value = mock_client
+
+        # First two calls raise APITimeoutError, third call succeeds
+        mock_create_response = MagicMock()
+        mock_choice = MagicMock()
+        mock_message = MagicMock()
+        mock_message.content = "Success after retries"
+        mock_message.tool_calls = None
+        mock_choice.message = mock_message
+        mock_create_response.choices = [mock_choice]
+        mock_create_response.usage = {}
+
+        # Set up side effect to fail twice then succeed
+        mock_client.chat.completions.create.side_effect = [
+            openai.APITimeoutError(request=MagicMock()),
+            openai.APIConnectionError(request=MagicMock(), message="Connection issue"),
+            mock_create_response
+        ]
+
+        provider = OpenAICompatibleProvider(base_url="http://dummy", api_key="dummy", model="test-model")
+        response = provider.call_llm(
+            messages=[{"role": "user", "content": "hi"}]
+        )
+
+        self.assertEqual(mock_client.chat.completions.create.call_count, 3)
+        self.assertEqual(response.text, "Success after retries")
+        self.assertEqual(mock_sleep.call_count, 2)

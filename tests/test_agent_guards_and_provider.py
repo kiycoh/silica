@@ -145,8 +145,8 @@ class TestAgentGuardsAndProvider(unittest.TestCase):
             with self.assertRaises(RuntimeError) as context:
                 run_agent(messages, model="test_model")
             
-            self.assertIn("ha fallito 3 volte consecutivamente", str(context.exception))
+            self.assertIn("failed 3 consecutive times", str(context.exception))
 
             # Inspect history to check that the warning message was injected at consecutive failure #2
             system_messages = [m for m in messages if m.get("role") == "system"]
-            self.assertTrue(any("NON richiamare questo tool con gli stessi identici argomenti" in m["content"] for m in system_messages))
+            self.assertTrue(any("DO NOT call this tool again with the exact same arguments" in m["content"] for m in system_messages))

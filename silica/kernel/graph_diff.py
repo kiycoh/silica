@@ -31,10 +31,10 @@ def check_graph_regression(
     """Verify that the changes do not introduce structural regressions.
 
     Rules (S3.2):
-      1. Rifiuta se aumentano gli orfani non dichiarati (unplanned orphans).
+      1. Reject if unplanned orphans increase.
          An orphan is unplanned if it is in post.orphans, was NOT in pre.orphans,
          and was NOT explicitly created by this payload (created_paths).
-      2. Rifiuta se aumentano i link irrisolti da note PRE-ESISTENTI.
+      2. Reject if unresolved links from PRE-EXISTING notes increase.
          A new unresolved link is only a regression when its *source* is a
          pre-existing note. Ghost links from *newly created* notes are
          intentional forward references to concepts not yet in the vault —

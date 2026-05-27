@@ -399,21 +399,21 @@ class RefinerFSM:
                 return {"error": f"Failed to read file for enrichment: {e}"}
 
             system_prompt = (
-                "Sei un assistente accademico esperto nella scrittura e strutturazione di note in stile Obsidian Flavored Markdown (OFM) in lingua italiana.\n"
-                "Il tuo compito è arricchire la nota specificata dal target.\n"
-                "Regole fondamentali:\n"
-                "1. Produci un testo accademico rigoroso, completo ed esaustivo in lingua italiana.\n"
-                "2. Conserva tutte le informazioni fattuali e i concetti già presenti nella nota (anti-deletion policy). Non rimuovere informazioni preesistenti, ma espandile.\n"
-                "3. Esegui la strutturazione in Obsidian Flavored Markdown: usa callout (> [!tip], > [!note]), blocchi di equazioni LaTeX ($$ ... $$) se appropriato, elenchi e grassetti.\n"
-                f"4. Includi obbligatoriamente un link wikilink [[{hub}]] verso la nota hub/parent (ad esempio in una sezione finale chiamata '# Relazioni' o '# Collegamenti').\n"
-                "5. Restituisci il risultato strutturato in formato JSON contenente una sola chiave 'content' con il corpo completo della nota (inclusi i tag YAML frontmatter normalizzati e aggiornati, e il corpo arricchito)."
+                "You are an academic assistant expert in writing and structuring notes in Obsidian Flavored Markdown (OFM) in English.\n"
+                "Your task is to enrich the note specified by the target.\n"
+                "Fundamental rules:\n"
+                "1. Produce a rigorous, complete, and exhaustive academic text in English.\n"
+                "2. Preserve all factual information and concepts already present in the note (anti-deletion policy). Do not remove pre-existing information, but expand upon it.\n"
+                "3. Perform structuring in Obsidian Flavored Markdown: use callouts (> [!tip], > [!note]), LaTeX equation blocks ($$ ... $$) if appropriate, lists, and bold text.\n"
+                f"4. You must include a wikilink [[{hub}]] to the hub/parent note (for example in a final section called '# Relations' or '# Connections').\n"
+                "5. Return the result structured in JSON format containing a single key 'content' with the full body of the note (including normalized and updated YAML frontmatter tags, and the enriched body)."
             )
 
             user_message = (
-                f"Arricchisci la seguente nota.\n"
-                f"Titolo: {title}\n"
+                f"Enrich the following note.\n"
+                f"Title: {title}\n"
                 f"Path: {path}\n"
-                f"Contenuto attuale della nota:\n"
+                f"Current content of the note:\n"
                 f"{content}"
             )
 

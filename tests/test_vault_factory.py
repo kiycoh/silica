@@ -124,29 +124,29 @@ def test_vault_factory_topology_matches_manifest(tmp_path):
         role = entry["expected_role"]
         notes_by_role.setdefault(role, []).append(entry["path"])
 
-    # Orphan: no other note links to it — verify Isolata/Orfana.md has no backlinks
+    # Orphan: no other note links to it — verify Isolated/Orphan.md has no backlinks
     # (we check by scanning all files for wikilinks to it)
-    orfana_path = "Isolata/Orfana.md"
-    assert orfana_path in notes_by_role.get("orphan", []), (
-        "Isolata/Orfana.md should be declared as orphan in manifest"
+    orphan_path = "Isolated/Orphan.md"
+    assert orphan_path in notes_by_role.get("orphan", []), (
+        "Isolated/Orphan.md should be declared as orphan in manifest"
     )
 
-    # Duplicate basename: A/Cellula.md and B/Cellula.md
-    dup_paths = [n for n in manifest["notes"] if n["path"].endswith("Cellula.md")]
+    # Duplicate basename: A/Cell.md and B/Cell.md
+    dup_paths = [n for n in manifest["notes"] if n["path"].endswith("Cell.md")]
     assert len(dup_paths) == 2, (
-        f"Expected 2 Cellula.md entries in manifest, got {dup_paths}"
+        f"Expected 2 Cell.md entries in manifest, got {dup_paths}"
     )
     dup_dirs = {p["path"].split("/")[0] for p in dup_paths}
-    assert dup_dirs == {"A", "B"}, f"Unexpected Cellula dirs: {dup_dirs}"
+    assert dup_dirs == {"A", "B"}, f"Unexpected Cell dirs: {dup_dirs}"
 
-    # Unresolved: Percettrone.md links to [[NotaMancante]]
-    percettrone_note = root / "Concetti" / "Percettrone.md"
+    # Unresolved: Perceptron.md links to [[MissingNote]]
+    percettrone_note = root / "Concepts" / "Perceptron.md"
     content = percettrone_note.read_text()
-    assert "NotaMancante" in content, "Percettrone.md should contain [[NotaMancante]]"
+    assert "MissingNote" in content, "Perceptron.md should contain [[MissingNote]]"
 
     # Inbox notes present
-    assert (root / "_inbox" / "Lezione.md").exists()
-    assert (root / "_inbox" / "Nuovo.md").exists()
+    assert (root / "_inbox" / "Lecture.md").exists()
+    assert (root / "_inbox" / "New.md").exists()
 
 
 # ---------------------------------------------------------------------------

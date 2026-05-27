@@ -62,15 +62,15 @@ def _handle_slash_command(cmd: str, messages: list[dict]) -> bool:
         return False  # Signal to exit
 
     if cmd == "/model":
-        print(f"  Modello attuale: \033[1m{CONFIG.model}\033[0m")
+        print(f"  Current model: \033[1m{CONFIG.model}\033[0m")
         return True
 
     if cmd == "/tools":
         from silica.tools import TOOLS
         if not TOOLS:
-            print("  Nessun tool registrato.")
+            print("  No tools registered.")
         else:
-            print(f"  \033[1m{len(TOOLS)} tool registrati:\033[0m")
+            print(f"  \033[1m{len(TOOLS)} registered tools:\033[0m")
             for name, t in sorted(TOOLS.items()):
                 print(f"    [{t.cls}] {name}")
         return True
@@ -78,17 +78,17 @@ def _handle_slash_command(cmd: str, messages: list[dict]) -> bool:
     if cmd == "/clear":
         messages.clear()
         messages.append({"role": "system", "content": SYSTEM_PROMPT})
-        print("  Conversazione resettata.")
+        print("  Conversation reset.")
         return True
 
     if cmd == "/help":
-        print("  /exit    — esci da silica")
-        print("  /model   — mostra il modello LLM attuale")
-        print("  /tools   — elenca i tool registrati")
-        print("  /clear   — resetta la conversazione")
-        print(f"  /verbose — cicla tool progress: off → new → all → verbose  (attuale: {CONFIG.tool_progress})")
-        print("  /thinking — toggle display dei blocchi reasoning")
-        print("  /help    — mostra questo messaggio")
+        print("  /exit    — exit silica")
+        print("  /model   — show current LLM model")
+        print("  /tools   — list registered tools")
+        print("  /clear   — reset conversation history")
+        print(f"  /verbose — cycle tool progress: off → new → all → verbose  (current: {CONFIG.tool_progress})")
+        print("  /thinking — toggle reasoning block display")
+        print("  /help    — show this help message")
         return True
 
     if cmd == "/thinking":
@@ -107,14 +107,14 @@ def _handle_slash_command(cmd: str, messages: list[dict]) -> bool:
         
         if next_mode == "verbose":
             _setup_logging(debug=True)
-            print("  Log di sistema: \033[1mDEBUG\033[0m")
+            print("  System log level: \033[1mDEBUG\033[0m")
         else:
             _setup_logging(debug=False)
-            print("  Log di sistema: \033[1mWARNING\033[0m")
+            print("  System log level: \033[1mWARNING\033[0m")
             
         return True
 
-    print(f"  Comando sconosciuto: {cmd}. Usa /help per la lista.")
+    print(f"  Unknown command: {cmd}. Use /help to see options.")
     return True
 
 
@@ -124,7 +124,7 @@ def main():
     _setup_logging(debug=debug_mode)
 
     print_banner()
-    CONSOLE.print(f"  Modello: [bold]{CONFIG.model}[/]")
+    CONSOLE.print(f"  Model: [bold]{CONFIG.model}[/]")
     if CONFIG.vault_name:
         CONSOLE.print(f"  Vault:   [bold]{CONFIG.vault_name}[/]")
     CONSOLE.print()
@@ -139,7 +139,7 @@ def main():
         try:
             user_input = session.prompt(prompt_text(), bottom_toolbar=bottom_toolbar)
         except (EOFError, KeyboardInterrupt):
-            print("\n  Arrivederci.")
+            print("\n  Goodbye.")
             break
 
         user_input = user_input.strip()
@@ -150,7 +150,7 @@ def main():
         if user_input.startswith("/"):
             should_continue = _handle_slash_command(user_input, messages)
             if not should_continue:
-                print("  Arrivederci.")
+                print("  Goodbye.")
                 break
             continue
 
@@ -163,10 +163,10 @@ def main():
                 print(f"\n{answer}\n")
             messages.append({"role": "assistant", "content": answer or ""})
         except KeyboardInterrupt:
-            print("\n  (interrotto)")
+            print("\n  (interrupted)")
         except Exception as e:
             logger.exception("Agent error")
-            print(f"\n  \033[1;31mErrore: {e}\033[0m\n")
+            print(f"\n  \033[1;31mError: {e}\033[0m\n")
 
 
 if __name__ == "__main__":

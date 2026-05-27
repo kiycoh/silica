@@ -18,7 +18,7 @@ from silica.tools import tool
 
 
 def _same_note(ref_a, ref_b) -> bool:
-    """Confronto path-safe tra due NoteRef — gestisce slash, case, .md suffix."""
+    """Path-safe comparison between two NoteRefs — handles slashes, casing, and .md suffix."""
     import os
     def norm(r):
         p = r.path or r.name
@@ -27,12 +27,12 @@ def _same_note(ref_a, ref_b) -> bool:
 
 
 class ReconArgs(BaseModel):
-    inbox_file: str = Field(description="Percorso file inbox da analizzare")
-    limit: int = Field(default=0, description="Limite estrazione concetti")
+    inbox_file: str = Field(description="Path to the inbox file to analyze")
+    limit: int = Field(default=0, description="Limit for concept extraction")
 
 @tool(ReconArgs, cls="composed")
 def silica_recon(inbox_file: str, limit: int = 0) -> dict[str, Any]:
-    """Estrazione meccanica di concetti da un file inbox e ricerca collisioni nel vault."""
+    """Mechanical extraction of concepts from an inbox file and searching for collisions in the vault."""
     from silica.kernel.recon import extract_concepts, is_title_match, rank_hits, collision_priority
     
     try:
@@ -99,13 +99,13 @@ def silica_recon(inbox_file: str, limit: int = 0) -> dict[str, Any]:
 
 
 class PayloadArgs(BaseModel):
-    recon_report_path: str = Field(description="Path al JSON report di recon")
-    max_concepts: int = Field(default=7, description="Massimo concetti per batch")
-    max_bytes: int = Field(default=80 * 1024, description="Massimo byte (dimensione JSON) per chunk")
+    recon_report_path: str = Field(description="Path to the recon report JSON file")
+    max_concepts: int = Field(default=7, description="Maximum concepts per batch")
+    max_bytes: int = Field(default=80 * 1024, description="Maximum bytes (JSON size) per chunk")
 
 @tool(PayloadArgs, cls="composed")
 def silica_payload(recon_report_path: str, max_concepts: int = 7, max_bytes: int = 80 * 1024) -> dict[str, Any]:
-    """Assembla i payload per il Distiller pre-estraendo estratti dal vault."""
+    """Assembles payloads for the Distiller by pre-extracting snippets from the vault."""
     import orjson
     from silica.kernel.payload import build_payload
     from silica.kernel.partition import partition_by_concepts
@@ -128,11 +128,11 @@ def silica_payload(recon_report_path: str, max_concepts: int = 7, max_bytes: int
 
 
 class SanitizeArgs(BaseModel):
-    distiller_output_path: str = Field(description="Output raw del Distiller")
+    distiller_output_path: str = Field(description="Path to the raw distiller output JSON file")
 
 @tool(SanitizeArgs, cls="composed")
 def silica_sanitize(distiller_output_path: str) -> dict[str, Any]:
-    """Valida e pulisce il JSON restituito dai worker Distiller."""
+    """Validates and sanitizes the JSON returned by Distiller workers."""
     from silica.kernel.sanitize import parse_json
     
     try:
@@ -154,14 +154,14 @@ def silica_sanitize(distiller_output_path: str) -> dict[str, Any]:
 
 
 class ValidateOpsArgs(BaseModel):
-    ops_json_path: str = Field(description="Operazioni consolidate da validare")
-    payload_paths: list[str] = Field(default_factory=list, description="Percorsi ai file payload originali")
+    ops_json_path: str = Field(description="Path to the consolidated operations JSON file to validate")
+    payload_paths: list[str] = Field(default_factory=list, description="Paths to the original payload JSON files")
     target_dir: str = Field(default="", description="Target folder in the vault")
     hub: str = Field(default="", description="Hub note name")
 
 @tool(ValidateOpsArgs, cls="composed")
 def silica_validate_ops(ops_json_path: str, payload_paths: list[str] | None = None, target_dir: str = "", hub: str = "") -> dict[str, Any]:
-    """Gate pre-scrittura: controlla validità strutturale e applica threshold rigetti (10%).
+    """Pre-write gate: checks structural validity and applies rejection threshold (10%).
 
     C4: After validation, OVERWRITES ops_json_path with the coerced + deduped
     validated ops. Snapshot and bulk_write MUST read from the same ops_json_path
@@ -216,11 +216,11 @@ def silica_validate_ops(ops_json_path: str, payload_paths: list[str] | None = No
 
 
 class BulkWriteArgs(BaseModel):
-    ops_json_path: str = Field(description="Percorso al file JSON delle operazioni validate")
+    ops_json_path: str = Field(description="Path to the validated operations JSON file")
 
 @tool(BulkWriteArgs, cls="composed")
 def silica_bulk_write(ops_json_path: str) -> dict[str, Any]:
-    """Applica in batch write/patch/overwrite/delete nel vault."""
+    """Applies write/patch/overwrite/delete operations in batch in the vault."""
     from silica.kernel.bulk import execute_operations
     
     try:
@@ -233,13 +233,13 @@ def silica_bulk_write(ops_json_path: str) -> dict[str, Any]:
 
 
 class LintArgs(BaseModel):
-    note_name: str = Field(description="Nome della nota da lintare")
-    op_type: str = Field(default="", description="Op type (write/patch/overwrite) for conditional checks")
+    note_name: str = Field(description="Name of the note to lint")
+    op_type: str = Field(default="", description="Operation type (write/patch/overwrite) for conditional checks")
     hub: str = Field(default="", description="Hub note name for wikilink validation")
 
 @tool(LintArgs, cls="composed")
 def silica_lint(note_name: str, op_type: str = "", hub: str = "") -> dict[str, Any]:
-    """Gate post-scrittura: esegue l'OFM linter per trovare regressioni strutturali."""
+    """Post-write gate: executes the OFM linter to find structural regressions."""
     from silica.kernel.linter import validate_note
 
     errors, warnings = validate_note(note_name, hub=hub or None, op_type=op_type or None)
@@ -253,15 +253,16 @@ def silica_lint(note_name: str, op_type: str = "", hub: str = "") -> dict[str, A
 
 
 class RunInjectorArgs(BaseModel):
-    inbox_file: str = Field(description="Percorso file inbox da ingerire (es. Inbox/meeting_notes.md)")
-    target_dir: str = Field(description="Directory di destinazione per i concetti estratti")
-    hub: str = Field(default="", description="Hub di riferimento opzionale")
+    inbox_file: str = Field(description="Path to the inbox file to ingest (e.g. Inbox/meeting_notes.md)")
+    target_dir: str = Field(description="Destination directory for the extracted concepts")
+    hub: str = Field(default="", description="Optional reference hub note")
 
 @tool(RunInjectorArgs, cls="composed")
 def silica_run_injector(inbox_file: str, target_dir: str, hub: str = "") -> dict[str, Any]:
-    """Azione singola per l'agente: esegue l'intera pipeline Injector (10 fasi) in modo deterministico con gate di accettazione e rollback in caso di fallimento."""
+    """Single action for the agent: executes the entire Injector pipeline (10 phases) deterministically with acceptance gates and rollback in case of failure."""
     from silica.router.orchestrator import InjectorFSM
     
     fsm = InjectorFSM(inbox_file=inbox_file, target_dir=target_dir, hub=hub or None)
     return fsm.run()
+
 

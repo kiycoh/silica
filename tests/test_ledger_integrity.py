@@ -38,14 +38,14 @@ def test_ledger_skip_on_identical_content(ledger, tmp_path):
     h = _sha256("source content")
     ledger.record(
         txn_id="t1",
-        source_canonical="concetti/backpropagation",
+        source_canonical="concepts/backpropagation",
         path=str(output),
         op="write",
         status="committed",
         content_hash=h,
     )
 
-    assert ledger.is_committed("concetti/backpropagation", content_hash=h)
+    assert ledger.is_committed("concepts/backpropagation", content_hash=h)
 
 
 def test_ledger_reprocess_on_content_change(ledger, tmp_path):
@@ -55,7 +55,7 @@ def test_ledger_reprocess_on_content_change(ledger, tmp_path):
 
     ledger.record(
         txn_id="t1",
-        source_canonical="concetti/backpropagation",
+        source_canonical="concepts/backpropagation",
         path=str(output),
         op="write",
         status="committed",
@@ -64,7 +64,7 @@ def test_ledger_reprocess_on_content_change(ledger, tmp_path):
 
     # Different hash → must reprocess
     assert not ledger.is_committed(
-        "concetti/backpropagation",
+        "concepts/backpropagation",
         content_hash=_sha256("modified content"),
     )
 
@@ -80,7 +80,7 @@ def test_ledger_reprocess_when_output_missing(ledger, tmp_path):
 
     ledger.record(
         txn_id="t1",
-        source_canonical="concetti/backpropagation",
+        source_canonical="concepts/backpropagation",
         path=str(output),
         op="write",
         status="committed",
@@ -89,7 +89,7 @@ def test_ledger_reprocess_when_output_missing(ledger, tmp_path):
 
     # Output does NOT exist on disk → skip must be invalidated
     assert not output.exists()
-    assert not ledger.is_committed("concetti/backpropagation", content_hash=h)
+    assert not ledger.is_committed("concepts/backpropagation", content_hash=h)
 
 
 def test_ledger_skip_when_outputs_present(ledger, tmp_path):
@@ -100,14 +100,14 @@ def test_ledger_skip_when_outputs_present(ledger, tmp_path):
     h = _sha256("source content")
     ledger.record(
         txn_id="t1",
-        source_canonical="concetti/backpropagation",
+        source_canonical="concepts/backpropagation",
         path=str(output),
         op="write",
         status="committed",
         content_hash=h,
     )
 
-    assert ledger.is_committed("concetti/backpropagation", content_hash=h)
+    assert ledger.is_committed("concepts/backpropagation", content_hash=h)
 
 
 # ---------------------------------------------------------------------------
@@ -162,11 +162,11 @@ def test_ledger_canonical_path_key_disambiguates(ledger, tmp_path):
     out_b.write_text("b", encoding="utf-8")
 
     h = _sha256("src")
-    ledger.record("t1", "a/cellula", str(out_a), "write", "committed", content_hash=h)
-    ledger.record("t2", "b/cellula", str(out_b), "write", "committed", content_hash=h)
+    ledger.record("t1", "a/cell", str(out_a), "write", "committed", content_hash=h)
+    ledger.record("t2", "b/cell", str(out_b), "write", "committed", content_hash=h)
 
-    assert ledger.is_committed("a/cellula", content_hash=h)
-    assert ledger.is_committed("b/cellula", content_hash=h)
+    assert ledger.is_committed("a/cell", content_hash=h)
+    assert ledger.is_committed("b/cell", content_hash=h)
 
     # Also verify they are stored as separate rows
     count = ledger._conn.execute("SELECT COUNT(*) FROM ops").fetchone()[0]
@@ -208,10 +208,10 @@ def test_orchestrator_writes_content_hash(tmp_path, monkeypatch):
     monkeypatch.setattr(CONFIG, "vault_path", str(tmp_path))
 
     # Set up a minimal inbox file
-    inbox = tmp_path / "Lezione.md"
-    inbox.write_text("# Lezione\n\nContenuto.", encoding="utf-8")
+    inbox = tmp_path / "Lecture.md"
+    inbox.write_text("# Lecture\n\nContent.", encoding="utf-8")
 
-    fsm = InjectorFSM(inbox_file=str(inbox), target_dir="Concetti")
+    fsm = InjectorFSM(inbox_file=str(inbox), target_dir="Concepts")
     expected_hash = hashlib.sha256(inbox.read_bytes()).hexdigest()
     fsm.context["source_content_hash"] = expected_hash
 
@@ -219,9 +219,9 @@ def test_orchestrator_writes_content_hash(tmp_path, monkeypatch):
     import json, tempfile
     ops_data = [{
         "op": "write",
-        "path": str(tmp_path / "Concetti" / "New.md"),
+        "path": str(tmp_path / "Concepts" / "New.md"),
         "heading": "New",
-        "source_basename": "Lezione.md",
+        "source_basename": "Lecture.md",
         "content": "# New\n\nContent.",
     }]
     fd, ops_path = tempfile.mkstemp(suffix=".json")

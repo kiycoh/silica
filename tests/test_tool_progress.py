@@ -62,13 +62,13 @@ def test_cap_behavior():
     # Text with many lines
     long_lines = "\n".join(f"line {i}" for i in range(20))
     capped_lines = _cap(long_lines, max_lines=5)
-    assert "omesse" in capped_lines
+    assert "omitted" in capped_lines
     assert capped_lines.count("\n") <= 6
     
     # Text with many characters
     long_chars = "a" * 1000
     capped_chars = _cap(long_chars, max_chars=100)
-    assert "omessi" in capped_chars
+    assert "omitted" in capped_chars
     assert len(capped_chars) <= 150
 
 
@@ -284,7 +284,8 @@ def test_llm_openrouter_include_reasoning(mock_completion):
         mock_completion.assert_called_with(
             model="openrouter/some-model",
             messages=messages,
-            include_reasoning=True
+            include_reasoning=True,
+            timeout=120.0
         )
         
         # Test openrouter model with show_thinking=False and verbose=True
@@ -294,13 +295,15 @@ def test_llm_openrouter_include_reasoning(mock_completion):
         mock_completion.assert_called_with(
             model="openrouter/some-model",
             messages=messages,
-            include_reasoning=True
+            include_reasoning=True,
+            timeout=120.0
         )
         
         # Test non-openrouter model
         call_llm(model="openai/gpt-4o", messages=messages)
         args, kwargs = mock_completion.call_args
         assert "include_reasoning" not in kwargs
+        assert kwargs.get("timeout") == 120.0
         
     finally:
         CONFIG.show_thinking = orig_thinking
@@ -332,7 +335,7 @@ def test_print_banner_styles(capsys):
         print_banner()
         captured = capsys.readouterr()
         assert "silica" in captured.out
-        assert "agente Obsidian-nativo" in captured.out
+        assert "Obsidian-native agent" in captured.out
 
         # Wordmark/Crystal style with large terminal
         with patch.object(Console, "width", new_callable=PropertyMock, return_value=100), \
@@ -341,14 +344,14 @@ def test_print_banner_styles(capsys):
             print_banner()
             captured = capsys.readouterr()
             assert "___" in captured.out or "\\/" in captured.out
-            assert "agente Obsidian-nativo" in captured.out
+            assert "Obsidian-native agent" in captured.out
 
             # Since crystal is removed, it should behave like wordmark
             CONFIG.banner_style = "crystal"
             print_banner()
             captured = capsys.readouterr()
             assert "___" in captured.out or "\\/" in captured.out
-            assert "agente Obsidian-nativo" in captured.out
+            assert "Obsidian-native agent" in captured.out
     finally:
         CONFIG.banner_style = orig_style
 

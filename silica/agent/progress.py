@@ -33,7 +33,7 @@ _REDACT_PATTERNS = [
 
 
 def _redact(text: str) -> str | None:
-    """Restituisce None se la redaction fallisce (fail-closed)."""
+    """Returns None if redaction fails (fail-closed)."""
     try:
         for pattern in _REDACT_PATTERNS:
             text = pattern.sub(r'\1=[REDACTED]', text)
@@ -48,10 +48,10 @@ def _cap(text: str, max_chars: int = _MAX_RESULT_CHARS, max_lines: int = _MAX_RE
     if len(lines) > max_lines:
         omitted = len(lines) - max_lines
         tail = "\n".join(lines[-max_lines:])
-        text = f"[… {omitted} righe omesse]\n{tail}"
+        text = f"[… {omitted} lines omitted]\n{tail}"
     if len(text) > max_chars:
         omitted_chars = len(text) - max_chars
-        text = f"[… {omitted_chars} chars omessi]\n{text[-max_chars:]}"
+        text = f"[… {omitted_chars} chars omitted]\n{text[-max_chars:]}"
     return text
 
 
@@ -60,7 +60,7 @@ def _head_cap(text: str, max_lines: int = _REASONING_MAX_LINES) -> str:
     if len(lines) <= max_lines:
         return text
     extra = len(lines) - max_lines
-    return "\n".join(lines[:max_lines]) + f"\n[… +{extra} righe]"
+    return "\n".join(lines[:max_lines]) + f"\n[… +{extra} lines]"
 
 
 def _args_preview(args: dict) -> str:
@@ -81,7 +81,7 @@ class _ProgressRenderer:
     def _start_spinner(self) -> None:
         if self._live is not None:
             return
-        spinner = Spinner("dots", text="  pensando…", style="dim cyan")
+        spinner = Spinner("dots", text="  thinking…", style="dim cyan")
         self._live = Live(
             spinner,
             console=CONSOLE,
@@ -155,7 +155,7 @@ class _ProgressRenderer:
                     CONSOLE.print(f"  [cyan]→ [bold]{escape(event.name)}[/bold][/]")
                     CONSOLE.print(f"  [dim]args: {escape(_cap(redacted, max_lines=6))}[/]")
                 else:
-                    CONSOLE.print(f"  [cyan]→ [bold]{escape(event.name)}[/bold] [dim][args redatti][/][/]")
+                    CONSOLE.print(f"  [cyan]→ [bold]{escape(event.name)}[/bold] [dim][redacted args][/][/]")
 
         elif isinstance(event, ToolCompleteEvent):
             dur = f"{event.duration_s:.3f}s"
@@ -171,7 +171,7 @@ class _ProgressRenderer:
                 else:
                     CONSOLE.print(
                         f"  [green]✓ [bold]{escape(event.name)}[/bold][/]"
-                        f" [dim]({dur}) [result redatto][/]"
+                        f" [dim]({dur}) [result redacted][/]"
                     )
 
 

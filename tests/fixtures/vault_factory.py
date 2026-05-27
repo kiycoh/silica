@@ -23,7 +23,7 @@ from typing import Optional
 
 @dataclass
 class NoteSpec:
-    path: str                         # vault-relative path (e.g. "Hub/Concetti.md")
+    path: str                         # vault-relative path (e.g. "Hub/Concepts.md")
     frontmatter: dict = field(default_factory=dict)
     body: str = ""
     expected_role: str = "normal"     # orphan, hub, spoke, dup-basename, lean, mono, inbox, …
@@ -36,90 +36,90 @@ class NoteSpec:
 SPEC: list[NoteSpec] = [
     # Hub
     NoteSpec(
-        path="Hub/Concetti.md",
-        frontmatter={"tags": ["concetti"], "AI": True},
+        path="Hub/Concepts.md",
+        frontmatter={"tags": ["concepts"], "AI": True},
         body=(
-            "# Concetti\n\n"
-            "Questa nota è il hub centrale.\n\n"
+            "# Concepts\n\n"
+            "This note is the central hub.\n\n"
             "- [[Backpropagation]]\n"
-            "- [[Gradiente]]\n"
-            "- [[Percettrone]]\n"
-            "- [[A/Cellula]]\n"
-            "- [[B/Cellula]]\n"
+            "- [[Gradient]]\n"
+            "- [[Perceptron]]\n"
+            "- [[A/Cell]]\n"
+            "- [[B/Cell]]\n"
         ),
         expected_role="hub",
     ),
     # Spoke — resolved links
     NoteSpec(
-        path="Concetti/Backpropagation.md",
-        frontmatter={"tags": ["concetti"], "AI": True},
+        path="Concepts/Backpropagation.md",
+        frontmatter={"tags": ["concepts"], "AI": True},
         body=(
             "# Backpropagation\n\n"
-            "Algoritmo di ottimizzazione.\n\n"
-            "## Relazioni\n\n"
-            "- [[Hub/Concetti]]\n"
-            "- [[Gradiente]]\n"
+            "Optimization algorithm.\n\n"
+            "## Relations\n\n"
+            "- [[Hub/Concepts]]\n"
+            "- [[Gradient]]\n"
         ),
         expected_role="spoke",
     ),
     NoteSpec(
-        path="Concetti/Gradiente.md",
-        frontmatter={"tags": ["concetti"], "AI": True},
+        path="Concepts/Gradient.md",
+        frontmatter={"tags": ["concepts"], "AI": True},
         body=(
-            "# Gradiente\n\n"
-            "Derivata parziale in uno spazio multidimensionale.\n\n"
-            "## Relazioni\n\n"
-            "- [[Hub/Concetti]]\n"
+            "# Gradient\n\n"
+            "Partial derivative in a multidimensional space.\n\n"
+            "## Relations\n\n"
+            "- [[Hub/Concepts]]\n"
         ),
         expected_role="spoke",
     ),
     # Spoke — has 1 unresolved link
     NoteSpec(
-        path="Concetti/Percettrone.md",
-        frontmatter={"tags": ["concetti"], "AI": True},
+        path="Concepts/Perceptron.md",
+        frontmatter={"tags": ["concepts"], "AI": True},
         body=(
-            "# Percettrone\n\n"
-            "Modello di neurone artificiale.\n\n"
-            "## Relazioni\n\n"
-            "- [[Hub/Concetti]]\n"
-            "- [[NotaMancante]]\n"
+            "# Perceptron\n\n"
+            "Artificial neuron model.\n\n"
+            "## Relations\n\n"
+            "- [[Hub/Concepts]]\n"
+            "- [[MissingNote]]\n"
         ),
         expected_role="spoke-unresolved",
     ),
     # Orphan — no incoming links
     NoteSpec(
-        path="Isolata/Orfana.md",
-        frontmatter={"tags": ["isolata"]},
-        body="# Orfana\n\nQuesta nota non ha backlink.",
+        path="Isolated/Orphan.md",
+        frontmatter={"tags": ["isolated"]},
+        body="# Orphan\n\nThis note does not have backlinks.",
         expected_role="orphan",
     ),
     # Duplicate basename #1
     NoteSpec(
-        path="A/Cellula.md",
-        frontmatter={"tags": ["biologia"], "AI": True},
+        path="A/Cell.md",
+        frontmatter={"tags": ["biology"], "AI": True},
         body=(
-            "# Cellula (A)\n\n"
-            "Unità fondamentale della vita.\n\n"
-            "- [[Hub/Concetti]]\n"
+            "# Cell (A)\n\n"
+            "Fundamental unit of life.\n\n"
+            "- [[Hub/Concepts]]\n"
         ),
         expected_role="dup-basename",
     ),
     # Duplicate basename #2
     NoteSpec(
-        path="B/Cellula.md",
-        frontmatter={"tags": ["biologia"], "AI": True},
+        path="B/Cell.md",
+        frontmatter={"tags": ["biology"], "AI": True},
         body=(
-            "# Cellula (B)\n\n"
-            "Variante nella cartella B.\n\n"
-            "- [[Isolata/Orfana]]\n"
+            "# Cell (B)\n\n"
+            "Variant in folder B.\n\n"
+            "- [[Isolated/Orphan]]\n"
         ),
         expected_role="dup-basename",
     ),
     # Lean / empty — triage → enrich
     NoteSpec(
-        path="Lean/Vuota.md",
+        path="Lean/Empty.md",
         frontmatter={"tags": ["lean"]},
-        body="# Vuota\n\n",
+        body="# Empty\n\n",
         expected_role="lean-empty",
     ),
     # Lean / stub — < 600 chars body, triage → enrich
@@ -128,55 +128,55 @@ SPEC: list[NoteSpec] = [
         frontmatter={"tags": ["lean"]},
         body=(
             "# Stub\n\n"
-            "Nota molto breve.\n\n"
-            "- [[Hub/Concetti]]\n"
+            "Very short note.\n\n"
+            "- [[Hub/Concepts]]\n"
         ),
         expected_role="lean-stub",
     ),
-    # Monolite — over-limit, ≥2 H2, triage → decouple
+    # Monolith — over-limit, ≥2 H2, triage → decouple
     NoteSpec(
-        path="Mono/Monolite.md",
+        path="Mono/Monolith.md",
         frontmatter={"tags": ["mono"]},
         body=(
-            "# Monolite\n\n"
-            + ("Testo molto lungo. " * 60) + "\n\n"
-            "## Sezione Uno\n\n"
-            + ("Contenuto della prima sezione. " * 40) + "\n\n"
-            "## Sezione Due\n\n"
-            + ("Contenuto della seconda sezione. " * 40) + "\n\n"
-            "## Sezione Tre\n\n"
-            + ("Contenuto della terza sezione. " * 40) + "\n"
+            "# Monolith\n\n"
+            + ("Very long text. " * 60) + "\n\n"
+            "## Section One\n\n"
+            + ("Content of the first section. " * 40) + "\n\n"
+            "## Section Two\n\n"
+            + ("Content of the second section. " * 40) + "\n\n"
+            "## Section Three\n\n"
+            + ("Content of the third section. " * 40) + "\n"
         ),
         expected_role="mono",
     ),
     # Bad frontmatter — inline CSV tags
     NoteSpec(
-        path="BadMeta/TagInline.md",
-        frontmatter={"tags": "biologia, cellula, mitosi"},  # string instead of list
+        path="BadMeta/InlineTag.md",
+        frontmatter={"tags": "biology, cell, mitosis"},  # string instead of list
         body=(
-            "# TagInline\n\n"
-            "Nota con frontmatter non conforme (tags come stringa CSV).\n"
+            "# InlineTag\n\n"
+            "Note with non-conforming frontmatter (tags as CSV string).\n"
         ),
         expected_role="bad-meta",
     ),
     # Inbox — collides with Backpropagation
     NoteSpec(
-        path="_inbox/Lezione.md",
+        path="_inbox/Lecture.md",
         frontmatter={},
         body=(
-            "# Lezione su Backpropagation\n\n"
-            "Appunti dalla lezione. Argomenti: Backpropagation, gradiente, \n"
-            "discesa del gradiente, ottimizzazione.\n"
+            "# Lecture on Backpropagation\n\n"
+            "Notes from the lecture. Topics: Backpropagation, gradient, \n"
+            "gradient descent, optimization.\n"
         ),
         expected_role="inbox-collision",
     ),
     # Inbox — new concept, no collision
     NoteSpec(
-        path="_inbox/Nuovo.md",
+        path="_inbox/New.md",
         frontmatter={},
         body=(
-            "# Trasformatori\n\n"
-            "Architettura Transformer: attention mechanism, self-attention, \n"
+            "# Transformers\n\n"
+            "Transformer architecture: attention mechanism, self-attention, \n"
             "multi-head attention, encoder-decoder.\n"
         ),
         expected_role="inbox-new",

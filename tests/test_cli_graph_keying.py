@@ -47,30 +47,30 @@ def test_cli_incremental_snapshot_is_path_keyed(tmp_path):
 
     backend = _mock_cli_backend(tmp_path)
 
-    # Seed internal state: one note at "Concetti/Backpropagation.md"
-    ref_bp = _make_ref("Concetti/Backpropagation.md")
-    backend._notes = {"Concetti/Backpropagation.md": ref_bp}
+    # Seed internal state: one note at "Concepts/Backpropagation.md"
+    ref_bp = _make_ref("Concepts/Backpropagation.md")
+    backend._notes = {"Concepts/Backpropagation.md": ref_bp}
     backend._unresolved_links = set()
 
     # Graph: Backpropagation.md has 2 outgoing edges, 1 incoming
     g = MagicMock()
-    g.__contains__ = lambda self, x: x == "Concetti/Backpropagation.md"
-    g.successors.return_value = ["Hub/Concetti.md", "Concetti/Gradiente.md"]
-    g.predecessors.return_value = ["Hub/Concetti.md"]
+    g.__contains__ = lambda self, x: x == "Concepts/Backpropagation.md"
+    g.successors.return_value = ["Hub/Concepts.md", "Concepts/Gradient.md"]
+    g.predecessors.return_value = ["Hub/Concepts.md"]
     g.out_degree.return_value = 2
     g.in_degree.return_value = 1
     backend._graph = g
 
     snap: GraphSnapshot = backend.graph_snapshot([ref_bp])
 
-    # Key must be canonical path: "Concetti/Backpropagation" (no .md)
-    assert "Concetti/Backpropagation" in snap.link_counts, (
-        f"Expected path-canonical key 'Concetti/Backpropagation' in link_counts, "
+    # Key must be canonical path: "Concepts/Backpropagation" (no .md)
+    assert "Concepts/Backpropagation" in snap.link_counts, (
+        f"Expected path-canonical key 'Concepts/Backpropagation' in link_counts, "
         f"got: {list(snap.link_counts.keys())}"
     )
-    assert snap.link_counts["Concetti/Backpropagation"] == 2
-    assert "Concetti/Backpropagation" in snap.backlink_counts
-    assert snap.backlink_counts["Concetti/Backpropagation"] == 1
+    assert snap.link_counts["Concepts/Backpropagation"] == 2
+    assert "Concepts/Backpropagation" in snap.backlink_counts
+    assert snap.backlink_counts["Concepts/Backpropagation"] == 1
 
     # Old name-based key must NOT be present
     assert "Backpropagation" not in snap.link_counts, (
@@ -79,7 +79,7 @@ def test_cli_incremental_snapshot_is_path_keyed(tmp_path):
 
 
 # ---------------------------------------------------------------------------
-# C1.3 — Duplicate basename → distinct keys in incremental snapshot
+# B/Cell.md duplicate test
 # ---------------------------------------------------------------------------
 
 def test_duplicate_basename_distinct_keys_cli(tmp_path):
@@ -88,22 +88,22 @@ def test_duplicate_basename_distinct_keys_cli(tmp_path):
 
     backend = _mock_cli_backend(tmp_path)
 
-    ref_a = _make_ref("A/Cellula.md")
-    ref_b = _make_ref("B/Cellula.md")
+    ref_a = _make_ref("A/Cell.md")
+    ref_b = _make_ref("B/Cell.md")
     backend._notes = {
-        "A/Cellula.md": ref_a,
-        "B/Cellula.md": ref_b,
+        "A/Cell.md": ref_a,
+        "B/Cell.md": ref_b,
     }
 
     g = MagicMock()
     def contains(path):
-        return path in ("A/Cellula.md", "B/Cellula.md")
+        return path in ("A/Cell.md", "B/Cell.md")
     g.__contains__ = lambda self, x: contains(x)
 
     def out_degree(p):
-        return 1 if p == "A/Cellula.md" else 0
+        return 1 if p == "A/Cell.md" else 0
     def in_degree(p):
-        return 0 if p == "A/Cellula.md" else 1
+        return 0 if p == "A/Cell.md" else 1
     g.out_degree.side_effect = out_degree
     g.in_degree.side_effect = in_degree
     g.successors.return_value = []
@@ -112,14 +112,14 @@ def test_duplicate_basename_distinct_keys_cli(tmp_path):
 
     snap = backend.graph_snapshot([ref_a, ref_b])
 
-    assert "A/Cellula" in snap.link_counts, (
-        f"Expected 'A/Cellula' in link_counts, got: {list(snap.link_counts.keys())}"
+    assert "A/Cell" in snap.link_counts, (
+        f"Expected 'A/Cell' in link_counts, got: {list(snap.link_counts.keys())}"
     )
-    assert "B/Cellula" in snap.link_counts, (
-        f"Expected 'B/Cellula' in link_counts, got: {list(snap.link_counts.keys())}"
+    assert "B/Cell" in snap.link_counts, (
+        f"Expected 'B/Cell' in link_counts, got: {list(snap.link_counts.keys())}"
     )
-    assert snap.link_counts["A/Cellula"] == 1
-    assert snap.link_counts["B/Cellula"] == 0
+    assert snap.link_counts["A/Cell"] == 1
+    assert snap.link_counts["B/Cell"] == 0
 
 
 # ---------------------------------------------------------------------------
@@ -132,24 +132,24 @@ def test_unresolved_link_detected_percettrone(tmp_path):
 
     backend = _mock_cli_backend(tmp_path)
 
-    ref_p = _make_ref("Concetti/Percettrone.md")
-    backend._notes = {"Concetti/Percettrone.md": ref_p}
-    backend._unresolved_links = {("Concetti/Percettrone.md", "NotaMancante")}
+    ref_p = _make_ref("Concepts/Perceptron.md")
+    backend._notes = {"Concepts/Perceptron.md": ref_p}
+    backend._unresolved_links = {("Concepts/Perceptron.md", "MissingNote")}
 
     g = MagicMock()
-    g.__contains__ = lambda self, x: x == "Concetti/Percettrone.md"
+    g.__contains__ = lambda self, x: x == "Concepts/Perceptron.md"
     g.out_degree.return_value = 1  # resolved links
     g.in_degree.return_value = 0
-    g.successors.return_value = ["Hub/Concetti.md"]
+    g.successors.return_value = ["Hub/Concepts.md"]
     g.predecessors.return_value = []
     backend._graph = g
 
     snap = backend.graph_snapshot([ref_p])
 
     assert any(
-        lnk.target == "NotaMancante" or "NotaMancante" in lnk.target
+        lnk.target == "MissingNote" or "MissingNote" in lnk.target
         for lnk in snap.unresolved
-    ), f"Expected unresolved 'NotaMancante', got: {snap.unresolved}"
+    ), f"Expected unresolved 'MissingNote', got: {snap.unresolved}"
 
 
 # ---------------------------------------------------------------------------
@@ -163,19 +163,19 @@ def test_parity_incremental_snapshot_with_duplicates(tmp_path):
 
     backend = _mock_cli_backend(tmp_path)
 
-    ref_a = _make_ref("A/Cellula.md")
-    ref_b = _make_ref("B/Cellula.md")
+    ref_a = _make_ref("A/Cell.md")
+    ref_b = _make_ref("B/Cell.md")
     backend._notes = {
-        "A/Cellula.md": ref_a,
-        "B/Cellula.md": ref_b,
+        "A/Cell.md": ref_a,
+        "B/Cell.md": ref_b,
     }
     backend._unresolved_links = set()
 
     # Build a real graph so both code paths read the same structure
     g = nx.DiGraph()
-    g.add_node("A/Cellula.md", ref=ref_a)
-    g.add_node("B/Cellula.md", ref=ref_b)
-    g.add_edge("A/Cellula.md", "B/Cellula.md")
+    g.add_node("A/Cell.md", ref=ref_a)
+    g.add_node("B/Cell.md", ref=ref_b)
+    g.add_edge("A/Cell.md", "B/Cell.md")
     backend._graph = g
     backend._graph_ready = True
 

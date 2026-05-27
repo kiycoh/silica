@@ -15,115 +15,115 @@ _BOLD = "\033[1m"
 FRIENDLY_TEMPLATES = {
     # Debug messages
     "Registered tool: %s (class=%s)": 
-        "Tool registrato nel sistema: {0} (implementato dalla classe {1})",
+        "Tool registered in system: {0} (implemented by class {1})",
     "Redaction failed (omitting detail): %s": 
-        "Censura dati sensibili fallita (dettagli omessi per sicurezza): {0}",
+        "Sensitive data redaction failed (details omitted for safety): {0}",
     "tool_progress_callback error (swallowed): %s": 
-        "Errore nel callback di avanzamento dello strumento (ignorato): {0}",
+        "Error in tool progress callback (ignored): {0}",
     "Agent loop iteration %d": 
-        "Inizio iterazione ciclo dell'agente: {0}",
-    "Creato file temporaneo di stage in: %s": 
-        "Creato un file temporaneo per lo staging delle modifiche in: {0}",
-    "FSM Transizione: %s -> eseguendo handler": 
-        "Transizione macchina a stati: {0} -> Esecuzione del gestore associato",
+        "Starting agent loop iteration: {0}",
+    "Created temporary staging file at: %s": 
+        "Created a temporary file for staging changes at: {0}",
+    "FSM Transition: %s -> executing handler": 
+        "State machine transition: {0} -> executing associated handler",
     "Rebuilding FS graph index...": 
-        "Aggiornamento dell'indice del File System in corso...",
+        "Rebuilding File System index...",
     "Skipping indexing for inbox directory: %s": 
-        "Salto l'indicizzazione della cartella Inbox: {0}",
+        "Skipping indexing for the Inbox directory: {0}",
     "Indexed %d notes": 
-        "Indicizzazione completata: {0} note trovate e caricate",
+        "Indexing complete: {0} notes found and loaded",
     "CLI exec: %s": 
-        "Esecuzione comando CLI: {0}",
+        "Executing CLI command: {0}",
     "CLI stderr: %s": 
-        "Errore standard CLI: {0}",
+        "CLI standard error: {0}",
 
     # LLM call summary (compact)
     "LLM call: model=%s | msg=%d | tools=%d":
-        "Chiamata LLM → {0}  [{1} msg, {2} tool]",
+        "LLM call → {0}  [{1} msg, {2} tools]",
     "LLM resp: finish=%s | tool_calls=%d | text=%r":
-        "Risposta LLM → finish={0}  {1} tool_call(s)  testo={2}",
+        "LLM response → finish={0}  {1} tool call(s)  text={2}",
 
     # Info messages
     "Refiner phase: %s":
-        "Fase di raffinamento: {0}",
+        "Refinement phase: {0}",
     "Skipping already processed note: %s": 
-        "Nota già elaborata precedentemente, salto: {0}",
+        "Skipping note already processed: {0}",
     "Injector phase: %s": 
-        "Fase di iniezione: {0}",
+        "Injection phase: {0}",
     "VALIDATE: no actionable ops (all skip) — short-circuit to CLEANUP": 
-        "Validazione completata: nessuna modifica richiesta, passaggio diretto alla pulizia",
+        "Validation complete: no updates needed, short-circuiting to cleanup",
     "Calling Distiller LLM (payload checksum %s)": 
-        "Chiamata al modello Distiller per estrarre le modifiche (checksum: {0})",
+        "Calling Distiller model to extract changes (checksum: {0})",
     "Distiller produced %d updates": 
-        "Il Distiller ha prodotto {0} aggiornamenti",
-    "Validation: l'hub '%s' non esiste. Iniettata operazione di creazione in %s": 
-        "La nota hub '{0}' non esiste. Iniettata operazione di creazione in {1}",
+        "Distiller produced {0} updates",
+    "Validation: hub '%s' does not exist. Injected creation operation at %s": 
+        "Hub note '{0}' does not exist. Injected creation operation at {1}",
     "Restored %s to version %d": 
-        "Ripristinato file {0} alla versione {1}",
+        "Restored file {0} to version {1}",
     "Rolled back created note: %s": 
-        "Annullata creazione nota: {0} (rimossa durante il rollback)",
+        "Undid note creation: {0} (removed during rollback)",
     "Rolled back created note %s (already absent)": 
-        "Annullamento creazione nota {0} non necessario (già assente)",
+        "Undoing note creation of {0} not needed (already absent)",
     "Rollback complete for txn %s": 
-        "Rollback completato con successo per la transazione {0}",
+        "Rollback successfully completed for transaction {0}",
 
     # Warning messages
     "restore_version with no version number for %s — skipped": 
-        "Richiesto ripristino di {0} senza un numero di versione specifico (ignorato)",
+        "Requested restoration of {0} without specific version number (ignored)",
     "Failed to load recipe 'injector', using defaults: %s": 
-        "Impossibile caricare la ricetta per l'injector, uso dei valori di default: {0}",
+        "Failed to load recipe for injector, using default values: {0}",
     "Failed to fetch pre-write links for %s: %s": 
-        "Impossibile recuperare i link pre-scrittura per {0}: {1}",
+        "Failed to fetch pre-write links for {0}: {1}",
     "Failed to write ledger: %s": 
-        "Impossibile scrivere il registro delle transazioni (ledger): {0}",
+        "Failed to write transaction log (ledger): {0}",
     "Failed to mark rollback in ledger: %s": 
-        "Impossibile registrare il rollback nel registro: {0}",
+        "Failed to record rollback in ledger: {0}",
     "Failed to load recipe 'refiner', using defaults: %s": 
-        "Impossibile caricare la ricetta per il refiner, uso dei valori di default: {0}",
+        "Failed to load recipe for refiner, using default values: {0}",
     "Distiller provider call failed, falling back to litellm: %s": 
-        "Chiamata provider Distiller fallita, ripiego su litellm standard: {0}",
+        "Distiller provider call failed, falling back to standard litellm: {0}",
     "Failed to index %s: %s": 
-        "Impossibile indicizzare la nota {0}: {1}",
+        "Failed to index note {0}: {1}",
     "base_query not implemented in FS backend": 
-        "La query di base non è implementata nel backend File System",
+        "Base query is not implemented in the File System backend",
     "No history available for %s": 
-        "Nessuna cronologia disponibile per {0}",
+        "No history available for {0}",
     "Convergence guard: tool '%s' with args %s failed consecutively. Injecting warning message.": 
-        "Rilevato loop: il tool '{0}' con argomenti {1} ha fallito consecutivamente. Iniezione messaggio di avviso.",
+        "Loop detected: tool '{0}' with args {1} failed consecutively. Injected warning message.",
     "Agent loop hit max iterations (%d)": 
-        "Il ciclo dell'agente ha raggiunto il limite massimo di iterazioni ({0})",
+        "Agent loop reached the maximum limit of iterations ({0})",
 
     # Error messages
     "Rollback error: %s": 
-        "Errore durante il rollback delle modifiche: {0}",
+        "Error during rollback of changes: {0}",
     "FSM Error in state %s: %s": 
-        "Errore nella macchina a stati nello stato {0}: {1}",
+        "Error in the state machine in state {0}: {1}",
     "Failed to take pre-write graph snapshot: %s": 
-        "Impossibile salvare lo stato iniziale del grafo: {0}",
+        "Failed to save initial graph snapshot: {0}",
     "Failed to perform graph-diff check: %s": 
-        "Impossibile confrontare le differenze del grafo: {0}",
+        "Failed to compare graph differences: {0}",
     "Rollback partially failed: %s": 
-        "Il rollback è parzialmente fallito: {0}",
+        "Rollback partially failed: {0}",
     "Rollback failed: %s": 
-        "Annullamento modifiche (rollback) fallito: {0}",
+        "Annulling changes (rollback) failed: {0}",
     "Enricher failed for task %d: %s": 
-        "Fase di arricchimento fallita per l'attività {0}: {1}",
+        "Enrichment phase failed for task {0}: {1}",
     "Distiller call hit maximum tokens limit (generation cut off)": 
-        "La chiamata al Distiller ha superato il limite massimo di token consentiti",
+        "Distiller call exceeded the maximum limit of allowed tokens",
     "Transient LLM error, retries exhausted: %s": 
-        "Errore temporaneo del modello linguistico, tentativi esauriti: {0}",
+        "Transient LLM error, retries exhausted: {0}",
     "Permanent LLM or execution error: %s": 
-        "Errore permanente del modello linguistico o di esecuzione: {0}",
+        "Permanent LLM or execution error: {0}",
     "LLM call failed: %s": 
-        "Chiamata al modello linguistico fallita: {0}",
+        "LLM call failed: {0}",
     "Failed to execute or parse eval search: %s": 
-        "Impossibile eseguire o analizzare la ricerca di valutazione: {0}",
+        "Failed to execute or parse evaluation search: {0}",
     "Failed to restore %s: %s": 
-        "Impossibile ripristinare la nota {0}: {1}",
+        "Failed to restore note {0}: {1}",
     "Failed to delete created note %s during rollback: %s": 
-        "Impossibile rimuovere la nota creata {0} durante il rollback: {1}",
+        "Failed to remove created note {0} during rollback: {1}",
     "Convergence guard: tool '%s' with args %s failed %d times consecutively. Aborting agent run.": 
-        "Rilevato potenziale loop infinito: il tool '{0}' con argomenti {1} ha fallito {2} volte consecutive. Interruzione esecuzione.",
+        "Potential infinite loop detected: tool '{0}' with args {1} failed {2} consecutive times. Aborting execution.",
 }
 
 class HumanFriendlyFormatter(logging.Formatter):
