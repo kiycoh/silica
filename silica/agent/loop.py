@@ -14,9 +14,10 @@ This is the 'while True' from SILICA.md §8.1:
 Everything else (streaming, TUI, context compression) is ergonomics
 around this nucleus. Build this first, then ergonomics.
 """
-from typing import Callable
+from typing import Callable, Any
 import time
 import logging
+import json
 
 from silica.agent.events import (
     ToolProgressEvent,
@@ -31,6 +32,26 @@ from silica.config import CONFIG
 from silica.tools import TOOLS
 
 logger = logging.getLogger(__name__)
+
+
+def _is_tool_failure(result: Any) -> bool:
+    """Helper to detect if a tool result indicates a failure."""
+    if not result:
+        return False
+    if isinstance(result, str):
+        try:
+            parsed = json.loads(result)
+            if isinstance(parsed, dict) and "error" in parsed:
+                return True
+        except Exception:
+            pass
+        # Fallback keyword checks
+        lower_res = result.lower()
+        if "error" in lower_res or "exception" in lower_res or "failed" in lower_res:
+            return True
+    elif isinstance(result, dict) and "error" in result:
+        return True
+    return False
 
 
 ToolProgressCallback = Callable[[RenderEvent], None] | None
@@ -58,7 +79,12 @@ def run_agent(
     schemas = [t.json_schema() for t in TOOLS.values()] if TOOLS else None
 
     iteration = 0
-    max_iterations = 50  # Hard safety cap
+    max_iterations = 20  # Hard safety cap lowered from 50
+
+    # Track consecutive failures for the same (tool_name, args) pair
+    # Key: (tool_name, args_json_string)
+    # Value: consecutive failure count
+    consecutive_failures: dict[tuple[str, str], int] = {}
 
     def _emit(event: RenderEvent) -> None:
         """Best-effort event emission — swallows all consumer exceptions."""
@@ -87,7 +113,13 @@ def run_agent(
         for tc in resp.tool_calls:
             logger.info("Tool call: %s(%s)", tc.name, tc.args)
 
+            # Key representing the specific tool call + args
+            args_str = json.dumps(tc.args, sort_keys=True)
+            tool_key = (tc.name, args_str)
+
+            failed = False
             if tc.name not in TOOLS:
+                failed = True
                 result = f'{{"error": "Unknown tool: {tc.name}"}}'
                 _emit(
                     ToolErrorEvent(
@@ -120,6 +152,8 @@ def run_agent(
                             iteration=iteration,
                         )
                     )
+                    if _is_tool_failure(result):
+                        failed = True
                 except Exception as e:
                     duration = time.perf_counter() - start_time
                     _emit(
@@ -130,7 +164,8 @@ def run_agent(
                             iteration=iteration,
                         )
                     )
-                    raise
+                    failed = True
+                    result = f'{{"error": "{type(e).__name__}: {str(e)}"}}'
 
             messages.append(
                 {
@@ -139,6 +174,26 @@ def run_agent(
                     "content": result,
                 }
             )
+
+            # Update convergence guard
+            if failed:
+                consecutive_failures[tool_key] = consecutive_failures.get(tool_key, 0) + 1
+                failures_count = consecutive_failures[tool_key]
+                if failures_count >= 3:
+                    logger.error("Convergence guard: tool '%s' with args %s failed %d times consecutively. Aborting agent run.", tc.name, tc.args, failures_count)
+                    raise RuntimeError(
+                        f"Il tool '{tc.name}' ha fallito 3 volte consecutivamente con gli stessi argomenti: {tc.args}"
+                    )
+                elif failures_count == 2:
+                    logger.warning("Convergence guard: tool '%s' with args %s failed consecutively. Injecting warning message.", tc.name, tc.args)
+                    messages.append(
+                        {
+                            "role": "system",
+                            "content": f"IMPORTANTE: Il tool '{tc.name}' ha fallito consecutivamente con questi parametri. NON richiamare questo tool con gli stessi identici argomenti."
+                        }
+                    )
+            else:
+                consecutive_failures[tool_key] = 0
 
         # Loop continues: re-call LLM with tool results
 

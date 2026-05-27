@@ -38,10 +38,24 @@ class SilicaConfig:
         )
     )
 
-    # Provider preset name (e.g. "lmstudio", "openrouter")
-    provider: str = field(
-        default_factory=lambda: os.getenv("SILICA_PROVIDER", "lmstudio")
+    # Provider preset name (derived from model prefix by default, or overridden)
+    _provider: str | None = field(
+        default_factory=lambda: os.getenv("SILICA_PROVIDER", None)
     )
+
+    @property
+    def provider(self) -> str:
+        if self._provider is not None:
+            return self._provider
+        if self.model and "/" in self.model:
+            prefix = self.model.split("/", 1)[0]
+            if prefix in ("openrouter", "lmstudio"):
+                return prefix
+        return "lmstudio"
+
+    @provider.setter
+    def provider(self, val: str) -> None:
+        self._provider = val
 
     # Vault path — used by the fs backend and for context.
     vault_path: str = field(

@@ -30,6 +30,7 @@ class Provider(Protocol):
         messages: list[dict],
         tools: list[dict] | None = None,
         response_schema: type[BaseModel] | None = None,
+        max_tokens: int | None = None,
     ) -> LLMResponse:
         ...
 
@@ -44,6 +45,7 @@ class OpenAICompatibleProvider:
         messages: list[dict],
         tools: list[dict] | None = None,
         response_schema: type[BaseModel] | None = None,
+        max_tokens: int | None = None,
     ) -> LLMResponse:
         kwargs: dict[str, Any] = {
             "model": self.model,
@@ -52,6 +54,8 @@ class OpenAICompatibleProvider:
         if tools:
             kwargs["tools"] = tools
             kwargs["tool_choice"] = "auto"
+        if max_tokens is not None:
+            kwargs["max_tokens"] = max_tokens
 
         if response_schema:
             try:
@@ -61,6 +65,7 @@ class OpenAICompatibleProvider:
                 )
                 choice = response.choices[0]
                 message = choice.message
+                finish_reason = getattr(choice, "finish_reason", None)
                 
                 parsed_object = message.parsed
                 content_str = message.content if message.content else ""
@@ -94,7 +99,8 @@ class OpenAICompatibleProvider:
                     tool_calls=parsed_calls,
                     assistant_message=assistant_msg,
                     usage=dict(response.usage) if response.usage else {},
-                    reasoning=getattr(message, "reasoning_content", None)
+                    reasoning=getattr(message, "reasoning_content", None),
+                    finish_reason=finish_reason,
                 )
             except Exception as e:
                 logger.warning("Constrained decoding failed, falling back to non-structured: %s", e)
@@ -103,6 +109,7 @@ class OpenAICompatibleProvider:
         response = self.client.chat.completions.create(**kwargs)
         choice = response.choices[0]
         message = choice.message
+        finish_reason = getattr(choice, "finish_reason", None)
         
         assistant_msg = {"role": "assistant"}
         if message.content:
@@ -131,7 +138,8 @@ class OpenAICompatibleProvider:
             tool_calls=parsed_calls,
             assistant_message=assistant_msg,
             usage=dict(response.usage) if response.usage else {},
-            reasoning=getattr(message, "reasoning_content", None)
+            reasoning=getattr(message, "reasoning_content", None),
+            finish_reason=finish_reason,
         )
 
 
@@ -150,5 +158,7 @@ def get_provider(config: Any) -> Provider:
         
     if provider_name == "openrouter" and model_name.startswith("openrouter/"):
         model_name = model_name.removeprefix("openrouter/")
+    elif provider_name == "lmstudio" and model_name.startswith("lmstudio/"):
+        model_name = model_name.removeprefix("lmstudio/")
         
     return OpenAICompatibleProvider(base_url=base_url, api_key=api_key, model=model_name)

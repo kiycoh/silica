@@ -28,13 +28,25 @@ def _setup_logging(debug: bool = False) -> None:
     """Configure logging for the CLI session."""
     CONFIG.debug_logging = debug
     level = logging.DEBUG if debug else logging.WARNING
-    logging.basicConfig(
-        level=level,
-        format="%(asctime)s [%(name)s] %(levelname)s: %(message)s",
-        datefmt="%H:%M:%S",
-        force=True,
-    )
-    logging.getLogger().setLevel(level)
+    
+    # Reset existing handlers to configure cleanly
+    root = logging.getLogger()
+    for h in root.handlers[:]:
+        root.removeHandler(h)
+
+    handler = logging.StreamHandler(sys.stderr)
+    if debug:
+        from silica.ui.logging import HumanFriendlyFormatter
+        formatter = HumanFriendlyFormatter()
+    else:
+        formatter = logging.Formatter(
+            fmt="%(asctime)s [%(name)s] %(levelname)s: %(message)s",
+            datefmt="%H:%M:%S",
+        )
+    handler.setFormatter(formatter)
+    root.addHandler(handler)
+    root.setLevel(level)
+
     # Quiet down noisy libraries unless debug logging is requested
     logging.getLogger("httpx").setLevel(level)
     logging.getLogger("litellm").setLevel(level)

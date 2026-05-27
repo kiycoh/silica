@@ -79,6 +79,7 @@ def run_distiller(payload: dict, target: str, hub: str | None = None) -> dict:
             messages=[{"role": "user", "content": user_message}],
             tools=None,
             response_schema=DistillerOutput,
+            max_tokens=4000,
         )
     except Exception as e:
         logger.warning("Distiller provider call failed, falling back to litellm: %s", e)
@@ -87,7 +88,12 @@ def run_distiller(payload: dict, target: str, hub: str | None = None) -> dict:
             model=CONFIG.model,
             messages=[{"role": "user", "content": user_message}],
             tools=None,
+            max_tokens=4000,
         )
+
+    if response.finish_reason == "length":
+        logger.error("Distiller call hit maximum tokens limit (generation cut off)")
+        return {"error": "Distiller call hit maximum tokens limit (generation cut off)"}
 
     raw_output = response.text or ""
     if not raw_output.strip():

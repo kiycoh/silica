@@ -41,6 +41,7 @@ class LLMResponse:
     assistant_message: dict = field(default_factory=dict)
     usage: dict = field(default_factory=dict)
     reasoning: str | None = None
+    finish_reason: str | None = None
 
 
 
@@ -48,6 +49,7 @@ def call_llm(
     model: str,
     messages: list[dict],
     tools: list[dict] | None = None,
+    max_tokens: int | None = None,
 ) -> LLMResponse:
     """Call the LLM with function-calling support.
 
@@ -55,6 +57,7 @@ def call_llm(
         model: litellm model string (e.g. "openrouter/anthropic/claude-sonnet-4-20250514")
         messages: conversation history in OpenAI format
         tools: list of tool JSON schemas (OpenAI function format)
+        max_tokens: optional maximum tokens to generate
 
     Returns:
         LLMResponse with either text or tool_calls populated
@@ -75,6 +78,8 @@ def call_llm(
     if tools:
         kwargs["tools"] = tools
         kwargs["tool_choice"] = "auto"
+    if max_tokens is not None:
+        kwargs["max_tokens"] = max_tokens
 
     try:
         response = litellm.completion(**kwargs)
@@ -84,6 +89,7 @@ def call_llm(
 
     choice = response.choices[0]
     message = choice.message
+    finish_reason = getattr(choice, "finish_reason", None)
 
     # Build the assistant message dict for conversation history
     assistant_msg: dict = {"role": "assistant"}
@@ -139,4 +145,5 @@ def call_llm(
         assistant_message=assistant_msg,
         usage=dict(response.usage) if response.usage else {},
         reasoning=reasoning,
+        finish_reason=finish_reason,
     )
