@@ -75,12 +75,6 @@ def _handle_slash_command(cmd: str, messages: list[dict]) -> bool:
                 print(f"    [{t.cls}] {name}")
         return True
 
-    if cmd == "/clear":
-        messages.clear()
-        messages.append({"role": "system", "content": SYSTEM_PROMPT})
-        print("  Conversation reset.")
-        return True
-
     if cmd == "/help":
         print("  /exit    — exit silica")
         print("  /model   — show current LLM model")
@@ -148,6 +142,20 @@ def main():
 
         # Handle slash commands
         if user_input.startswith("/"):
+            cmd = user_input.strip().lower()
+            if cmd == "/clear":
+                CONSOLE.clear()
+                print_banner()
+                CONSOLE.print(f"  Model: [bold]{CONFIG.model}[/]")
+                if CONFIG.vault_name:
+                    CONSOLE.print(f"  Vault:   [bold]{CONFIG.vault_name}[/]")
+                CONSOLE.print()
+
+                messages.clear()
+                messages.append({"role": "system", "content": SYSTEM_PROMPT})
+                session = build_session()
+                continue
+
             should_continue = _handle_slash_command(user_input, messages)
             if not should_continue:
                 print("  Goodbye.")

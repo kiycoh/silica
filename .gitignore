@@ -150,3 +150,6 @@ Thumbs.db
 # Documentation
 /docs
 CLAUDE.md
+
+# DB
+ruvector.db

@@ -106,11 +106,11 @@ def vault_content_or_excerpt(note_name: str, concept: str, window: int, is_title
     except RuntimeError:
         return ""
 
-def build_concept_entry(name: str, inbox_name: str, collision: dict | None, in_new_concepts: bool, window: int) -> dict:
+def build_concept_entry(name: str, inbox_content: str, collision: dict | None, in_new_concepts: bool, window: int) -> dict:
     entry: dict[str, Any] = {
         "name": name,
         "action_hint": classify_action(collision, in_new_concepts) if collision is not None else "create",
-        "inbox_excerpt": extract_excerpt_from_note(inbox_name, name, window),
+        "inbox_excerpt": extract_excerpt_from_content(inbox_content, name, window),
     }
     if collision and collision.get("hits"):
         best = collision["hits"][0]
@@ -129,11 +129,15 @@ def build_payload(recon_reports: list, window: int) -> dict:
     batches = []
     for report in recon_reports:
         inbox_name = report["file"]
+        try:
+            inbox_content = DRIVER.read_note(inbox_name).content
+        except RuntimeError:
+            inbox_content = ""
         concepts = []
         for collision in report.get("collisions", []):
             concepts.append(build_concept_entry(
                 name=collision["name"],
-                inbox_name=inbox_name,
+                inbox_content=inbox_content,
                 collision=collision,
                 in_new_concepts=False,
                 window=window,
@@ -141,7 +145,7 @@ def build_payload(recon_reports: list, window: int) -> dict:
         for new_name in sorted(report.get("new_concepts", [])):
             concepts.append(build_concept_entry(
                 name=new_name,
-                inbox_name=inbox_name,
+                inbox_content=inbox_content,
                 collision=None,
                 in_new_concepts=True,
                 window=window,
