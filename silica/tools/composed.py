@@ -268,6 +268,36 @@ def silica_run_injector(inbox_file: str, target_dir: str, hub: str = "") -> dict
 # silica_deferred_retry
 # ---------------------------------------------------------------------------
 
+# ---------------------------------------------------------------------------
+# silica_graph_export
+# ---------------------------------------------------------------------------
+
+class GraphExportArgs(BaseModel):
+    output_path: str = Field(
+        default="graph.html",
+        description="Filesystem path for the output HTML file (e.g. 'graph.html' or '/tmp/vault_graph.html')",
+    )
+    folder: str = Field(
+        default="",
+        description="Vault-relative folder to restrict scope (empty = entire vault)",
+    )
+    title: str = Field(
+        default="Silica Knowledge Graph",
+        description="Title shown in the visualization header",
+    )
+
+@tool(GraphExportArgs, cls="composed")
+def silica_graph_export(output_path: str = "graph.html", folder: str = "", title: str = "Silica Knowledge Graph") -> dict[str, Any]:
+    """Generates a self-contained vis.js knowledge graph HTML file from the vault's wikilink structure.
+
+    Runs Louvain community detection to cluster notes by topic.
+    Works with both cli and fs backends. Ghost nodes mark unresolved wikilinks.
+    The output file can be opened directly in any browser — no server needed.
+    """
+    from silica.kernel.graph_export import export_graph
+    return export_graph(output_path=output_path, folder=folder, title=title)
+
+
 class DeferredRetryArgs(BaseModel):
     content_hash: str = Field(description="Content hash of the deferred bundle to retry (from silica_deferred_list)")
 

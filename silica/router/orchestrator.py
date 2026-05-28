@@ -601,10 +601,11 @@ class InjectorFSM:
 
         # S3.2: Take pre-write graph snapshot incrementally
         try:
+            from silica.kernel.wikilink import extract_links as _extract_links
             ops = load_ops(self.context["ops_path"])
             touched_refs = []
             snapshot_domain = set()
-            
+
             for op in ops:
                 path = op.touched_ref()
                 if path:
@@ -612,16 +613,38 @@ class InjectorFSM:
                     ref = NoteRef(name=name, path=path)
                     touched_refs.append(ref)
                     snapshot_domain.add(ref)
-                    
-                    # For mutating ops on existing files (patch/overwrite/delete),
-                    # capture their current outgoing targets to see if they become orphans
+
                     if op.op in (OpType.patch, OpType.overwrite, OpType.delete):
+                        # Capture current outgoing targets so we can detect orphaning.
                         try:
                             for target_ref in DRIVER.links(ref):
                                 snapshot_domain.add(target_ref)
                         except Exception as ex:
                             logger.warning("Failed to fetch pre-write links for %s: %s", path, ex)
-                            
+
+                    elif op.op == OpType.write:
+                        # A write op creates a new note that didn't exist at pre-snapshot
+                        # time.  After the write, graph_snapshot expands its neighborhood
+                        # to include every vault note the new note links to.  If those
+                        # linked notes carry pre-existing unresolved links, they appear as
+                        # new_unres in graph_diff Rule 2 — a false positive.
+                        # Fix: add those link targets to the pre-snapshot domain now so
+                        # their existing ghost links cancel out in the diff.
+                        content = op.snippet or op.content or ""
+                        for link_target in _extract_links(content):
+                            target_stem = link_target.removesuffix(".md")
+                            target_key = target_stem.lower()
+                            try:
+                                if "/" in target_stem:
+                                    target_name = os.path.splitext(os.path.basename(target_stem))[0]
+                                    snapshot_domain.add(NoteRef(name=target_name, path=target_stem + ".md"))
+                                else:
+                                    for match in DRIVER.search_names(target_stem):
+                                        if match.name.lower() == target_key:
+                                            snapshot_domain.add(match)
+                            except Exception as ex:
+                                logger.debug("Snapshot domain expansion: could not resolve '%s': %s", link_target, ex)
+
             snapshot_domain_list = list(snapshot_domain)
             self.context["snapshot_domain"] = [{"name": r.name, "path": r.path} for r in snapshot_domain_list]
             self._pre_graph = DRIVER.graph_snapshot(snapshot_domain_list)

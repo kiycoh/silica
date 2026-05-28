@@ -89,14 +89,23 @@ def test_graph_diff_pre_existing_orphan_outside_domain_not_flagged():
 
 
 def test_graph_diff_new_unresolved_links_rejected():
-    pre = GraphSnapshot(orphans=[], unresolved=[])
+    # NoteA was in the snapshot domain (being patched): it appears in pre.link_counts.
+    # A patch then introduces a new ghost link — genuine regression, must be rejected.
+    pre = GraphSnapshot(
+        orphans=[],
+        unresolved=[],
+        link_counts={"notes/NoteA": 0},  # NoteA observed pre-write (0 outgoing links)
+        backlink_counts={},
+    )
     post = GraphSnapshot(
         orphans=[],
         unresolved=[
             Link(source=NoteRef(name="NoteA", path="notes/NoteA.md"), target="NoteB")
-        ]
+        ],
+        link_counts={"notes/NoteA": 1},
+        backlink_counts={},
     )
-    
+
     success, errors = check_graph_regression(pre, post, created_paths=[])
     assert not success
     assert len(errors) == 1
@@ -153,9 +162,16 @@ def test_graph_diff_ghost_links_from_created_notes_allowed():
 
 
 def test_graph_diff_ghost_links_from_existing_notes_rejected():
-    """A new ghost link whose source is a PRE-EXISTING note is still a regression
-    and must be rejected (e.g. a patch op silently nuked a previously-resolved link)."""
-    pre = GraphSnapshot(orphans=[], unresolved=[])
+    """A new ghost link whose source is a PRE-EXISTING note that was in the
+    snapshot domain (e.g. was being patched) is a genuine regression and must
+    be rejected — e.g. a patch op silently nuked a previously-resolved link.
+    The note must appear in pre.link_counts to establish a baseline."""
+    pre = GraphSnapshot(
+        orphans=[],
+        unresolved=[],
+        link_counts={"notes/ExistingNote": 1},  # was in domain with 1 outgoing link
+        backlink_counts={"notes/ExistingNote": 0},
+    )
     post = GraphSnapshot(
         orphans=[],
         unresolved=[
@@ -164,11 +180,47 @@ def test_graph_diff_ghost_links_from_existing_notes_rejected():
                 target="NowMissing",
             ),
         ],
+        link_counts={"notes/ExistingNote": 2},
+        backlink_counts={"notes/ExistingNote": 0},
     )
-    # ExistingNote was NOT created — it was already in the vault
     success, errors = check_graph_regression(pre, post, created_paths=[])
     assert not success
     assert "New unresolved links introduced" in errors[0]
+
+
+def test_graph_diff_ghost_links_from_pre_existing_note_outside_domain_not_flagged():
+    """Rule 2 domain guard — the false-positive scenario fixed by this commit.
+
+    Chain: write op creates RAM.md with snippet [[GPS]].
+    GPS.md pre-exists in the vault with ghost links [[LiDAR]], [[IMU]].
+    Pre-snapshot: RAM.md didn't exist → empty domain → GPS.md absent from link_counts.
+    Post-snapshot: RAM.md resolves to GPS, so GPS enters the 1-hop neighborhood.
+    GPS's pre-existing ghost links surface as new_unres.
+
+    Without the norm_pre_observed guard this triggered ROLLBACK — a false positive.
+    With the guard: GPS not in norm_pre_observed → no baseline → EXEMPT.
+    """
+    gps_ref = NoteRef(name="GPS", path="notes/GPS.md")
+    pre = GraphSnapshot(
+        orphans=[],
+        unresolved=[],
+        link_counts={},      # GPS.md was not in the pre-snapshot domain
+        backlink_counts={},
+    )
+    post = GraphSnapshot(
+        orphans=[],
+        unresolved=[
+            Link(source=gps_ref, target="LiDAR"),
+            Link(source=gps_ref, target="IMU"),
+        ],
+        link_counts={"notes/RAM": 1, "notes/GPS": 2},
+        backlink_counts={"notes/GPS": 1},
+    )
+    success, errors = check_graph_regression(
+        pre, post, created_paths=["notes/RAM.md"]
+    )
+    assert success, f"Pre-existing ghost links outside pre-domain must not be flagged: {errors}"
+    assert not errors
 
 
 def test_graph_diff_broken_backlinks_rejected():

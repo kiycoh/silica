@@ -74,13 +74,23 @@ def check_graph_regression(
     # 2. New unresolved links check
     pre_unres = {normalize_link(link.source, link.target) for link in pre.unresolved}
     post_unres = {normalize_link(link.source, link.target) for link in post.unresolved}
-    
+
     new_unres = post_unres - pre_unres
     # Exempt links whose source is a newly created note — same carve-out that
     # Rule 1 grants to planned orphans. norm_created is already computed above.
+    #
+    # Also exempt sources not observed in the pre-snapshot domain: when a write
+    # op creates a note that links to an existing vault note, that target's
+    # neighborhood enters the post-snapshot but was absent from the pre-snapshot
+    # (the newly created note didn't exist yet so its link targets weren't
+    # included in the incremental domain).  Pre-existing ghost links on those
+    # target notes surface as new_unres even though nothing changed in them —
+    # a false positive that mirrors the Rule 1 domain-expansion problem already
+    # guarded by norm_pre_observed.
     new_unres_blocking = {
         (src, tgt) for src, tgt in new_unres
         if src not in norm_created
+        and src in norm_pre_observed  # must have a concrete pre-write baseline
     }
     if new_unres_blocking:
         detail_links = []

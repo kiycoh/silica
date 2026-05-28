@@ -149,7 +149,10 @@ Thumbs.db
 
 # Documentation
 /docs
+
+# Agents
 CLAUDE.md
+/.claude
 
 # DB
 ruvector.db

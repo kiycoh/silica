@@ -3,6 +3,8 @@ import logging
 from pydantic import BaseModel
 from silica.driver import DRIVER
 from silica.kernel.ops import Op, OpType
+from silica.kernel.templates import slugify
+from silica.kernel.wikilink import extract_links
 
 logger = logging.getLogger(__name__)
 
@@ -16,6 +18,18 @@ def validate_operations(ops: list[Op] | list[dict], payloads: list, target_dir: 
     """Validates operations against payloads and target_dir using DRIVER."""
     from silica.kernel.ops_io import parse_ops
     ops = parse_ops(ops)
+
+    # Sanitize filesystem-illegal characters (e.g. ':') from path filenames
+    for op in ops:
+        if op.path:
+            folder, filename = os.path.split(op.path)
+            name, ext = os.path.splitext(filename)
+            sanitized = slugify(name) + ext
+            if sanitized != filename:
+                new_path = (os.path.join(folder, sanitized) if folder else sanitized).replace("\\", "/")
+                logger.debug("validate: sanitized path '%s' → '%s'", op.path, new_path)
+                op.path = new_path
+
     valid_concepts: dict[str, set[str]] = {}
     expected_collision_paths: dict[tuple[str, str], str | None] = {}
     inbox_folders = set()
@@ -237,5 +251,52 @@ def validate_operations(ops: list[Op] | list[dict], payloads: list, target_dir: 
 
     if hub_ops:
         validated_ops = hub_ops + validated_ops
+
+    # 4. Prospective link check: patch/overwrite ops must not introduce wikilinks that
+    # cannot be resolved either in the current vault or within this batch's write ops.
+    # write ops are exempt — their outbound links may be intentional forward references.
+    batch_created_names: set[str] = {
+        os.path.splitext(os.path.basename(op.path))[0].lower()
+        for op in validated_ops
+        if op.op == OpType.write and op.path
+    }
+
+    _link_resolve_cache: dict[str, bool] = {}
+
+    def _link_resolves(target: str) -> bool:
+        stem = target.removesuffix(".md")
+        key = stem.lower()
+        if key in _link_resolve_cache:
+            return _link_resolve_cache[key]
+        if key in batch_created_names:
+            _link_resolve_cache[key] = True
+            return True
+        if "/" in stem:
+            result = path_exists(stem + ".md") or path_exists(stem)
+        else:
+            matches = DRIVER.search_names(stem)
+            result = any(r.name.lower() == key for r in matches)
+        _link_resolve_cache[key] = result
+        return result
+
+    prospective_valid: list[Op] = []
+    for op in validated_ops:
+        if op.op not in (OpType.patch, OpType.overwrite):
+            prospective_valid.append(op)
+            continue
+        text = op.snippet or op.content or ""
+        if not text:
+            prospective_valid.append(op)
+            continue
+        links = extract_links(text)
+        broken = [lnk for lnk in links if not _link_resolves(lnk)]
+        if broken:
+            rejected_ops.append(Rejection(
+                op=op,
+                reason=f"Introduces unresolved wikilinks: {broken!r}",
+            ))
+        else:
+            prospective_valid.append(op)
+    validated_ops = prospective_valid
 
     return validated_ops, rejected_ops
