@@ -106,8 +106,8 @@ class SilicaConfig:
         default_factory=lambda: os.getenv("SILICA_BANNER_FONT", "slant")
     )
 
-    # Stile del banner di avvio (crystal, wordmark, minimal)
-    banner_style: Literal["crystal", "wordmark", "minimal"] = field(
+    # Stile del banner di avvio (wordmark, minimal)
+    banner_style: Literal["wordmark", "minimal"] = field(
         default_factory=lambda: os.getenv("SILICA_BANNER_STYLE", "wordmark")  # type: ignore
     )
 

@@ -342,7 +342,7 @@ def test_print_banner_styles(capsys):
         print_banner()
         captured = capsys.readouterr()
         assert "silica" in captured.out
-        assert "Obsidian-native agent" in captured.out
+        assert "Your notes curator agent" in captured.out
 
         # Wordmark/Crystal style with large terminal
         with patch.object(Console, "width", new_callable=PropertyMock, return_value=100), \
@@ -351,7 +351,7 @@ def test_print_banner_styles(capsys):
             print_banner()
             captured = capsys.readouterr()
             assert "___" in captured.out or "\\/" in captured.out
-            assert "Obsidian-native agent" in captured.out
+            assert "Your notes curator agent" in captured.out
 
             # Since crystal is removed, it should behave like wordmark
             CONFIG.banner_style = "crystal"

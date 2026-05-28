@@ -8,7 +8,7 @@ from silica.config import CONFIG
 from silica.ui.console import CONSOLE
 
 _VERSION = "0.2.1"
-_CAPTION = f"  [dim]v{_VERSION} · Obsidian-native agent[/]"
+_CAPTION = f"  [dim]v{_VERSION} · Your personal note curator agent[/]"
 
 
 def _load_wordmark() -> list[str]:
@@ -43,7 +43,7 @@ def _print_wordmark() -> bool:
 
 def print_banner() -> None:
     style = CONFIG.banner_style
-    if style in ("crystal", "wordmark") and _print_wordmark():
+    if style == "wordmark" and _print_wordmark():
         return
     # minimal or fallback from failed guard
-    CONSOLE.print(f"  [bold cyan]silica[/] [dim]v{_VERSION} · Obsidian-native agent[/]")
+    CONSOLE.print(f"  [bold cyan]silica[/] [dim]v{_VERSION} · Your personal note curator agent[/]")
