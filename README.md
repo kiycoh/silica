@@ -65,12 +65,21 @@ Silica decouples conversational freedom from pipeline safety. The same underlyin
 
 ### 2. Live Graph Safety & Non-Regression
 Silica does not just edit text; it protects the graph.
-*   **Graph Diffing:** Silica snapshots the vault graph before a run. If an operation creates orphan notes, generates unresolved links, or breaks existing connections beyond configured thresholds, the transaction is rejected.
-*   **Transaction Rollbacks:** Before applying changes, Silica records a transaction history via Obsidian's file history. A failed gate triggers an immediate, atomic rollback.
+*   **Graph Diffing & Gates:** Silica snapshots the vault graph before running changes. The LINT stage enforces a mathematical non-regression gate:
+    *   *Unplanned Orphans:* Rejects if new orphan notes are created (unless explicitly created by the current batch).
+    *   *New Unresolved Links:* Rejects if new unresolved links are introduced from pre-existing notes (excluding intentional forward references between newly written notes).
+    *   *No Broken Backlinks:* Rejects if incoming link counts decrease for pre-existing notes.
+*   **Robust Transaction Rollbacks:** Before applying edits, Silica builds a transaction log. If any gate fails, the system executes an immediate, atomic rollback using captured `InverseOp` records containing the exact prior note content to revert changes reliably.
 *   **The Golden Fallback Oracle:** The dual-backend system includes a live `cli` backend (bridged directly to Electron's live cache for graph-safe updates) and an `fs` backend (direct disk interaction). The `fs` backend serves as a "golden reference" against which the live CLI is continuously validated to prevent regression.
 
 ### 3. Safety-Hardened Wrapped Tools
 Instead of relying on prompt instructions (e.g., *"never delete notes"*), Silica hardcodes invariants into the tool execution layer itself. For example, `silica_move` natively handles internal links redirection so that links never break, and `silica_delete` enforces strict anti-deletion policies.
+
+### 4. Convergence & Loop Guards
+To prevent conversational agent runs from spinning into infinite loops, the agentic loop implements a strict convergence guard. It aborts the execution run if any tool call with identical arguments fails 3 times consecutively, and injects helpful warning context at 2 consecutive failures.
+
+### 5. Deferred Operations Staging
+Operations that fail validation or gates are not discarded. They are preserved in a local content-hashed deferred store. Users can list or retry these operations later using `silica_deferred_retry` without repeating the full expensive pipeline cycles.
 
 ---
 
@@ -140,6 +149,16 @@ Start the interactive conversational REPL session:
 ```bash
 uv run silica
 ```
+
+#### CLI Slash Commands
+When inside the conversational REPL, the following slash commands are available:
+*   `/clear` — Clears the terminal screen, resets the model message history back to the system prompt, and initializes a clean interactive session.
+*   `/verbose` — Cycles through tool progress display levels: `off` → `new` → `all` → `verbose`. The `verbose` mode activates system `DEBUG` logging with a customized, human-friendly formatting wrapper.
+*   `/thinking` — Toggles the rendering of the LLM's reasoning and thought blocks.
+*   `/model` — Shows the currently active LLM model.
+*   `/tools` — Lists all registered Obsidian-native tools.
+*   `/help` — Displays the slash command help menu.
+*   `/exit` or `/quit` — Exists the conversational session.
 
 For background pipeline runs (e.g., executing the injector recipe):
 

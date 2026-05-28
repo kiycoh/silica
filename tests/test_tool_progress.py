@@ -234,11 +234,11 @@ def test_llm_captures_reasoning(mock_completion):
     messages = [{"role": "user", "content": "hello"}]
     res = call_llm(model="test_model", messages=messages)
     
-    assert res.reasoning == "Thinking..."
+    assert res.reasoning == "Thinking hard..."
     assert res.text == "My answer"
     assert res.assistant_message["role"] == "assistant"
     assert res.assistant_message["content"] == "My answer"
-    assert res.assistant_message["reasoning_content"] == "Deliberating..."
+    assert res.assistant_message["reasoning_content"] == "Thinking hard..."
 
     mock_message2 = MagicMock()
     mock_message2.content = "Answer with blocks"
