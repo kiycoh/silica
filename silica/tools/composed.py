@@ -152,6 +152,18 @@ def silica_sanitize(distiller_output_path: str) -> dict[str, Any]:
     elif isinstance(parsed_obj, dict) and "updates" in parsed_obj:
         parsed_obj["updates"] = normalize_ops(parsed_obj["updates"])
 
+    # Axis enforcement (Layer 2): demote ops whose linked_axis is not in main_thematic_axes.
+    # Only activates when the distiller actually emitted axes — graceful degradation otherwise.
+    if isinstance(parsed_obj, dict):
+        axes = {a.strip().lower() for a in parsed_obj.get("main_thematic_axes", []) if a}
+        if axes:
+            for op in parsed_obj.get("updates", []):
+                if isinstance(op, dict) and op.get("op") in ("write", "patch"):
+                    la = (op.get("linked_axis") or "").strip().lower()
+                    if la and la not in axes:
+                        op["op"] = "skip"
+                        op["reason"] = f"unlinked_axis '{op.get('linked_axis')}' not in main_thematic_axes"
+
     return {
         "success": True,
         "parsed": parsed_obj,

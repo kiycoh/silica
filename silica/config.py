@@ -114,7 +114,7 @@ class SilicaConfig:
     # Embedding model — used by silica/kernel/embed.py (Phase 3)
     # Example: "qwen3-embedding-8b" for LM Studio, "text-embedding-3-small" for OpenAI
     embedding_model: str = field(
-        default_factory=lambda: os.getenv("SILICA_EMBEDDING_MODEL", "qwen3-embedding-8b")
+        default_factory=lambda: os.getenv("SILICA_EMBEDDING_MODEL", "qwen3-embedding-4b")
     )
 
     # Base URL for the embeddings endpoint (defaults to the same LM Studio endpoint)
@@ -136,6 +136,14 @@ class SilicaConfig:
     )
     sim_threshold_low: float = field(
         default_factory=lambda: float(os.getenv("SILICA_SIM_THRESHOLD_LOW", "0.65"))
+    )
+
+    # Salience gate (Phase 2.05): concept kept only if cosine(concept, doc_centroid) >= threshold
+    sim_threshold_theme: float = field(
+        default_factory=lambda: float(os.getenv("SILICA_SIM_THRESHOLD_THEME", "0.35"))
+    )
+    salience_gate_enabled: bool = field(
+        default_factory=lambda: os.getenv("SILICA_SALIENCE_GATE", "True").lower() in ("true", "1", "t")
     )
 
     @property

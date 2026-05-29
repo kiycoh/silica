@@ -180,6 +180,7 @@ def test_fsm_multi_chunk_loop(
         # First chunk cycle
         InjectorState.RECON,
         InjectorState.PAYLOAD,
+        InjectorState.SALIENCE,   # Phase 2.05 (best-effort, embedder unavailable → skip)
         InjectorState.COLLISION,  # Phase 5 (best-effort, no index → skip)
         InjectorState.DELEGATE,
         InjectorState.SANITIZE,
@@ -190,7 +191,7 @@ def test_fsm_multi_chunk_loop(
         InjectorState.AUTOLINK,   # Phase 4
         InjectorState.LINT,
         InjectorState.CLEANUP,
-        # Second chunk cycle
+        # Second chunk cycle (SALIENCE does not re-run)
         InjectorState.COLLISION,  # Phase 5 (best-effort, no index → skip)
         InjectorState.DELEGATE,
         InjectorState.SANITIZE,
@@ -364,6 +365,9 @@ def test_fsm_recipe_transition_sequence():
     assert fsm.state == InjectorState.PAYLOAD
 
     fsm._transition_success()
+    assert fsm.state == InjectorState.SALIENCE   # Phase 2.05
+
+    fsm._transition_success()
     assert fsm.state == InjectorState.COLLISION  # Phase 5
 
     fsm._transition_success()
@@ -449,6 +453,7 @@ def test_fsm_recipe_end_to_end_flow(
     expected_sequence = [
         InjectorState.RECON,
         InjectorState.PAYLOAD,
+        InjectorState.SALIENCE,   # Phase 2.05 (best-effort, embedder unavailable → skip)
         InjectorState.COLLISION,  # Phase 5 (best-effort, empty index → skip)
         InjectorState.DELEGATE,
         InjectorState.SANITIZE,

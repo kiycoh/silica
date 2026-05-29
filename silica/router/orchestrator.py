@@ -49,6 +49,7 @@ class InjectorState(Enum):
     INIT = auto()
     RECON = auto()         # Phase 1
     PAYLOAD = auto()       # Phase 2.0
+    SALIENCE = auto()      # Phase 2.05 — thematic salience gate (drop off-theme concepts)
     COLLISION = auto()     # Phase 5 — dedup routing: high-sim→patch, borderline→defer, low→write
     DELEGATE = auto()      # Phase 2.1 — real Distiller LLM
     SANITIZE = auto()      # Phase 2.2
@@ -140,6 +141,7 @@ class InjectorFSM(BaseFSM[InjectorState]):
         self._phase_to_state: dict[str, InjectorState] = {
             "recon":      InjectorState.RECON,
             "payload":    InjectorState.PAYLOAD,
+            "salience":   InjectorState.SALIENCE,
             "collision":  InjectorState.COLLISION,
             "distill":    InjectorState.DELEGATE,
             "sanitize":   InjectorState.SANITIZE,
@@ -157,6 +159,7 @@ class InjectorFSM(BaseFSM[InjectorState]):
         self._HANDLERS = {
             InjectorState.RECON: self._handle_recon,
             InjectorState.PAYLOAD: self._handle_payload,
+            InjectorState.SALIENCE: self._handle_salience,
             InjectorState.COLLISION: self._handle_collision,
             InjectorState.DELEGATE: self._handle_delegate,
             InjectorState.SANITIZE: self._handle_sanitize,
@@ -378,6 +381,78 @@ class InjectorFSM(BaseFSM[InjectorState]):
 
         self._progress_note("payload", "payload", "done")
         logger.info(f"Pipeline initialized with {len(self._chunks)} independent chunks.")
+        self._transition_success()
+
+    def _handle_salience(self) -> None:
+        """Thematic salience gate — Phase 2.05.
+
+        Single-pass over ALL chunks: drops concepts whose embedding is too far
+        from the document's thematic centroid.  Best-effort: any failure
+        (embedder down, empty index) is logged and chunks pass unchanged.
+        Does NOT re-run on subsequent chunk iterations — _eval_loop_or_done
+        restarts from COLLISION, which is correct.
+        """
+        if not getattr(CONFIG, "salience_gate_enabled", True):
+            self._transition_success()
+            return
+
+        τ_theme = getattr(CONFIG, "sim_threshold_theme", 0.35)
+        try:
+            from silica.agent.providers import get_embedder
+            from silica.kernel.embed import document_theme_vector, _cosine
+            from silica.kernel.recon import _strip_frontmatter
+            embedder = get_embedder(CONFIG)
+        except Exception as _e:
+            logger.warning("SALIENCE: embedder unavailable (%s) — skipping", _e)
+            self._transition_success()
+            return
+
+        self._get_chunks_from_context_if_empty()
+        theme_cache: dict[str, list[float]] = {}
+        dropped = 0
+
+        for chunk in self._chunks:
+            for batch in chunk.get("batches", []):
+                inbox_file = batch.get("inbox_file", self.inbox_file)
+                if inbox_file not in theme_cache:
+                    try:
+                        body = _strip_frontmatter(DRIVER.read_note(inbox_file).content)
+                    except Exception:
+                        body = ""
+                    theme_cache[inbox_file] = document_theme_vector(embedder, body)
+                theme = theme_cache[inbox_file]
+                if not theme:
+                    continue
+
+                concepts = batch.get("concepts", [])
+                texts = [
+                    (c.get("name", "") + "\n" + c.get("inbox_excerpt", "")) if isinstance(c, dict) else str(c)
+                    for c in concepts
+                ]
+                if not texts:
+                    continue
+                try:
+                    vecs = embedder.embed(texts)
+                except Exception as _e:
+                    logger.debug("SALIENCE: embed failed (%s) — keeping batch", _e)
+                    continue
+
+                kept = []
+                for c, v in zip(concepts, vecs):
+                    score = _cosine(v, theme)
+                    name = c.get("name", "") if isinstance(c, dict) else str(c)
+                    if score < τ_theme:
+                        logger.info(
+                            "SALIENCE: drop '%s' (score=%.3f < τ_theme=%.2f)", name, score, τ_theme
+                        )
+                        dropped += 1
+                    else:
+                        kept.append(c)
+                batch["concepts"] = kept
+
+        self.context["salience_dropped"] = dropped
+        if dropped:
+            logger.info("SALIENCE: %d concept(s) below thematic threshold removed", dropped)
         self._transition_success()
 
     def _handle_collision(self) -> None:

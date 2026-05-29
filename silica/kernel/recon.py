@@ -4,6 +4,8 @@ MIN_LEN, MAX_LEN = 3, 50
 TITLE_BONUS = 50
 TOP_K_HITS = 3
 
+_FRONTMATTER_RE = re.compile(r"\A---\n.*?\n---\n?", re.DOTALL)
+
 STOPWORDS = {
     "di", "da", "in", "con", "su", "per", "tra", "fra", "a", "e", "o", "ma", "se", "anche", "come",
     "il", "lo", "la", "i", "gli", "le", "un", "uno", "una", "del", "dello", "della", "dei", "degli",
@@ -52,11 +54,15 @@ def from_headings(content: str) -> set:
 def from_bold(content: str) -> set:
     return {m.group(1) for m in re.finditer(r'\*\*(.+?)\*\*', content)}
 
+def _strip_frontmatter(content: str) -> str:
+    return _FRONTMATTER_RE.sub('', content, count=1)
+
 def from_acronyms(content: str) -> set:
     return set(re.findall(r'\b[A-Z]{2,6}\b', content))
 
 def extract_concepts(content: str) -> set:
-    raw = from_headings(content) | from_bold(content) | from_acronyms(content)
+    body = _strip_frontmatter(content)
+    raw = from_headings(body) | from_bold(body) | from_acronyms(body)
     return dedupe({c for c in (normalize(r) for r in raw) if is_concept(c)})
 
 def dedupe(concepts: set) -> set:

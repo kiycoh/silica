@@ -45,6 +45,31 @@ def _cosine(a: list[float], b: list[float]) -> float:
     return dot / (mag_a * mag_b)
 
 
+def centroid(vectors: list[list[float]]) -> list[float]:
+    """Component-wise mean of a list of vectors. Returns [] if empty or ragged."""
+    if not vectors:
+        return []
+    dim = len(vectors[0])
+    if any(len(v) != dim for v in vectors):
+        return []
+    return [sum(v[i] for v in vectors) / len(vectors) for i in range(dim)]
+
+
+def document_theme_vector(embedder: Any, body: str, *, segment_chars: int = _MAX_CHARS) -> list[float]:
+    """Thematic centroid of a document: embed body segments then average.
+
+    Robust on long notes. Returns [] if embedder fails or body is empty.
+    """
+    if not body.strip():
+        return []
+    segs = [body[i:i + segment_chars] for i in range(0, len(body), segment_chars)] or [body]
+    try:
+        vecs = embedder.embed(segs)
+    except Exception:
+        return []
+    return centroid(vecs)
+
+
 # ---------------------------------------------------------------------------
 # EmbedStore
 # ---------------------------------------------------------------------------

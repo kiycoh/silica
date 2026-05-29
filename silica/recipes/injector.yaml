@@ -8,6 +8,7 @@ gates:
 phases:
   - { id: recon,        kind: mechanical, tool: silica_recon }
   - { id: payload,      kind: mechanical, tool: silica_payload, partition_if_over: 7 }
+  - { id: salience,     kind: mechanical, best_effort: true }
   - { id: collision,    kind: mechanical, best_effort: true }
   - { id: distill,      kind: semantic,   worker: distiller, fanout: true, max_workers: 7 }
   - { id: sanitize,     kind: mechanical, tool: silica_sanitize }

@@ -57,6 +57,7 @@ For every concept in every batch, decide exactly ONE action:
 - **patch** — vault_collision is not null AND inbox_excerpt contains facts (definitions, formulas, examples, code blocks, structural notes, tables) that are NOT present in vault_collision.excerpt. Extract only the missing facts.
 - **write** — vault_collision is null (concept is new to the vault). Extract a complete, factually-dense definition plus supporting details for a new spoke note.
 - **skip** — vault_collision is not null AND already covers everything in inbox_excerpt, OR the concept is genuine semantic noise (generic acronym, slide marker, rhetorical fragment) with no substantive payload.
+- Every write/patch op MUST set `"linked_axis"` to exactly one of `main_thematic_axes`. If a concept does not substantively expand any axis (mere mention, unexpanded acronym, passive bibliographic reference), emit `"op": "skip"` with `"reason": "off-axis"`.
 
 The `action_hint` field is the Router's mechanical guess based on collision tiers. Treat it as a starting bias, NOT a binding constraint. You may overrule it based on the actual excerpt content — e.g. an `enrich`-hinted concept where the vault excerpt already contains all the inbox facts becomes a `skip`.
 
@@ -87,6 +88,8 @@ Process EVERY concept in EVERY batch in the payload. Silent omission is a failur
 
 ## Output Schema
 Respond with ONLY the JSON object below. No prose preamble. No markdown fences (no ```json). No trailing commentary after the closing brace.
+
+Your JSON MUST contain `"main_thematic_axes"` (3–5 short strings naming the pillars ACTUALLY discussed in the inbox excerpts) BEFORE `"updates"`. Populate the axes FIRST, reasoning from the excerpt bodies — NOT from isolated acronyms, wikilinks, or frontmatter.
 
 ## Few-Shot Example
 
@@ -132,12 +135,14 @@ Respond with ONLY the JSON object below. No prose preamble. No markdown fences (
 
 ### Example Output JSON (NO prose, NO markdown fences):
 {
+  "main_thematic_axes": ["gradient-based optimization", "neural network training", "Python ML tooling"],
   "updates": [
     {
       "heading": "Backpropagation",
       "op": "patch",
       "path": "/abs/path/to/existing/Backpropagation.md",
       "source_basename": "Lezione 04.md",
+      "linked_axis": "neural network training",
       "snippet": "- Definizione formale: la backpropagation calcola il gradiente della funzione di perdita rispetto ai pesi tramite la regola della catena applicata ricorsivamente dallo strato di output verso l'input.\n- Formula del gradiente per il peso $w_{ij}^{(l)}$: $\\frac{\\partial \\mathcal{L}}{\\partial w_{ij}^{(l)}} = \\delta_j^{(l)} \\cdot a_i^{(l-1)}$"
     },
     {
@@ -147,13 +152,14 @@ Respond with ONLY the JSON object below. No prose preamble. No markdown fences (
       "path": "{TARGET}/Adam Optimizer.md",
       "source_basename": "Lezione 04.md",
       "hub": "{HUB_NAME}",
+      "linked_axis": "gradient-based optimization",
       "snippet": "Adam (Adaptive Moment Estimation) è un algoritmo di ottimizzazione stocastica che combina i vantaggi di AdaGrad e RMSProp mantenendo medie mobili sia del gradiente (primo momento) sia del suo quadrato (secondo momento).\n\n- Iperparametri tipici: $\\beta_1 = 0.9$, $\\beta_2 = 0.999$, $\\epsilon = 10^{-8}$"
     },
     {
       "heading": "PIL",
       "op": "skip",
       "source_basename": "Lezione 04.md",
-      "reason": "acronym false positive — refers to Python Imaging Library in inbox context, no substantive new content beyond what vault already documents"
+      "reason": "off-axis — acronym citato di sfuggita, nessun contenuto substantivo oltre a quanto già documentato nel vault"
     }
   ]
 }
