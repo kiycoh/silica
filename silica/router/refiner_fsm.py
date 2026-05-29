@@ -35,6 +35,7 @@ class RefinerState(Enum):
     VALIDATE = auto()      # Gate: check rejection rate
     SNAPSHOT = auto()      # build inverses
     WRITE = auto()         # bulk write ops
+    AUTOLINK = auto()      # Phase 4 — inject wikilinks into touched notes (best-effort)
     LINT = auto()          # Gate: lint + graph diff
     CLEANUP = auto()       # mark committed
     ROLLBACK = auto()      # rollback txn if gate fails
@@ -93,6 +94,7 @@ class RefinerFSM:
             RefinerState.VALIDATE: self._handle_validate,
             RefinerState.SNAPSHOT: self._handle_snapshot,
             RefinerState.WRITE: self._handle_write,
+            RefinerState.AUTOLINK: self._handle_autolink,
             RefinerState.LINT: self._handle_lint,
             RefinerState.CLEANUP: self._handle_cleanup,
             RefinerState.ROLLBACK: self._handle_rollback,
@@ -187,6 +189,7 @@ class RefinerFSM:
             "validate": RefinerState.VALIDATE,
             "snapshot": RefinerState.SNAPSHOT,
             "write": RefinerState.WRITE,
+            "autolink": RefinerState.AUTOLINK,
             "lint": RefinerState.LINT,
             "cleanup": RefinerState.CLEANUP,
             "rollback": RefinerState.ROLLBACK,
@@ -407,13 +410,10 @@ class RefinerFSM:
                 "5. Return the result structured in JSON format containing a single key 'content' with the full body of the note (including normalized and updated YAML frontmatter tags, and the enriched body)."
             )
 
-            user_message = (
-                f"Enrich the following note.\n"
-                f"Title: {title}\n"
-                f"Path: {path}\n"
-                f"Current content of the note:\n"
-                f"{content}"
-            )
+            from silica.kernel.context_builder import build_context
+            note_payload = f"Title: {title}\nPath: {path}\nCurrent content:\n{content}"
+            ctx = build_context(checkpoint_id="enrich", payload=note_payload)
+            user_message = f"Enrich the following note.\n\n{ctx}"
 
             try:
                 response = call_llm(
@@ -564,6 +564,44 @@ class RefinerFSM:
             )
 
         self.context["write"] = res
+        self._transition_success()
+
+    def _handle_autolink(self) -> None:
+        """Best-effort wikilink injection into all ops written this run (best_effort: true)."""
+        ops_path = self.context.get("ops_path")
+        if not ops_path:
+            self._transition_success()
+            return
+
+        try:
+            from silica.kernel.autolink import autolink, build_title_index
+            from silica.kernel.ops_io import load_ops
+            from silica.kernel.ops import OpType
+
+            ops = load_ops(ops_path)
+            touched_paths = [
+                op.touched_ref()
+                for op in ops
+                if op.touched_ref() and op.op not in (OpType.delete, OpType.skip)
+            ]
+
+            if touched_paths:
+                all_refs = DRIVER.list_files()
+                title_index = build_title_index(all_refs)
+                total_added = 0
+                for path in touched_paths:
+                    try:
+                        nc = DRIVER.read_note(path)
+                        new_body, added = autolink(nc.content or "", title_index)
+                        if added:
+                            DRIVER.overwrite(path, new_body)
+                            total_added += len(added)
+                    except Exception as _ae:
+                        logger.debug("AUTOLINK: skipped '%s' (non-fatal): %s", path, _ae)
+                logger.info("AUTOLINK: finished — %d link(s) added", total_added)
+        except Exception as e:
+            logger.warning("AUTOLINK: phase failed (non-fatal): %s", e)
+
         self._transition_success()
 
     def _handle_lint(self) -> None:

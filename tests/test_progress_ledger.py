@@ -4,7 +4,13 @@ from __future__ import annotations
 import pytest
 from pathlib import Path
 
-from silica.planner.progress import IssueCard, ProgressLedger, Task
+from silica.planner.progress import (
+    CheckpointSpec,
+    IssueCard,
+    ProgressLedger,
+    Task,
+    TaskLedger,
+)
 
 
 # ---------------------------------------------------------------------------
@@ -254,3 +260,232 @@ def test_last_updated_advances_on_mutation(tmp_path):
     p.set_status("recon", "running")
 
     assert p.last_updated > before
+
+
+# ---------------------------------------------------------------------------
+# content_hash field on Task (Phase 2 idempotency hook)
+# ---------------------------------------------------------------------------
+
+def test_task_content_hash_defaults_none(tmp_path):
+    import silica.planner.progress as _mod
+    _mod._RUNS_DIR = tmp_path
+
+    p = ProgressLedger.new(mode="inject", inputs={})
+    t = p.add_task("recon", task_id="recon")
+    assert t.content_hash is None
+
+
+def test_task_content_hash_survives_roundtrip(tmp_path):
+    import silica.planner.progress as _mod
+    _mod._RUNS_DIR = tmp_path
+
+    p = ProgressLedger.new(mode="inject", inputs={})
+    t = p.add_task("recon", task_id="recon")
+    t.content_hash = "abc123"
+    p.save()
+    p2 = ProgressLedger.load(p.run_id)
+
+    assert p2.tasks[0].content_hash == "abc123"
+
+
+# ---------------------------------------------------------------------------
+# deferred status
+# ---------------------------------------------------------------------------
+
+def test_deferred_status_is_accepted(tmp_path):
+    import silica.planner.progress as _mod
+    _mod._RUNS_DIR = tmp_path
+
+    p = ProgressLedger.new(mode="inject", inputs={})
+    p.add_task("distill", task_id="distill")
+    p.set_status("distill", "running")
+    p.set_status("distill", "deferred")
+
+    assert p.tasks[0].status == "deferred"
+    assert p.cursor is None
+
+
+def test_next_pending_skips_deferred(tmp_path):
+    import silica.planner.progress as _mod
+    _mod._RUNS_DIR = tmp_path
+
+    p = ProgressLedger.new(mode="inject", inputs={})
+    p.add_task("distill", task_id="distill")
+    p.set_status("distill", "deferred")
+
+    assert p.next_pending() is None
+
+
+# ---------------------------------------------------------------------------
+# CheckpointSpec
+# ---------------------------------------------------------------------------
+
+def test_checkpoint_spec_fields():
+    cs = CheckpointSpec(id="recon", kind="mechanical", objective="silica_recon")
+    assert cs.id == "recon"
+    assert cs.kind == "mechanical"
+    assert cs.objective == "silica_recon"
+
+
+# ---------------------------------------------------------------------------
+# TaskLedger — save / load / write-once idempotency
+# ---------------------------------------------------------------------------
+
+def test_task_ledger_roundtrip(tmp_path):
+    import silica.planner.progress as _mod
+    _mod._RUNS_DIR = tmp_path
+
+    specs = [
+        CheckpointSpec("recon",   "mechanical", "silica_recon"),
+        CheckpointSpec("distill", "semantic",   "distiller"),
+        CheckpointSpec("validate","gate",        "silica_validate_ops"),
+    ]
+    tl = TaskLedger.new(
+        run_id="testrun001",
+        user_request="inject Inbox/foo.md → Concepts/",
+        checkpoints=specs,
+        facts={"source": "foo.md"},
+    )
+    tl.save()
+    tl2 = TaskLedger.load("testrun001")
+
+    assert tl2.run_id == "testrun001"
+    assert tl2.user_request == "inject Inbox/foo.md → Concepts/"
+    assert len(tl2.checkpoints) == 3
+    assert tl2.checkpoints[1].kind == "semantic"
+    assert tl2.facts == {"source": "foo.md"}
+
+
+def test_task_ledger_save_is_write_once(tmp_path):
+    """Second save() must not overwrite the file."""
+    import silica.planner.progress as _mod
+    _mod._RUNS_DIR = tmp_path
+
+    tl = TaskLedger.new(run_id="testrun002", user_request="original", checkpoints=[])
+    tl.save()
+
+    # Mutate and save again — disk must still have the original content
+    tl.user_request = "mutated"
+    tl.save()
+
+    tl2 = TaskLedger.load("testrun002")
+    assert tl2.user_request == "original"
+
+
+# ---------------------------------------------------------------------------
+# ProgressLedger.digest()
+# ---------------------------------------------------------------------------
+
+def test_digest_contains_run_id(tmp_path):
+    import silica.planner.progress as _mod
+    _mod._RUNS_DIR = tmp_path
+
+    p = ProgressLedger.new(mode="inject", inputs={"inbox_file": "Inbox/test.md"})
+    p.add_task("recon", task_id="recon")
+    p.set_status("recon", "running")
+
+    d = p.digest()
+    assert p.run_id[:8] in d
+    assert "inject" in d
+    assert "recon" in d
+
+
+def test_digest_under_500_tokens(tmp_path):
+    """Digest must stay compact enough for LLM context injection."""
+    import silica.planner.progress as _mod
+    _mod._RUNS_DIR = tmp_path
+
+    specs = [CheckpointSpec(f"phase_{i}", "mechanical", f"tool_{i}") for i in range(10)]
+    tl = TaskLedger.new(run_id="bigrun", user_request="inject big vault", checkpoints=specs)
+    tl.save()
+
+    p = ProgressLedger.new(mode="inject", inputs={"inbox_file": "Inbox/big.md", "target_dir": "Concepts/"})
+    p.run_id = "bigrun"  # align with TaskLedger
+    for i in range(10):
+        p.add_task(f"tool_{i}", task_id=f"phase_{i}")
+    p.set_status("phase_0", "done")
+    p.set_status("phase_1", "running")
+
+    d = p.digest()
+    # Rough estimate: 1 token ≈ 4 chars; 500 tokens ≈ 2000 chars
+    assert len(d) < 2000, f"digest too long ({len(d)} chars)"
+
+
+def test_digest_shows_task_ledger_plan(tmp_path):
+    import silica.planner.progress as _mod
+    _mod._RUNS_DIR = tmp_path
+
+    specs = [
+        CheckpointSpec("recon",   "mechanical", "silica_recon"),
+        CheckpointSpec("distill", "semantic",   "distiller"),
+    ]
+    tl = TaskLedger.new(run_id="plantest", user_request="inject test", checkpoints=specs)
+    tl.save()
+
+    p = ProgressLedger.new(mode="inject", inputs={})
+    p.run_id = "plantest"
+    d = p.digest()
+
+    assert "PLAN" in d
+    assert "recon(mechanical)" in d
+    assert "distill(semantic)" in d
+
+
+def test_digest_graceful_without_task_ledger(tmp_path):
+    """digest() must not raise when TaskLedger doesn't exist on disk."""
+    import silica.planner.progress as _mod
+    _mod._RUNS_DIR = tmp_path
+
+    p = ProgressLedger.new(mode="inject", inputs={})
+    p.add_task("recon", task_id="recon")
+    # No TaskLedger saved — digest() should still return something useful
+    d = p.digest()
+    assert "RUN" in d
+    assert "recon" in d
+
+
+# ---------------------------------------------------------------------------
+# silica_ledger_digest tool
+# ---------------------------------------------------------------------------
+
+def test_silica_ledger_digest_tool(tmp_path):
+    import silica.planner.progress as _mod
+    _mod._RUNS_DIR = tmp_path
+
+    p = ProgressLedger.new(mode="inject", inputs={"inbox_file": "Inbox/x.md"})
+    p.add_task("recon", task_id="recon")
+    p.set_status("recon", "done")
+    p.save()
+
+    from silica.tools.composed import silica_ledger_digest
+    result = silica_ledger_digest(run_id=p.run_id)
+
+    assert "error" not in result
+    assert result["run_id"] == p.run_id
+    assert "digest" in result
+    assert p.run_id[:8] in result["digest"]
+
+
+def test_silica_ledger_digest_tool_latest_run(tmp_path):
+    """Passing run_id='' should pick the most recently modified run."""
+    import silica.planner.progress as _mod
+    _mod._RUNS_DIR = tmp_path
+
+    p = ProgressLedger.new(mode="inject", inputs={})
+    p.add_task("recon", task_id="recon")
+    p.save()
+
+    from silica.tools.composed import silica_ledger_digest
+    result = silica_ledger_digest(run_id="")
+
+    assert "error" not in result
+    assert result["run_id"] == p.run_id
+
+
+def test_silica_ledger_digest_tool_unknown_run(tmp_path):
+    import silica.planner.progress as _mod
+    _mod._RUNS_DIR = tmp_path
+
+    from silica.tools.composed import silica_ledger_digest
+    result = silica_ledger_digest(run_id="doesnotexist")
+    assert "error" in result

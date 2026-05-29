@@ -40,19 +40,29 @@ def payload_checksum(payload_json: str) -> str:
     return hashlib.sha256(payload_json.encode("utf-8")).hexdigest()
 
 
-def run_distiller(payload: dict, target: str, hub: str | None = None) -> dict:
+def run_distiller(
+    payload: dict,
+    target: str,
+    hub: str | None = None,
+    ledger_digest: str | None = None,
+    steer_context: str | None = None,
+) -> dict:
     """Call the Distiller LLM (single-turn) for one payload chunk.
 
     Args:
         payload: the payload dict (schema_version + batches)
         target: vault-relative target directory for new notes
         hub: optional [[Hub]] note name
+        ledger_digest: compact run summary injected as context header (Phase 2)
+        steer_context: corrective steering note injected when re-attempting after
+            rejection (Phase 6). States why the previous output was rejected.
 
     Returns:
         parsed dict with {"updates": [...]} or {"error": ...}
     """
     from silica.agent.providers import get_provider
     from silica.config import CONFIG
+    from silica.kernel.context_builder import build_context
     from silica.kernel.ops import DistillerOutput
     from silica.kernel.sanitize import parse_json
 
@@ -60,14 +70,27 @@ def run_distiller(payload: dict, target: str, hub: str | None = None) -> dict:
     payload_json = json.dumps(payload, ensure_ascii=False, indent=2)
     checksum = payload_checksum(payload_json)
 
-    # Build a single-turn user message: protocol + payload inline.
-    # For S2.3 (one worker), we inline the payload directly.
-    # S3.1 (fan-out) passes payload-by-pointer via file reference.
+    # Assemble context through the context assembler (Phase 2 rails).
+    # Only ledger_digest + the checkpoint payload reach the model — no other
+    # vault content is forwarded here.
+    ctx = build_context(
+        checkpoint_id="distill",
+        payload=payload,
+        ledger_digest=ledger_digest,
+    )
+
+    steer_section = (
+        f"\n\n## STEERING CORRECTION (attempt {steer_context.split('|attempt=')[1].split('|')[0] if '|attempt=' in steer_context else '?'})\n"
+        f"{steer_context}\n\n"
+        f"Please revise your output to avoid the issues described above.\n"
+        if steer_context else ""
+    )
     user_message = (
         f"{prompt_text}\n\n"
         f"---\n"
-        f"## Payload (SHA-256: {checksum})\n\n"
-        f"{payload_json}"
+        f"Payload SHA-256: {checksum}\n\n"
+        f"{ctx}"
+        f"{steer_section}"
     )
 
     logger.info("Calling Distiller LLM (payload checksum %s)", checksum[:12])

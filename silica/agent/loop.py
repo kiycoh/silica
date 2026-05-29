@@ -14,10 +14,15 @@ This is the 'while True' from SILICA.md §8.1:
 Everything else (streaming, TUI, context compression) is ergonomics
 around this nucleus. Build this first, then ergonomics.
 """
-from typing import Callable, Any
+from __future__ import annotations
+
+from typing import TYPE_CHECKING, Callable, Any
 import time
 import logging
 import json
+
+if TYPE_CHECKING:
+    from silica.planner.progress import ProgressLedger
 
 from silica.agent.events import (
     ToolProgressEvent,
@@ -63,6 +68,7 @@ def run_agent(
     messages: list[dict],
     model: str,
     tool_progress_callback: ToolProgressCallback = None,
+    progress: "ProgressLedger | None" = None,
 ) -> str:
     """Execute the agentic loop until the model produces a text response.
 
@@ -187,6 +193,16 @@ def run_agent(
                 failures_count = consecutive_failures[tool_key]
                 if failures_count >= 3:
                     logger.error("Convergence guard: tool '%s' with args %s failed %d times consecutively. Aborting agent run.", tc.name, tc.args, failures_count)
+                    if progress is not None and progress.cursor:
+                        try:
+                            progress.set_status(
+                                progress.cursor,
+                                "blocked",
+                                error=f"Convergence guard: '{tc.name}' failed 3× consecutively",
+                            )
+                            progress.save()
+                        except Exception:
+                            pass
                     raise RuntimeError(
                         f"Tool '{tc.name}' failed 3 consecutive times with the same arguments: {tc.args}"
                     )

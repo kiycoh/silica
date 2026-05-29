@@ -1,0 +1,26 @@
+[
+  {
+    "id": "high_sim_duplicate",
+    "description": "Near-identical concepts should be routed to patch",
+    "concept": "Backpropagation Algorithm",
+    "existing_note": "Backpropagation",
+    "expected_routing": "patch",
+    "expected_min_score": 0.85
+  },
+  {
+    "id": "low_sim_new",
+    "description": "Unrelated concept should be kept for new write",
+    "concept": "Quantum Chromodynamics",
+    "existing_note": "Neural Networks",
+    "expected_routing": "write",
+    "expected_max_score": 0.65
+  },
+  {
+    "id": "borderline_defer",
+    "description": "Related but distinct concepts should be deferred",
+    "concept": "Stochastic Gradient Descent",
+    "existing_note": "Gradient Descent",
+    "expected_routing": "defer",
+    "expected_score_range": [0.65, 0.85]
+  }
+]

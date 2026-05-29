@@ -111,6 +111,33 @@ class SilicaConfig:
         default_factory=lambda: os.getenv("SILICA_BANNER_STYLE", "wordmark")  # type: ignore
     )
 
+    # Embedding model — used by silica/kernel/embed.py (Phase 3)
+    # Example: "qwen3-embedding-8b" for LM Studio, "text-embedding-3-small" for OpenAI
+    embedding_model: str = field(
+        default_factory=lambda: os.getenv("SILICA_EMBEDDING_MODEL", "qwen3-embedding-8b")
+    )
+
+    # Base URL for the embeddings endpoint (defaults to the same LM Studio endpoint)
+    embedding_base_url: str = field(
+        default_factory=lambda: os.getenv("SILICA_EMBEDDING_BASE_URL", "http://localhost:1234/v1")
+    )
+
+    # API key for embeddings endpoint (usually same as chat, or "lm-studio" for local)
+    embedding_api_key: str = field(
+        default_factory=lambda: os.getenv("SILICA_EMBEDDING_API_KEY", "lm-studio")
+    )
+
+    # Cosine similarity thresholds for dedup routing (Phase 5)
+    # score >= sim_threshold_high → strong duplicate → patch existing note
+    # score <= sim_threshold_low  → clearly new concept → write new note
+    # between the two → ambiguous → deferred store
+    sim_threshold_high: float = field(
+        default_factory=lambda: float(os.getenv("SILICA_SIM_THRESHOLD_HIGH", "0.85"))
+    )
+    sim_threshold_low: float = field(
+        default_factory=lambda: float(os.getenv("SILICA_SIM_THRESHOLD_LOW", "0.65"))
+    )
+
     @property
     def verbose(self) -> bool:
         return self.debug_logging

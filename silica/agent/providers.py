@@ -166,6 +166,39 @@ class OpenAICompatibleProvider:
                 raise
 
 
+class OpenAIEmbedder:
+    """Thin wrapper for the OpenAI-compatible /v1/embeddings endpoint.
+
+    Uses the same SDK already present in the project. Suitable for any
+    provider that speaks the OpenAI API (LM Studio, OpenRouter, etc.).
+    """
+
+    def __init__(self, base_url: str, api_key: str, model: str):
+        self.client = openai.OpenAI(base_url=base_url, api_key=api_key, timeout=60.0)
+        self.model = model
+
+    def embed(self, texts: list[str]) -> list[list[float]]:
+        """Return one embedding vector per input text.
+
+        Vectors are normalised by most embedding models; cosine similarity is
+        therefore equivalent to dot-product for those models.
+        """
+        if not texts:
+            return []
+        response = self.client.embeddings.create(model=self.model, input=texts)
+        # The API guarantees ordering matches the input list
+        return [item.embedding for item in sorted(response.data, key=lambda x: x.index)]
+
+
+def get_embedder(config: Any) -> OpenAIEmbedder:
+    """Return an embedder configured from SilicaConfig."""
+    return OpenAIEmbedder(
+        base_url=getattr(config, "embedding_base_url", "http://localhost:1234/v1"),
+        api_key=getattr(config, "embedding_api_key", "lm-studio"),
+        model=getattr(config, "embedding_model", "qwen3-embedding-8b"),
+    )
+
+
 def get_provider(config: Any) -> Provider:
     provider_name = getattr(config, "provider", "lmstudio")
     model_name = getattr(config, "model", "")

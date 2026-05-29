@@ -4,7 +4,11 @@ Distinct from kernel/ledger.py (CommitLedger), which records what was
 written to the vault.  This module records what the planner intends to do
 and how far along it is.
 
-Serialised to ~/.silica/runs/<run_id>/ledger.json via orjson.
+Two complementary objects:
+  TaskLedger    — immutable run plan (written once at init, never mutated)
+  ProgressLedger — mutable execution state (updated each transition)
+
+Both serialised to ~/.silica/runs/<run_id>/ via orjson.
 """
 from __future__ import annotations
 
@@ -17,10 +21,83 @@ from typing import Any, Literal
 
 import orjson
 
-TaskStatus = Literal["pending", "running", "done", "failed", "skipped", "blocked"]
+TaskStatus = Literal["pending", "running", "done", "failed", "skipped", "blocked", "deferred"]
+CheckpointKind = Literal["mechanical", "semantic", "gate", "txn"]
 
 _RUNS_DIR = Path.home() / ".silica" / "runs"
 
+
+# ---------------------------------------------------------------------------
+# CheckpointSpec — one entry in the immutable plan
+# ---------------------------------------------------------------------------
+
+@dataclass
+class CheckpointSpec:
+    """A single planned step from the recipe. Written once; never mutated."""
+    id: str
+    kind: str          # CheckpointKind — str for forward-compat with new kinds
+    objective: str     # tool / worker name or free-form description
+
+
+# ---------------------------------------------------------------------------
+# TaskLedger — immutable plan for the full run
+# ---------------------------------------------------------------------------
+
+@dataclass
+class TaskLedger:
+    """Immutable run plan — created at FSM init, written once, never overwritten."""
+    run_id: str
+    user_request: str
+    checkpoints: list[CheckpointSpec]
+    facts: dict[str, Any]
+    created_at: str
+
+    # ------------------------------------------------------------------
+    # Factory
+    # ------------------------------------------------------------------
+
+    @classmethod
+    def new(
+        cls,
+        run_id: str,
+        user_request: str,
+        checkpoints: list[CheckpointSpec],
+        facts: dict[str, Any] | None = None,
+    ) -> TaskLedger:
+        return cls(
+            run_id=run_id,
+            user_request=user_request,
+            checkpoints=checkpoints,
+            facts=facts or {},
+            created_at=_now(),
+        )
+
+    # ------------------------------------------------------------------
+    # Persistence — write-once
+    # ------------------------------------------------------------------
+
+    def save(self) -> Path:
+        """Write to disk only if the file does not yet exist (immutable semantics)."""
+        run_dir = _RUNS_DIR / self.run_id
+        run_dir.mkdir(parents=True, exist_ok=True)
+        path = run_dir / "task_ledger.json"
+        if path.exists():
+            return path  # already written — do not overwrite
+        path.write_bytes(
+            orjson.dumps(dataclasses.asdict(self), option=orjson.OPT_INDENT_2)
+        )
+        return path
+
+    @classmethod
+    def load(cls, run_id: str) -> TaskLedger:
+        path = _RUNS_DIR / run_id / "task_ledger.json"
+        data = orjson.loads(path.read_bytes())
+        return _task_ledger_from_dict(data)
+
+
+# ---------------------------------------------------------------------------
+# IssueCard — human-in-the-loop escalation
+# ---------------------------------------------------------------------------
 
 @dataclass
 class IssueCard:
@@ -32,18 +109,27 @@ class IssueCard:
     free_form_allowed: bool = False
 
 
+# ---------------------------------------------------------------------------
+# Task — one unit of work inside a ProgressLedger
+# ---------------------------------------------------------------------------
+
 @dataclass
 class Task:
     """A single unit of work tracked by the ProgressLedger."""
     id: str
     capability_name: str
     status: TaskStatus = "pending"
-    input_ref: str | None = None   # path to input payload on disk
-    output_ref: str | None = None  # path to output payload on disk
+    input_ref: str | None = None    # path to input payload on disk
+    output_ref: str | None = None   # path to output payload on disk
     depends_on: list[str] = field(default_factory=list)
     attempts: int = 0
+    content_hash: str | None = None # for idempotent checkpoint resumption (Phase 2)
     error: str | None = None
 
+
+# ---------------------------------------------------------------------------
+# ProgressLedger — mutable execution state
+# ---------------------------------------------------------------------------
 
 @dataclass
 class ProgressLedger:
@@ -107,16 +193,24 @@ class ProgressLedger:
         if status == "running":
             t.attempts += 1
             self.cursor = task_id
-        elif status in ("done", "failed", "skipped", "blocked"):
+        elif status in ("done", "failed", "skipped", "blocked", "deferred"):
             if self.cursor == task_id:
                 self.cursor = None
         self._touch()
 
-    def mark_done(self, task_id: str, *, output_ref: str | None = None) -> None:
+    def mark_done(
+        self,
+        task_id: str,
+        *,
+        output_ref: str | None = None,
+        content_hash: str | None = None,
+    ) -> None:
         t = self._get(task_id)
         t.status = "done"
         if output_ref is not None:
             t.output_ref = output_ref
+        if content_hash is not None:
+            t.content_hash = content_hash
         if self.cursor == task_id:
             self.cursor = None
         self._touch()
@@ -132,8 +226,8 @@ class ProgressLedger:
     def next_pending(self) -> Task | None:
         """Return first pending task whose dependencies are all done.
 
-        Tasks with status 'blocked' are never returned — they require
-        human resolution via IssueCard before they can proceed.
+        Tasks with status 'blocked' or 'deferred' are never returned —
+        they require human resolution via IssueCard before they can proceed.
         """
         done_ids = {t.id for t in self.tasks if t.status == "done"}
         for t in self.tasks:
@@ -142,6 +236,96 @@ class ProgressLedger:
             if all(dep in done_ids for dep in t.depends_on):
                 return t
         return None
+
+    # ------------------------------------------------------------------
+    # Idempotency helpers (Phase 2)
+    # ------------------------------------------------------------------
+
+    @property
+    def run_dir(self) -> Path:
+        """Directory that owns all artefacts for this run."""
+        return _RUNS_DIR / self.run_id
+
+    def is_checkpoint_done(self, task_id: str, content_hash: str) -> str | None:
+        """Return the output_ref if task_id is done with a matching content_hash.
+
+        Used by the FSM to skip a checkpoint that was already successfully
+        processed in a prior (or partial) run with the same input data.
+        Returns None if the task has not been done or the hash differs.
+        """
+        for t in self.tasks:
+            if t.id == task_id and t.status == "done" and t.content_hash == content_hash:
+                return t.output_ref
+        return None
+
+    # ------------------------------------------------------------------
+    # Digest — compact summary for LLM context injection
+    # ------------------------------------------------------------------
+
+    def digest(self) -> str:
+        """Return a compact human-readable run summary, targeting < 500 tokens.
+
+        Loads TaskLedger from disk (if present) to include the immutable plan.
+        Safe to call at any point during or after a run.
+        """
+        # Try to load the immutable plan
+        plan_lines: list[str] = []
+        request_line = ""
+        try:
+            tl = TaskLedger.load(self.run_id)
+            if tl.user_request:
+                request_line = f"REQUEST  {tl.user_request}\n"
+            if tl.checkpoints:
+                spec_strs = "  ".join(f"{s.id}({s.kind})" for s in tl.checkpoints)
+                plan_lines = [
+                    f"PLAN  [{len(tl.checkpoints)} checkpoints]",
+                    f"  {spec_strs}",
+                ]
+        except Exception:
+            pass
+
+        # Build per-task status lines
+        _sym = {
+            "done":     "✓",
+            "running":  "→",
+            "failed":   "✗",
+            "blocked":  "⊘",
+            "deferred": "⟳",
+            "skipped":  "–",
+        }
+        counts: dict[str, int] = {}
+        task_lines: list[str] = []
+        for t in self.tasks:
+            counts[t.status] = counts.get(t.status, 0) + 1
+            sym = _sym.get(t.status, "·")
+            line = f"  {sym} {t.id}"
+            if t.status == "running":
+                line += f" (attempts={t.attempts})"
+            elif t.error:
+                line += f"  [{t.error[:60]}]"
+            task_lines.append(line)
+
+        counts_str = "  ".join(f"{s}={n}" for s, n in counts.items())
+        progress_header = f"PROGRESS  [{counts_str}]"
+
+        inputs_str = "  ".join(f"{k}={v}" for k, v in (self.inputs or {}).items())
+
+        sep = "─" * 36
+        parts = [f"RUN {self.run_id[:8]} | {self.mode} | {self.started_at[:19]}Z"]
+        if request_line:
+            parts.append(request_line.rstrip())
+        if plan_lines:
+            parts.append(sep)
+            parts.extend(plan_lines)
+        parts.append(sep)
+        parts.append(progress_header)
+        parts.extend(task_lines)
+        if self.cursor:
+            parts.append(f"CURSOR: {self.cursor}")
+        if inputs_str:
+            parts.append(f"INPUTS: {inputs_str}")
+
+        return "\n".join(parts)
 
     # ------------------------------------------------------------------
     # Persistence
@@ -194,4 +378,15 @@ def _from_dict(data: dict[str, Any]) -> ProgressLedger:
         tasks=tasks,
         issues=issues,
         cursor=data.get("cursor"),
+    )
+
+
+def _task_ledger_from_dict(data: dict[str, Any]) -> TaskLedger:
+    checkpoints = [CheckpointSpec(**c) for c in data.get("checkpoints", [])]
+    return TaskLedger(
+        run_id=data["run_id"],
+        user_request=data.get("user_request", ""),
+        checkpoints=checkpoints,
+        facts=data.get("facts", {}),
+        created_at=data.get("created_at", ""),
     )

@@ -298,6 +298,214 @@ def silica_graph_export(output_path: str = "graph.html", folder: str = "", title
     return export_graph(output_path=output_path, folder=folder, title=title)
 
 
+class AutolinkArgs(BaseModel):
+    note_path: str = Field(description="Vault-relative path of the note to autolink (e.g. 'Concepts/NeuralNet.md')")
+    use_candidates: bool = Field(default=True, description="Use embedding candidates to focus autolinking (requires index)")
+
+@tool(AutolinkArgs, cls="composed")
+def silica_autolink(note_path: str, use_candidates: bool = True) -> dict[str, Any]:
+    """Scan a note for mentions of existing vault titles and wrap them as wikilinks.
+
+    Skips frontmatter, code blocks, math, headings, and already-linked text.
+    Only links titles that exist in the vault graph (graph-safe by construction).
+    Returns the number of links added and the modified note path.
+    """
+    from silica.kernel.autolink import autolink, build_title_index
+
+    try:
+        nc = DRIVER.read_note(note_path)
+    except Exception as e:
+        return {"error": f"Failed to read note: {e}"}
+
+    body = nc.content or ""
+    if not body.strip():
+        return {"note": note_path, "added": 0, "links": []}
+
+    try:
+        all_refs = DRIVER.list_files()
+    except Exception as e:
+        return {"error": f"Failed to list vault files: {e}"}
+
+    title_index = build_title_index(all_refs)
+
+    candidates: list[str] | None = None
+    if use_candidates:
+        try:
+            from silica.agent.providers import get_embedder
+            from silica.config import CONFIG
+            from silica.kernel.embed import EmbedStore
+            store = EmbedStore()
+            if len(store) > 0:
+                embedder = get_embedder(CONFIG)
+                vecs = embedder.embed([body[:800]])
+                results = store.cosine_top_k(vecs[0], k=20)
+                candidates = [r["name"] for r in results]
+        except Exception:
+            pass  # Fall back to full title_index scan
+
+    new_body, added = autolink(body, title_index, candidates=candidates)
+
+    if not added:
+        return {"note": note_path, "added": 0, "links": []}
+
+    try:
+        DRIVER.update_note(note_path, new_body)
+    except Exception as e:
+        return {"error": f"Failed to write autolinked note: {e}"}
+
+    return {"note": note_path, "added": len(added), "links": added}
+
+
+class SemanticSearchArgs(BaseModel):
+    query: str = Field(description="Free-form query text to embed and search against the vault index")
+    k: int = Field(default=5, description="Number of results to return")
+
+@tool(SemanticSearchArgs, cls="composed")
+def silica_semantic_search(query: str, k: int = 5) -> dict[str, Any]:
+    """Find vault notes semantically similar to a query using the embedding index.
+
+    Embeddings PROPOSE candidates; the graph DISPOSES (verify links with the driver).
+    Returns at most k results ordered by cosine similarity, highest first.
+    Requires the embedding index to be built first with silica_embed_refresh.
+    """
+    from silica.agent.providers import get_embedder
+    from silica.config import CONFIG
+    from silica.kernel.embed import EmbedStore
+
+    store = EmbedStore()
+    if len(store) == 0:
+        return {"error": "Embedding index is empty. Run silica_embed_refresh to build it first."}
+
+    try:
+        embedder = get_embedder(CONFIG)
+        vecs = embedder.embed([query])
+    except Exception as e:
+        return {"error": f"Embedding call failed: {e}"}
+
+    results = store.cosine_top_k(vecs[0], k=k)
+    return {"query": query, "results": results}
+
+
+class SimilarArgs(BaseModel):
+    text: str = Field(description="Text to find similar notes for (title, snippet, or concept description)")
+    k: int = Field(default=5, description="Number of results to return")
+
+@tool(SimilarArgs, cls="composed")
+def silica_similar(text: str, k: int = 5) -> dict[str, Any]:
+    """Find vault notes semantically similar to an arbitrary text snippet.
+
+    Equivalent to silica_semantic_search but signals the intent of finding
+    notes *similar to* a specific text rather than searching by intent.
+    Requires the embedding index to be built first with silica_embed_refresh.
+    """
+    from silica.agent.providers import get_embedder
+    from silica.config import CONFIG
+    from silica.kernel.embed import EmbedStore
+
+    store = EmbedStore()
+    if len(store) == 0:
+        return {"error": "Embedding index is empty. Run silica_embed_refresh to build it first."}
+
+    try:
+        embedder = get_embedder(CONFIG)
+        vecs = embedder.embed([text])
+    except Exception as e:
+        return {"error": f"Embedding call failed: {e}"}
+
+    results = store.cosine_top_k(vecs[0], k=k)
+    return {"text": text[:120], "results": results}
+
+
+class EmbedRefreshArgs(BaseModel):
+    folder: str = Field(default="", description="Vault-relative folder to restrict indexing (empty = entire vault)")
+    force: bool = Field(default=False, description="Re-embed all notes, even if already indexed")
+
+@tool(EmbedRefreshArgs, cls="composed")
+def silica_embed_refresh(folder: str = "", force: bool = False) -> dict[str, Any]:
+    """Build or refresh the vault embedding index at ~/.silica/index/embeddings.json.
+
+    Incrementally skips notes already in the index (unless force=True).
+    Call this after bulk writes to keep the index fresh.
+    The driver reads each note to get its content; works with both cli and fs backends.
+    """
+    from silica.agent.providers import get_embedder
+    from silica.config import CONFIG
+    from silica.kernel.embed import EmbedStore, build_index
+
+    try:
+        all_refs = DRIVER.list_files(folder or None)
+    except Exception as e:
+        return {"error": f"Failed to list vault files: {e}"}
+
+    notes: list[tuple[str, str, str]] = []
+    errors: list[str] = []
+    for ref in all_refs:
+        path = ref.path or ref.name
+        name = ref.name or path
+        try:
+            nc = DRIVER.read_note(path)
+            body = nc.content or ""
+        except Exception as exc:
+            errors.append(f"{path}: {exc}")
+            continue
+        # Strip .md extension for index key
+        idx_path = path.removesuffix(".md")
+        notes.append((idx_path, name, body))
+
+    if not notes:
+        return {"error": "No notes found to index", "read_errors": errors}
+
+    try:
+        embedder = get_embedder(CONFIG)
+        store = build_index(embedder, notes, force=force)
+    except Exception as e:
+        return {"error": f"Index build failed: {e}", "read_errors": errors}
+
+    return {
+        "indexed": len(store),
+        "total_notes": len(notes),
+        "read_errors": len(errors),
+        "index_path": str(store._path),
+    }
+
+
+class LedgerDigestArgs(BaseModel):
+    run_id: str = Field(default="", description="Run ID to inspect (latest saved run if empty)")
+
+@tool(LedgerDigestArgs, cls="composed")
+def silica_ledger_digest(run_id: str = "") -> dict[str, Any]:
+    """Returns a compact summary of a run's plan and progress (< 500 tokens).
+
+    Loads TaskLedger (immutable plan) and ProgressLedger (execution state) from
+    ~/.silica/runs/<run_id>/. Pass run_id="" to inspect the most recently saved run.
+    """
+    from silica.planner.progress import ProgressLedger, _RUNS_DIR
+
+    resolved_id = run_id.strip()
+    if not resolved_id:
+        # Find the most recently modified run directory
+        runs_root = _RUNS_DIR
+        if not runs_root.exists():
+            return {"error": "No runs found in ~/.silica/runs/"}
+        candidates = [
+            d for d in runs_root.iterdir()
+            if d.is_dir() and (d / "ledger.json").exists()
+        ]
+        if not candidates:
+            return {"error": "No runs found in ~/.silica/runs/"}
+        latest = max(candidates, key=lambda d: d.stat().st_mtime)
+        resolved_id = latest.name
+
+    try:
+        ledger = ProgressLedger.load(resolved_id)
+    except FileNotFoundError:
+        return {"error": f"Run '{resolved_id}' not found"}
+    except Exception as e:
+        return {"error": f"Failed to load ledger: {e}"}
+
+    return {"run_id": resolved_id, "digest": ledger.digest()}
+
+
 class DeferredRetryArgs(BaseModel):
     content_hash: str = Field(description="Content hash of the deferred bundle to retry (from silica_deferred_list)")
 
