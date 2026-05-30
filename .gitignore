@@ -153,6 +153,7 @@ Thumbs.db
 # Agents
 CLAUDE.md
 /.claude
+/memory
 
 # DB
 ruvector.db

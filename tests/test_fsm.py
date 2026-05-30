@@ -350,10 +350,10 @@ def test_fsm_graph_regression_gate_rollback(mock_open, mock_restore, mock_driver
     
     # Verify restore was called with the correct parameters
     mock_restore.assert_called_once_with(txn_id="txn_123", inverses=inverses)
-    
-    # Verify final status transitions to ERROR
-    assert fsm.state == InjectorState.ERROR
-    assert "Rolled Back" in fsm.context["final_status"]
+
+    # Chunk-level containment: single-chunk run concludes as partial (not ERROR)
+    assert fsm.state == InjectorState.DONE
+    assert fsm.context["final_status"] == "partial"
 
 
 def test_fsm_recipe_transition_sequence():
@@ -730,11 +730,11 @@ def test_fsm_create_settle_timeout_rollback(
         with patch("silica.kernel.graph_diff.check_graph_regression", return_value=(True, [])):
             res = fsm.run()
         
-    assert fsm.state == InjectorState.ERROR
-    assert "Rolled Back" in res.get("final_status")
-    assert "Settle timeout mock error" in res.get("final_status")
-    
-    # Check that cleanup is not called (inbox not moved)
+    # Chunk-level containment: single-chunk run concludes as partial (not ERROR)
+    assert fsm.state == InjectorState.DONE
+    assert res.get("final_status") == "partial"
+
+    # Check that cleanup is not called (inbox not moved — chunk had a failure)
     mock_cleanup.assert_not_called()
     # Check that restore (rollback) was called
     mock_restore.assert_called_once()

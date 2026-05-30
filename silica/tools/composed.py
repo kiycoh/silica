@@ -269,16 +269,41 @@ def silica_lint(note_name: str, op_type: str = "", hub: str = "") -> dict[str, A
 
 
 class RunInjectorArgs(BaseModel):
-    inbox_file: str = Field(description="Path to the inbox file to ingest (e.g. Inbox/meeting_notes.md)")
+    inbox_file: str = Field(default="", description="Path to a single inbox file (legacy; use inbox_files for multiple files)")
+    inbox_files: list[str] = Field(default_factory=list, description="Paths to one or more inbox files to ingest in a single run")
     target_dir: str = Field(description="Destination directory for the extracted concepts")
     hub: str = Field(default="", description="Optional reference hub note")
+    resume_run_id: str = Field(default="", description="Run ID to resume (re-processes only failed chunks, skips done ones)")
 
 @tool(RunInjectorArgs, cls="composed")
-def silica_run_injector(inbox_file: str, target_dir: str, hub: str = "") -> dict[str, Any]:
-    """Single action for the agent: executes the entire Injector pipeline (10 phases) deterministically with acceptance gates and rollback in case of failure."""
+def silica_run_injector(
+    inbox_file: str = "",
+    inbox_files: list[str] | None = None,
+    target_dir: str = "",
+    hub: str = "",
+    resume_run_id: str = "",
+) -> dict[str, Any]:
+    """Execute the entire Injector pipeline deterministically with acceptance gates and rollback.
+
+    Accepts one or more inbox files in a single FSM run with per-chunk failure
+    containment: a failed chunk is rolled back and marked 'failed' while the
+    remaining chunks continue.  Pass resume_run_id to re-run only the chunks
+    that failed in a previous partial run (content-addressed idempotency).
+    """
     from silica.router.orchestrator import InjectorFSM
 
-    fsm = InjectorFSM(inbox_file=inbox_file, target_dir=target_dir, hub=hub or None)
+    files: list[str] = list(inbox_files or [])
+    if inbox_file and inbox_file not in files:
+        files.insert(0, inbox_file)
+    if not files:
+        return {"error": "No inbox file(s) specified"}
+
+    fsm = InjectorFSM(
+        inbox_files=files,
+        target_dir=target_dir,
+        hub=hub or None,
+        resume_run_id=resume_run_id or None,
+    )
     return fsm.run()
 
 
@@ -524,6 +549,120 @@ def silica_ledger_digest(run_id: str = "") -> dict[str, Any]:
         return {"error": f"Failed to load ledger: {e}"}
 
     return {"run_id": resolved_id, "digest": ledger.digest()}
+
+
+# ---------------------------------------------------------------------------
+# silica_vault_report
+# ---------------------------------------------------------------------------
+
+class VaultReportArgs(BaseModel):
+    folder: str = Field(default="", description="Vault-relative folder to scope (empty = whole vault)")
+    top_k: int = Field(default=10, description="How many god-nodes / bridges to surface")
+    with_embeddings: bool = Field(default=False, description="Also propose missing links via the embedding index")
+    seed_ledger: bool = Field(default=True, description="Persist a run (TaskLedger+ProgressLedger) pre-seeded with remediation tasks")
+
+@tool(VaultReportArgs, cls="composed")
+def silica_vault_report(
+    folder: str = "",
+    top_k: int = 10,
+    with_embeddings: bool = False,
+    seed_ledger: bool = True,
+) -> dict[str, Any]:
+    """Deterministic structural audit of the vault.
+
+    Computes god-nodes, surprising cross-cluster connections, orphans, dangling
+    links, and clusters. Writes GRAPH_REPORT.md and (if seed_ledger=True)
+    persists a run whose ProgressLedger is pre-seeded with remediation tasks
+    the agent can advance via silica_ledger_next.
+
+    Tier semantics:
+      auto     — reversible, graph-safe ops the agent executes without confirmation
+      propose  — reversible but borderline; agent asks before executing
+      escalate — IssueCards requiring human judgment (create/rename/delete)
+    """
+    import os
+    import orjson
+    from pathlib import Path
+
+    from silica.config import CONFIG
+    from silica.kernel.graph_report import compute_report, to_digest, to_facts, write_report
+    from silica.planner.analyst_plan import build_task_plan
+    from silica.planner.progress import IssueCard, ProgressLedger, TaskLedger
+
+    # 1. Build report
+    report = compute_report(folder=folder, top_k=top_k, with_embeddings=with_embeddings)
+
+    # 2. Determine output path
+    vault_path = getattr(CONFIG, "vault_path", None) or ""
+    if vault_path:
+        report_path = str(Path(vault_path) / "GRAPH_REPORT.md")
+    else:
+        report_path = "GRAPH_REPORT.md"
+
+    paths = write_report(report, report_path)
+
+    result: dict[str, Any] = {
+        "digest": to_digest(report),
+        "report_md": paths["path_md"],
+    }
+
+    if not seed_ledger:
+        return result
+
+    # 3. Build plan and seed ledger
+    plan = build_task_plan(report)
+
+    progress = ProgressLedger.new(mode="analyst", inputs={"scope": folder or "vault"})
+    run_id = progress.run_id
+    run_dir = Path.home() / ".silica" / "runs" / run_id
+    payloads_dir = run_dir / "payloads"
+    payloads_dir.mkdir(parents=True, exist_ok=True)
+
+    # Persist immutable TaskLedger
+    tl = TaskLedger.new(
+        run_id=run_id,
+        user_request=f"audit {folder or 'vault'}",
+        checkpoints=plan.checkpoints,
+        facts=to_facts(report),
+    )
+    try:
+        tl.save()
+    except Exception:
+        pass
+
+    # Seed tasks from auto + propose (propose carries needs_confirmation flag)
+    for candidate in plan.auto + plan.propose:
+        task = progress.add_task(candidate.capability_name)
+        # Write payload to disk
+        payload = dict(candidate.payload)
+        payload["_reason"] = candidate.reason
+        if candidate.tier == "propose":
+            payload["needs_confirmation"] = True
+        payload_path = str(payloads_dir / f"{task.id}.json")
+        Path(payload_path).write_bytes(orjson.dumps(payload, option=orjson.OPT_INDENT_2))
+        task.input_ref = payload_path
+
+    # Escalate items → IssueCards
+    for i, candidate in enumerate(plan.escalate):
+        card = IssueCard(
+            task_id=f"issue_{i}",
+            question=candidate.reason,
+            options=[
+                {"label": "create_note", "description": "Create a new note with this title"},
+                {"label": "rename_existing", "description": "Rename an existing note to match"},
+                {"label": "ignore", "description": "Leave the broken link as-is"},
+            ],
+        )
+        progress.issues.append(card)
+
+    progress.save()
+
+    result["run_id"] = run_id
+    result["auto"] = len(plan.auto)
+    result["propose"] = len(plan.propose)
+    result["issues"] = len(plan.escalate)
+
+    return result
 
 
 class DeferredRetryArgs(BaseModel):

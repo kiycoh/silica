@@ -68,13 +68,24 @@ class InjectorState(Enum):
 class InjectorFSM(BaseFSM[InjectorState]):
     """Deterministic state machine for the Injector pipeline (S2.3 complete)."""
 
-    def __init__(self, inbox_file: str, target_dir: str, hub: str | None = None):
-        # Canonicalize to vault-relative POSIX once at ingress so the RECON
-        # driver read, _source_canonical (ledger key), and every downstream
-        # consumer operate on the same form. Absolute paths under the vault
-        # are relativized; absolute paths outside the vault fail loudly here
-        # instead of degrading into a silent "File not found" at RECON.
-        self.inbox_file = to_vault_relative(inbox_file)
+    def __init__(
+        self,
+        inbox_file: str = "",
+        target_dir: str = "",
+        hub: str | None = None,
+        *,
+        inbox_files: list[str] | None = None,
+        resume_run_id: str | None = None,
+    ):
+        # Normalize to a list. inbox_files takes precedence; inbox_file is a
+        # compat shim inserted at position 0 if not already present.
+        files: list[str] = list(inbox_files or [])
+        if inbox_file and inbox_file not in files:
+            files.insert(0, inbox_file)
+        if not files:
+            raise ValueError("At least one inbox file must be provided")
+        self.inbox_files: list[str] = [to_vault_relative(f) for f in files]
+        self.inbox_file: str = self.inbox_files[0]  # first file; compat with single-file callers
         self.target_dir = target_dir
 
         # Hub sanity check: if not specified, inherit the folder name of target_dir
@@ -89,18 +100,39 @@ class InjectorFSM(BaseFSM[InjectorState]):
         self._txn: Txn | None = None  # holds the live Txn object for ROLLBACK
         self._pre_graph: GraphSnapshot | None = None  # S3.2 pre-write graph snapshot
 
+        # Per-file content info — populated by run() before _run_loop starts
+        self._file_canonicals: list[str] = []
+        self._file_content_hashes: list[str] = []
+
         # Iterative chunk processing state fields
         self._chunks: list[dict] = []
         self._current_chunk_idx: int = 0
+        # Multi-file hierarchy (§3.6): per-file chunk groups + flat→(fi,ci) mapping
+        self._file_chunks: list[dict] = []  # [{"source_file": str, "chunks": [...]}, ...]
+        self._chunk_flat_to_fi_ci: dict[int, tuple[int, int]] = {}  # flat_idx → (file_idx, chunk_idx)
 
         # Shadow ProgressLedger — mirrors FSM state on disk; FSM remains canonical
         from silica.planner.progress import ProgressLedger
-        self.progress = ProgressLedger.new(
-            mode="inject",
-            inputs={"inbox_file": inbox_file, "target_dir": target_dir, "hub": hub or ""},
-        )
-        self.progress.add_task("recon",   task_id="recon")
-        self.progress.add_task("payload", task_id="payload", depends_on=["recon"])
+        _resumed = False
+        if resume_run_id:
+            try:
+                self.progress = ProgressLedger.load(resume_run_id)
+                logger.info("Resuming run %s", resume_run_id)
+                _resumed = True
+            except Exception as _re:
+                logger.warning("Failed to load run '%s', starting fresh: %s", resume_run_id, _re)
+        if not _resumed:
+            self.progress = ProgressLedger.new(
+                mode="inject",
+                inputs={
+                    "inbox_files": self.inbox_files,
+                    "inbox_file": self.inbox_file,
+                    "target_dir": target_dir,
+                    "hub": hub or "",
+                },
+            )
+            self.progress.add_task("recon",   task_id="recon")
+            self.progress.add_task("payload", task_id="payload", depends_on=["recon"])
 
         # S3.3: Load the recipe for dynamic configuration
         from silica.router.recipe_parser import load_recipe
@@ -174,12 +206,14 @@ class InjectorFSM(BaseFSM[InjectorState]):
         }
 
         self._ON_ERROR = {
+            # Setup phases: abort the whole run on failure
             InjectorState.RECON: InjectorState.ERROR,
             InjectorState.PAYLOAD: InjectorState.ERROR,
-            InjectorState.DELEGATE: InjectorState.ERROR,
-            InjectorState.SANITIZE: InjectorState.ERROR,
-            InjectorState.VALIDATE: InjectorState.ERROR,
-            InjectorState.SNAPSHOT: InjectorState.ERROR,
+            # Per-chunk phases: contain failure at chunk level via rollback
+            InjectorState.DELEGATE: InjectorState.ROLLBACK,
+            InjectorState.SANITIZE: InjectorState.ROLLBACK,
+            InjectorState.VALIDATE: InjectorState.ROLLBACK,
+            InjectorState.SNAPSHOT: InjectorState.ROLLBACK,
             InjectorState.WRITE: InjectorState.ROLLBACK,
             InjectorState.HUB_UPDATE: InjectorState.ROLLBACK,
             InjectorState.LINT: InjectorState.ROLLBACK,
@@ -199,7 +233,7 @@ class InjectorFSM(BaseFSM[InjectorState]):
         ]
         self.task_ledger = TaskLedger.new(
             run_id=self.progress.run_id,
-            user_request=f"inject {inbox_file} → {target_dir}",
+            user_request=f"inject {', '.join(self.inbox_files)} → {target_dir}",
             checkpoints=_checkpoints,
         )
         try:
@@ -257,23 +291,56 @@ class InjectorFSM(BaseFSM[InjectorState]):
         return kb_path
 
     def run(self) -> dict[str, Any]:
-        """Execute the pipeline end-to-end."""
+        """Execute the pipeline end-to-end (single or multi-file)."""
         from silica.kernel.ledger import get_ledger
-        source_canonical = self._source_canonical()
-        try:
-            content_bytes = open(self.inbox_file, "rb").read()
-            content_hash = hashlib.sha256(content_bytes).hexdigest()
-        except OSError:
-            content_hash = ""
-        self.context["source_canonical"] = source_canonical
-        self.context["source_content_hash"] = content_hash
+        ledger = get_ledger()
 
-        if get_ledger().is_committed(source_canonical, content_hash=content_hash):
+        # Compute per-file canonicals and content hashes; track committed status
+        self._file_canonicals = []
+        self._file_content_hashes = []
+        all_committed = True
+        for inbox_file in self.inbox_files:
+            canonical = self._source_canonical_for(inbox_file)
+            self._file_canonicals.append(canonical)
+            try:
+                content_bytes = open(inbox_file, "rb").read()
+                content_hash = hashlib.sha256(content_bytes).hexdigest()
+            except OSError:
+                content_hash = ""
+            self._file_content_hashes.append(content_hash)
+            if not ledger.is_committed(canonical, content_hash=content_hash):
+                all_committed = False
+
+        # Compat keys for first file (used by single-file code paths and RECON)
+        self.context["source_canonical"] = self._file_canonicals[0] if self._file_canonicals else ""
+        self.context["source_content_hash"] = self._file_content_hashes[0] if self._file_content_hashes else ""
+
+        if all_committed:
             self.context["final_status"] = "already_ingested"
             return self.context
 
         self.state = InjectorState.RECON
         return self._run_loop()
+
+    def _run_loop(self) -> dict[str, Any]:
+        """Override: remove txn guard so per-chunk phases route to ROLLBACK without a live txn."""
+        try:
+            while self.state not in (self._done_state, self._error_state):
+                try:
+                    logger.debug("FSM Transition: %s -> executing handler", self.state.name)
+                    self.step()
+                except Exception as e:
+                    logger.error("FSM Error in state %s: %s", self.state, e)
+                    self.context["error"] = str(e)
+                    next_state = self._ON_ERROR.get(self.state, self._error_state)
+                    if next_state == self._rollback_state:
+                        self.context["abort_reason"] = str(e)
+                        self.state = self._rollback_state
+                    else:
+                        self.state = self._error_state
+        finally:
+            self._cleanup_tmp()
+        return self.context
 
     def _on_sequence_end(self) -> None:
         self._eval_loop_or_done()
@@ -303,51 +370,68 @@ class InjectorFSM(BaseFSM[InjectorState]):
 
     def _handle_recon(self) -> None:
         self._progress_note("recon", "recon", "running")
-        res = silica_recon(self.inbox_file)
-        if "error" in res:
-            self._progress_note("recon", "recon", "failed", error=res["error"])
-            raise RuntimeError(f"Recon failed: {res['error']}")
-        self.context["recon"] = res
+
+        # Iterate all inbox files and aggregate recon reports into a list
+        recon_list: list[dict] = []
+        deferred_notices: list[dict] = []
+        for fi, inbox_file in enumerate(self.inbox_files):
+            res = silica_recon(inbox_file)
+            if "error" in res:
+                self._progress_note("recon", "recon", "failed", error=res["error"])
+                raise RuntimeError(f"Recon failed for {inbox_file}: {res['error']}")
+            recon_list.append(res)
+
+            # Surface any deferred ops from a previous run of this file
+            content_hash = self._file_content_hashes[fi] if fi < len(self._file_content_hashes) else ""
+            if content_hash:
+                from silica.kernel.deferred import get_deferred_store
+                bundle = get_deferred_store().get(content_hash)
+                if bundle:
+                    rejected_count = len(bundle.get("rejected_ops", []))
+                    logger.info(
+                        "RECON: %d deferred op(s) from a previous run of '%s' are waiting. "
+                        "Call silica_deferred_retry('%s') to attempt them.",
+                        rejected_count, inbox_file, content_hash[:8],
+                    )
+                    deferred_notices.append({
+                        "inbox_file": inbox_file,
+                        "content_hash": content_hash,
+                        "rejected_count": rejected_count,
+                    })
+
+        # Always a list — even for single-file runs — so _handle_payload is uniform
+        self.context["recon"] = recon_list
+        if deferred_notices:
+            self.context["deferred"] = deferred_notices[0] if len(deferred_notices) == 1 else deferred_notices
+
         self._progress_note("recon", "recon", "done")
-
-        # Surface any deferred ops from a previous run of this source file.
-        content_hash = self.context.get("source_content_hash", "")
-        if content_hash:
-            from silica.kernel.deferred import get_deferred_store
-            bundle = get_deferred_store().get(content_hash)
-            if bundle:
-                rejected_count = len(bundle.get("rejected_ops", []))
-                logger.info(
-                    "RECON: %d deferred op(s) from a previous run of '%s' are waiting. "
-                    "Call silica_deferred_retry('%s') to attempt them.",
-                    rejected_count,
-                    self.inbox_file,
-                    content_hash[:8],
-                )
-                self.context["deferred"] = {
-                    "content_hash": content_hash,
-                    "rejected_count": rejected_count,
-                }
-
         self._transition_success()
 
-    def _source_canonical(self) -> str:
-        """Vault-relative canonical path for the inbox file (no .md, lowercase)."""
+    def _source_canonical_for(self, inbox_file: str) -> str:
+        """Vault-relative canonical path for an arbitrary inbox file (no .md, lowercase)."""
         vault_path = getattr(CONFIG, "vault_path", None) or ""
-        inbox = self.inbox_file
         if vault_path:
             try:
                 from pathlib import Path as _P
-                rel = _P(inbox).relative_to(_P(vault_path)).as_posix()
+                rel = _P(inbox_file).relative_to(_P(vault_path)).as_posix()
                 return rel.removesuffix(".md").lower()
             except ValueError:
                 pass
-        # Fallback: basename without extension
-        return os.path.splitext(os.path.basename(inbox))[0].lower()
+        return os.path.splitext(os.path.basename(inbox_file))[0].lower()
+
+    def _source_canonical(self) -> str:
+        """Vault-relative canonical path for the first inbox file (compat wrapper)."""
+        return self._source_canonical_for(self.inbox_file)
+
+    def _chunk_task_id(self, cap: str) -> str:
+        """Return the task ID for the current chunk using the f{fi}_c{ci}_{cap} scheme."""
+        fi, ci = self._chunk_flat_to_fi_ci.get(self._current_chunk_idx, (0, self._current_chunk_idx))
+        return f"f{fi}_c{ci}_{cap}"
 
     def _handle_payload(self) -> None:
         self._progress_note("payload", "payload", "running")
-        recon_path = self._make_tmp([self.context["recon"]])
+        # self.context["recon"] is now always a list of per-file recon dicts
+        recon_path = self._make_tmp(self.context["recon"])
         phase_conf = self._get_recipe_phase("payload")
         max_concepts = phase_conf.get("partition_if_over", 200)
         res = silica_payload(recon_path, max_concepts=max_concepts)
@@ -356,31 +440,94 @@ class InjectorFSM(BaseFSM[InjectorState]):
             raise RuntimeError(f"Payload failed: {res['error']}")
         self.context["payload"] = res
 
-        # Deterministically isolate chunks at payload source
-        if "chunks" in res:
-            self._chunks = res["chunks"]
+        # Build per-file chunk hierarchy (§3.6).
+        # Try to use partition_by_file when the payload has proper batch structure;
+        # fall back to the legacy flat-chunk path when batches are absent (e.g. tests).
+        from silica.kernel.partition import partition_by_file
+
+        raw_payload: dict | None = None
+        if "chunks" in res and res["chunks"]:
+            all_batches: list[dict] = []
+            for chunk in res["chunks"]:
+                all_batches.extend(chunk.get("batches", []))
+            if all_batches:
+                raw_payload = {
+                    "schema_version": res["chunks"][0].get("schema_version", 1),
+                    "batches": all_batches,
+                }
         elif "payload" in res:
-            self._chunks = [res["payload"]]
-        else:
+            raw_payload = res["payload"]
+
+        if raw_payload and max_concepts > 0:
+            attempt = partition_by_file(raw_payload, max_concepts)
+            if attempt:
+                self._file_chunks = attempt
+
+        if not self._file_chunks:
+            # Fallback: all chunks belong to the first (or only) inbox file.
+            # Do NOT split by chunk — one physical file = one file group.
+            raw_chunks = res.get("chunks", [])
+            if not raw_chunks and "payload" in res:
+                raw_chunks = [res["payload"]]
+            if not raw_chunks:
+                raw_chunks = [res]
+            self._file_chunks.append({"source_file": self.inbox_file, "chunks": raw_chunks})
+
+        # Build flat chunk list preserving file order (for existing handler logic)
+        self._chunks = []
+        self._chunk_flat_to_fi_ci = {}
+        flat_idx = 0
+        for fi, fg in enumerate(self._file_chunks):
+            for ci, chunk in enumerate(fg.get("chunks", [])):
+                self._chunks.append(chunk)
+                self._chunk_flat_to_fi_ci[flat_idx] = (fi, ci)
+                flat_idx += 1
+
+        if not self._chunks:
             self._chunks = [res]
+            self._chunk_flat_to_fi_ci = {0: (0, 0)}
 
         self._current_chunk_idx = 0
 
-        # Register per-chunk tasks now that chunk count is known
-        prev = "payload"
-        for idx in range(len(self._chunks)):
-            for cap in ("collision", "distill", "sanitize", "validate", "snapshot", "write", "hub_update", "autolink", "lint", "cleanup"):
-                tid = f"chunk_{idx}_{cap}"
-                dep = prev
-                self.progress.add_task(cap, task_id=tid, depends_on=[dep])
-                prev = tid
+        # Build facts["sources"] with per-file concept + chunk counts
+        sources_facts: list[dict] = []
+        for fi, fg in enumerate(self._file_chunks):
+            n_chunks = len(fg.get("chunks", []))
+            n_concepts = sum(
+                len(b.get("concepts", []))
+                for chunk in fg.get("chunks", [])
+                for b in chunk.get("batches", [])
+            )
+            sources_facts.append({
+                "inbox_file": fg["source_file"],
+                "concepts": n_concepts,
+                "chunks": n_chunks,
+            })
+
+        # Stash per-file stats in progress inputs for the digest
+        self.progress.inputs["sources"] = sources_facts
+
+        # Register per-chunk tasks with f{fi}_c{ci}_{cap} IDs and intra-file deps
+        caps = ("collision", "distill", "sanitize", "validate", "snapshot", "write", "hub_update", "autolink", "lint", "cleanup")
+        for fi, fg in enumerate(self._file_chunks):
+            prev_in_file = "payload"
+            for ci in range(len(fg.get("chunks", []))):
+                for cap in caps:
+                    tid = f"f{fi}_c{ci}_{cap}"
+                    self.progress.add_task(cap, task_id=tid, depends_on=[prev_in_file])
+                    prev_in_file = tid
         try:
             self.progress.save()
         except Exception as _e:
             logger.debug("progress save error (suppressed): %s", _e)
 
         self._progress_note("payload", "payload", "done")
-        logger.info(f"Pipeline initialized with {len(self._chunks)} independent chunks.")
+        logger.info(
+            "Pipeline initialized: %d file(s), %d total chunk(s). Files: %s",
+            len(self._file_chunks),
+            len(self._chunks),
+            [fg["source_file"] for fg in self._file_chunks],
+        )
         self._transition_success()
 
     def _handle_salience(self) -> None:
@@ -468,7 +615,7 @@ class InjectorFSM(BaseFSM[InjectorState]):
         the check and lets the chunk flow to DELEGATE unchanged.
         """
         idx = self._current_chunk_idx
-        self._progress_note(f"chunk_{idx}_collision", "collision", "running")
+        self._progress_note(self._chunk_task_id("collision"), "collision", "running")
 
         τ_high = getattr(CONFIG, "sim_threshold_high", 0.85)
         τ_low = getattr(CONFIG, "sim_threshold_low", 0.65)
@@ -480,13 +627,13 @@ class InjectorFSM(BaseFSM[InjectorState]):
             store = EmbedStore()
             if len(store) == 0:
                 logger.info("COLLISION: embedding index empty — skipping (build with silica_embed_refresh)")
-                self._progress_note(f"chunk_{idx}_collision", "collision", "done")
+                self._progress_note(self._chunk_task_id("collision"), "collision", "done")
                 self._transition_success()
                 return
             embedder = get_embedder(CONFIG)
         except Exception as _e:
             logger.warning("COLLISION: embedder unavailable (%s) — skipping", _e)
-            self._progress_note(f"chunk_{idx}_collision", "collision", "done")
+            self._progress_note(self._chunk_task_id("collision"), "collision", "done")
             self._transition_success()
             return
 
@@ -607,7 +754,7 @@ class InjectorFSM(BaseFSM[InjectorState]):
         }
 
         self._progress_note(
-            f"chunk_{idx}_collision", "collision", "done",
+            self._chunk_task_id("collision"), "collision", "done",
             output_ref=f"{len(pre_routed_ops)} patch-routed, {len(deferred_concepts)} deferred",
         )
         self._transition_success()
@@ -630,7 +777,7 @@ class InjectorFSM(BaseFSM[InjectorState]):
         chunk_hash = hashlib.sha256(
             _json.dumps(current_chunk, sort_keys=True).encode()
         ).hexdigest()
-        saved_ops_path = self.progress.is_checkpoint_done(f"chunk_{idx}_validate", chunk_hash)
+        saved_ops_path = self.progress.is_checkpoint_done(self._chunk_task_id("validate"), chunk_hash)
         if saved_ops_path and os.path.exists(saved_ops_path):
             logger.info(
                 "DELEGATE chunk %d: content-addressed hit (hash=%s…) — skipping to SNAPSHOT",
@@ -642,7 +789,7 @@ class InjectorFSM(BaseFSM[InjectorState]):
             return
 
         logger.info(f"--- DISTILLING BATCH {idx + 1}/{len(self._chunks)} ---")
-        self._progress_note(f"chunk_{idx}_distill", "distill", "running")
+        self._progress_note(self._chunk_task_id("distill"), "distill", "running")
 
         # Assemble compact ledger digest for LLM context (Phase 2 rails).
         ledger_digest: str | None = None
@@ -665,14 +812,14 @@ class InjectorFSM(BaseFSM[InjectorState]):
                 steer_context=steer_context,
             )
             if "error" in chunk_result:
-                self._progress_note(f"chunk_{idx}_distill", "distill", "failed", error=chunk_result["error"])
+                self._progress_note(self._chunk_task_id("distill"), "distill", "failed", error=chunk_result["error"])
                 raise RuntimeError(f"Distiller error on batch {idx}: {chunk_result['error']}")
 
             distiller_path = self._make_tmp(chunk_result)
             self.context["distiller_output_path"] = distiller_path
             # Store chunk hash for knowledge-block write at VALIDATE
             self.context[f"chunk_{idx}_hash"] = chunk_hash
-            self._progress_note(f"chunk_{idx}_distill", "distill", "done", output_ref=distiller_path)
+            self._progress_note(self._chunk_task_id("distill"), "distill", "done", output_ref=distiller_path)
             self._transition_success()
 
         except Exception as e:
@@ -680,18 +827,18 @@ class InjectorFSM(BaseFSM[InjectorState]):
 
     def _handle_sanitize(self) -> None:
         idx = self._current_chunk_idx
-        self._progress_note(f"chunk_{idx}_sanitize", "sanitize", "running")
+        self._progress_note(self._chunk_task_id("sanitize"), "sanitize", "running")
         res = silica_sanitize(self.context["distiller_output_path"])
         if "error" in res:
-            self._progress_note(f"chunk_{idx}_sanitize", "sanitize", "failed", error=res["error"])
+            self._progress_note(self._chunk_task_id("sanitize"), "sanitize", "failed", error=res["error"])
             raise RuntimeError(f"Sanitize failed: {res['error']}")
         self.context["sanitized"] = res
-        self._progress_note(f"chunk_{idx}_sanitize", "sanitize", "done")
+        self._progress_note(self._chunk_task_id("sanitize"), "sanitize", "done")
         self._transition_success()
 
     def _handle_validate(self) -> None:
         idx = self._current_chunk_idx
-        self._progress_note(f"chunk_{idx}_validate", "validate", "running")
+        self._progress_note(self._chunk_task_id("validate"), "validate", "running")
         sanitized = self.context["sanitized"]["parsed"]
         ops_raw = sanitized.get("updates", sanitized) if isinstance(sanitized, dict) else sanitized
         if not isinstance(ops_raw, list):
@@ -749,7 +896,7 @@ class InjectorFSM(BaseFSM[InjectorState]):
             logger.info("VALIDATE: no actionable ops (all skip) — short-circuit to CLEANUP")
             self.context["final_status"] = "no_ops"
             self.context["ops_path"] = ops_path
-            self._progress_note(f"chunk_{idx}_validate", "validate", "done")
+            self._progress_note(self._chunk_task_id("validate"), "validate", "done")
             self.state = InjectorState.CLEANUP
             return
 
@@ -816,11 +963,11 @@ class InjectorFSM(BaseFSM[InjectorState]):
                     "VALIDATE: steer attempt %d/%d for chunk %d — re-delegating with correction.",
                     steer_attempts, _max_steer, idx,
                 )
-                self._progress_note(f"chunk_{idx}_validate", "validate", "running",
+                self._progress_note(self._chunk_task_id("validate"), "validate", "running",
                                     error=f"steer {steer_attempts}/{_max_steer}")
                 try:
                     self.progress.set_status(  # type: ignore[union-attr]
-                        f"chunk_{idx}_distill", "in_progress",
+                        self._chunk_task_id("distill"), "in_progress",
                         error=f"steer attempt {steer_attempts}"
                     )
                 except Exception:
@@ -832,7 +979,7 @@ class InjectorFSM(BaseFSM[InjectorState]):
             self.context["abort_reason"] = "All ops rejected — nothing to write"
             self.context["final_status"] = "no_ops"
             self.context["ops_path"] = ops_path
-            self._progress_note(f"chunk_{idx}_validate", "validate", "done")
+            self._progress_note(self._chunk_task_id("validate"), "validate", "done")
             self.state = InjectorState.CLEANUP
             return
 
@@ -859,7 +1006,7 @@ class InjectorFSM(BaseFSM[InjectorState]):
 
     def _handle_snapshot(self) -> None:
         idx = self._current_chunk_idx
-        self._progress_note(f"chunk_{idx}_snapshot", "snapshot", "running")
+        self._progress_note(self._chunk_task_id("snapshot"), "snapshot", "running")
         from silica.tools.wrapped import silica_snapshot
         res = silica_snapshot(self.context["ops_path"])
         if "error" in res:
@@ -943,16 +1090,16 @@ class InjectorFSM(BaseFSM[InjectorState]):
             logger.error("Failed to take pre-write graph snapshot: %s", e)
             raise RuntimeError(f"Pre-write graph snapshot failed: {e}")
 
-        self._progress_note(f"chunk_{idx}_snapshot", "snapshot", "done")
+        self._progress_note(self._chunk_task_id("snapshot"), "snapshot", "done")
         self._transition_success()
 
     def _handle_write(self) -> None:
         idx = self._current_chunk_idx
-        self._progress_note(f"chunk_{idx}_write", "write", "running")
+        self._progress_note(self._chunk_task_id("write"), "write", "running")
         res = silica_bulk_write(self.context["ops_path"])
 
         if "error" in res:
-            self._progress_note(f"chunk_{idx}_write", "write", "failed", error=res["error"])
+            self._progress_note(self._chunk_task_id("write"), "write", "failed", error=res["error"])
             raise RuntimeError(f"Write failed: {res['error']}")
         if not res.get("success", False):
             failed = res.get("failed_operations", "?")
@@ -963,16 +1110,16 @@ class InjectorFSM(BaseFSM[InjectorState]):
             )
 
         self.context["write"] = res
-        self._progress_note(f"chunk_{idx}_write", "write", "done")
+        self._progress_note(self._chunk_task_id("write"), "write", "done")
         self._transition_success()
 
     def _handle_hub_update(self) -> None:
         """Append MOC links to the Hub note for all newly written notes."""
         idx = self._current_chunk_idx
-        self._progress_note(f"chunk_{idx}_hub_update", "hub_update", "running")
+        self._progress_note(self._chunk_task_id("hub_update"), "hub_update", "running")
         if not self.hub:
             logger.info("HUB_UPDATE: no hub configured, skipping")
-            self._progress_note(f"chunk_{idx}_hub_update", "hub_update", "done")
+            self._progress_note(self._chunk_task_id("hub_update"), "hub_update", "done")
             self._transition_success()
             return
 
@@ -1001,7 +1148,7 @@ class InjectorFSM(BaseFSM[InjectorState]):
 
         if not new_notes:
             logger.info("HUB_UPDATE: no new notes to link, skipping")
-            self._progress_note(f"chunk_{idx}_hub_update", "hub_update", "done")
+            self._progress_note(self._chunk_task_id("hub_update"), "hub_update", "done")
             self._transition_success()
             return
 
@@ -1013,7 +1160,7 @@ class InjectorFSM(BaseFSM[InjectorState]):
             hub_note = DRIVER.read_note(hub_ref)
         except Exception as e:
             logger.warning("HUB_UPDATE: hub '%s' not readable: %s — skipping", hub_path, e)
-            self._progress_note(f"chunk_{idx}_hub_update", "hub_update", "done")
+            self._progress_note(self._chunk_task_id("hub_update"), "hub_update", "done")
             self._transition_success()
             return
 
@@ -1077,7 +1224,7 @@ class InjectorFSM(BaseFSM[InjectorState]):
         if hub_path not in existing_paths:
             self.context.setdefault("snapshot_domain", []).append({"name": hub_name, "path": hub_path})
 
-        self._progress_note(f"chunk_{idx}_hub_update", "hub_update", "done")
+        self._progress_note(self._chunk_task_id("hub_update"), "hub_update", "done")
         self._transition_success()
 
     def _handle_autolink(self) -> None:
@@ -1088,7 +1235,7 @@ class InjectorFSM(BaseFSM[InjectorState]):
         intentional — autolink only ADDs links; it can never break a valid note.
         """
         idx = self._current_chunk_idx
-        self._progress_note(f"chunk_{idx}_autolink", "autolink", "running")
+        self._progress_note(self._chunk_task_id("autolink"), "autolink", "running")
 
         try:
             from silica.kernel.autolink import autolink, build_title_index
@@ -1101,7 +1248,7 @@ class InjectorFSM(BaseFSM[InjectorState]):
             ]
 
             if not touched_paths:
-                self._progress_note(f"chunk_{idx}_autolink", "autolink", "done")
+                self._progress_note(self._chunk_task_id("autolink"), "autolink", "done")
                 self._transition_success()
                 return
 
@@ -1126,12 +1273,12 @@ class InjectorFSM(BaseFSM[InjectorState]):
             # AUTOLINK is best-effort: log and continue to LINT
             logger.warning("AUTOLINK: phase failed (non-fatal): %s", e)
 
-        self._progress_note(f"chunk_{idx}_autolink", "autolink", "done")
+        self._progress_note(self._chunk_task_id("autolink"), "autolink", "done")
         self._transition_success()
 
     def _handle_lint(self) -> None:
         idx = self._current_chunk_idx
-        self._progress_note(f"chunk_{idx}_lint", "lint", "running")
+        self._progress_note(self._chunk_task_id("lint"), "lint", "running")
         try:
             ops = load_ops(self.context["ops_path"])
         except Exception as e:
@@ -1158,7 +1305,7 @@ class InjectorFSM(BaseFSM[InjectorState]):
                 self.context["abort_reason"] = (
                     f"Lint failed for {path}: {res['errors']}"
                 )
-                self._progress_note(f"chunk_{idx}_lint", "lint", "failed", error=self.context["abort_reason"])
+                self._progress_note(self._chunk_task_id("lint"), "lint", "failed", error=self.context["abort_reason"])
                 self.state = InjectorState.ROLLBACK
                 return
 
@@ -1167,7 +1314,7 @@ class InjectorFSM(BaseFSM[InjectorState]):
         if regression_rule != "allow":
             if self._pre_graph is None:
                 self.context["abort_reason"] = "Graph regression gate failed: pre-write snapshot is missing"
-                self._progress_note(f"chunk_{idx}_lint", "lint", "failed", error=self.context["abort_reason"])
+                self._progress_note(self._chunk_task_id("lint"), "lint", "failed", error=self.context["abort_reason"])
                 self.state = InjectorState.ROLLBACK
                 return
             try:
@@ -1203,38 +1350,63 @@ class InjectorFSM(BaseFSM[InjectorState]):
                     self.context["abort_reason"] = (
                         f"Graph regression gate failed: {'; '.join(errors)}"
                     )
-                    self._progress_note(f"chunk_{idx}_lint", "lint", "failed", error=self.context["abort_reason"])
+                    self._progress_note(self._chunk_task_id("lint"), "lint", "failed", error=self.context["abort_reason"])
                     self.state = InjectorState.ROLLBACK
                     return
             except Exception as e:
                 logger.error("Failed to perform graph-diff check: %s", e)
                 self.context["abort_reason"] = f"Graph regression gate error during check: {e}"
-                self._progress_note(f"chunk_{idx}_lint", "lint", "failed", error=self.context["abort_reason"])
+                self._progress_note(self._chunk_task_id("lint"), "lint", "failed", error=self.context["abort_reason"])
                 self.state = InjectorState.ROLLBACK
                 return
 
-        self._progress_note(f"chunk_{idx}_lint", "lint", "done")
+        self._progress_note(self._chunk_task_id("lint"), "lint", "done")
         self._transition_success()
 
     def _handle_cleanup(self) -> None:
         from silica.tools.wrapped import silica_cleanup
 
         self._get_chunks_from_context_if_empty()
-        idx = self._current_chunk_idx
-        self._progress_note(f"chunk_{idx}_cleanup", "cleanup", "running")
+        fi, ci = self._chunk_flat_to_fi_ci.get(self._current_chunk_idx, (0, self._current_chunk_idx))
+        self._progress_note(self._chunk_task_id("cleanup"), "cleanup", "running")
 
-        # Only archive the physical inbox file on the very last chunk
-        if not self._chunks or self._current_chunk_idx + 1 >= len(self._chunks):
-            res = silica_cleanup(self.inbox_file, "done")
-            if "error" in res:
-                self.context["cleanup_warning"] = res["error"]
+        # Always write ledger for this chunk's ops (per chunk)
+        self._write_ledger_for_file(fi, "committed")
+
+        # Archive the physical file only on the last chunk of its file group
+        file_group = self._file_chunks[fi] if fi < len(self._file_chunks) else {}
+        n_chunks_in_file = len(file_group.get("chunks", []))
+        is_last_chunk_of_file = (ci + 1 >= n_chunks_in_file)
+
+        if is_last_chunk_of_file:
+            # Only archive if no chunk of this file failed
+            fi_prefix = f"f{fi}_"
+            file_has_failure = any(
+                t.status == "failed" for t in self.progress.tasks
+                if t.id.startswith(fi_prefix)
+            )
+            if not file_has_failure:
+                inbox_file_for_fi = file_group.get("source_file", self.inbox_file)
+                res = silica_cleanup(inbox_file_for_fi, "done")
+                if "error" in res:
+                    self.context["cleanup_warning"] = res["error"]
+            else:
+                logger.info(
+                    "File %d (%s) had chunk failures — not archiving.",
+                    fi, file_group.get("source_file", "?"),
+                )
         else:
-            logger.info("Batch %d completed. Skipping file move cleanup until final batch.", self._current_chunk_idx + 1)
+            logger.info(
+                "Chunk f%d_c%d done. Archiving deferred until last chunk of file %d.",
+                fi, ci, fi,
+            )
 
-        self._write_ledger("committed")
         if self.context.get("final_status") != "no_ops":
-            self.context["final_status"] = "Success"
-        self._progress_note(f"chunk_{idx}_cleanup", "cleanup", "done")
+            if self.context.get("has_partial_failure"):
+                self.context["final_status"] = "partial"
+            else:
+                self.context["final_status"] = "Success"
+        self._progress_note(self._chunk_task_id("cleanup"), "cleanup", "done")
         self._transition_success()
 
     def _handle_rollback(self) -> None:
@@ -1258,27 +1430,88 @@ class InjectorFSM(BaseFSM[InjectorState]):
                 self.context["rollback_error"] = str(e)
             self._write_ledger_rollback(txn_id)
 
-        self.context["final_status"] = (
-            f"Rolled Back: {self.context.get('abort_reason', 'unknown reason')}"
-        )
         self._progress_note("rollback", "rollback", "done")
-        self._transition_success()
+        # Contain the failure at chunk level instead of aborting the whole run
+        self._contain_chunk_failure()
+
+    def _contain_chunk_failure(self) -> None:
+        """Contain a per-chunk failure: mark failed tasks, reset context, advance.
+
+        Called after rollback completes (or as a no-op when no txn existed).
+        Preserves all previously committed chunks — only the failing chunk is
+        affected.  If more chunks remain, the FSM restarts from COLLISION;
+        otherwise it concludes with final_status="partial".
+        """
+        idx = self._current_chunk_idx
+        fi, ci = self._chunk_flat_to_fi_ci.get(idx, (0, idx))
+        abort_reason = self.context.get("abort_reason", "chunk failure")
+
+        # Mark all f{fi}_c{ci}_* tasks that are not already done as failed
+        prefix = f"f{fi}_c{ci}_"
+        for task in self.progress.tasks:
+            if task.id.startswith(prefix) and task.status not in ("done",):
+                try:
+                    self.progress.mark_failed(task.id, error=abort_reason[:200])
+                except Exception:
+                    pass
+        try:
+            self.progress.save()
+        except Exception:
+            pass
+
+        # Reset per-chunk context to prevent state leakage to the next chunk
+        for key in ("ops_path", "sanitized", "distiller_output_path", "snapshot", "txn_id", "abort_reason"):
+            self.context.pop(key, None)
+        self.context.pop(f"chunk_{idx}_collision_ops", None)
+        self.context.pop(f"chunk_{idx}_hash", None)
+        self.context.pop(f"chunk_{idx}_steer_context", None)
+        self.context.pop(f"chunk_{idx}_steer_attempts", None)
+        self._txn = None
+        self._pre_graph = None
+
+        # Record that at least one chunk failed (used by cleanup to set "partial")
+        self.context["has_partial_failure"] = True
+
+        # Advance to next chunk, or conclude the run as partial
+        self._get_chunks_from_context_if_empty()
+        if self._current_chunk_idx + 1 < len(self._chunks):
+            self._current_chunk_idx += 1
+            logger.info(
+                "Chunk f%d_c%d failed — advancing to chunk %d of %d.",
+                fi, ci, self._current_chunk_idx + 1, len(self._chunks),
+            )
+            has_collision = any(
+                p.get("id") == "collision"
+                for p in self._recipe.get("phases", [])
+            )
+            self.state = InjectorState.COLLISION if has_collision else InjectorState.DELEGATE
+        else:
+            logger.info(
+                "Chunk f%d_c%d failed (last chunk). Run concludes with partial success.", fi, ci
+            )
+            self.context["final_status"] = "partial"
+            self.state = InjectorState.DONE
 
     # ------------------------------------------------------------------
     # Ledger helpers (C5)
     # ------------------------------------------------------------------
 
-    def _write_ledger(self, status: str) -> None:
-        """Record all ops from ops_path into the ledger."""
+    def _write_ledger_for_file(self, fi: int, status: str) -> None:
+        """Record this chunk's ops into the ledger, attributed to file fi."""
         try:
             from silica.kernel.ledger import get_ledger
             ledger = get_ledger()
             txn_id = self.context.get("txn_id", "unknown")
-            source_canonical = self.context.get("source_canonical", "")
-            content_hash = self.context.get("source_content_hash")
+
+            # Use per-file canonical/hash when available; fall back to context
+            if fi < len(self._file_canonicals):
+                source_canonical = self._file_canonicals[fi]
+                content_hash = self._file_content_hashes[fi] if fi < len(self._file_content_hashes) else None
+            else:
+                source_canonical = self.context.get("source_canonical", "")
+                content_hash = self.context.get("source_content_hash")
 
             ops = load_ops(self.context["ops_path"])
-
             for op in ops:
                 if op.op == OpType.skip:
                     continue
@@ -1291,7 +1524,11 @@ class InjectorFSM(BaseFSM[InjectorState]):
                     content_hash=content_hash,
                 )
         except Exception as e:
-            logger.warning("Failed to write ledger: %s", e)
+            logger.warning("Failed to write ledger for file %d: %s", fi, e)
+
+    def _write_ledger(self, status: str) -> None:
+        """Record all ops from ops_path into the ledger (single-file compat wrapper)."""
+        self._write_ledger_for_file(0, status)
 
     def _write_ledger_rollback(self, txn_id: str) -> None:
         try:
