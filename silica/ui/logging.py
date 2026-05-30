@@ -1,40 +1,30 @@
 import logging
-import sys
 from typing import Any
-
-# ANSI escape codes for formatting
-_DIM = "\033[2m"
-_CYAN = "\033[36m"
-_GREEN = "\033[32m"
-_YELLOW = "\033[33m"
-_RED = "\033[31m"
-_RESET = "\033[0m"
-_BOLD = "\033[1m"
 
 # Italian translations/explanations mapping for standard log messages
 FRIENDLY_TEMPLATES = {
     # Debug messages
-    "Registered tool: %s (class=%s)": 
+    "Registered tool: %s (class=%s)":
         "Tool registered in system: {0} (implemented by class {1})",
-    "Redaction failed (omitting detail): %s": 
+    "Redaction failed (omitting detail): %s":
         "Sensitive data redaction failed (details omitted for safety): {0}",
-    "tool_progress_callback error (swallowed): %s": 
+    "tool_progress_callback error (swallowed): %s":
         "Error in tool progress callback (ignored): {0}",
-    "Agent loop iteration %d": 
+    "Agent loop iteration %d":
         "Starting agent loop iteration: {0}",
-    "Created temporary staging file at: %s": 
+    "Created temporary staging file at: %s":
         "Created a temporary file for staging changes at: {0}",
-    "FSM Transition: %s -> executing handler": 
+    "FSM Transition: %s -> executing handler":
         "State machine transition: {0} -> executing associated handler",
-    "Rebuilding FS graph index...": 
+    "Rebuilding FS graph index...":
         "Rebuilding File System index...",
-    "Skipping indexing for inbox directory: %s": 
+    "Skipping indexing for inbox directory: %s":
         "Skipping indexing for the Inbox directory: {0}",
-    "Indexed %d notes": 
+    "Indexed %d notes":
         "Indexing complete: {0} notes found and loaded",
-    "CLI exec: %s": 
+    "CLI exec: %s":
         "Executing CLI command: {0}",
-    "CLI stderr: %s": 
+    "CLI stderr: %s":
         "CLI standard error: {0}",
 
     # LLM call summary (compact)
@@ -46,110 +36,108 @@ FRIENDLY_TEMPLATES = {
     # Info messages
     "Refiner phase: %s":
         "Refinement phase: {0}",
-    "Skipping already processed note: %s": 
+    "Skipping already processed note: %s":
         "Skipping note already processed: {0}",
-    "Injector phase: %s": 
+    "Injector phase: %s":
         "Injection phase: {0}",
-    "VALIDATE: no actionable ops (all skip) — short-circuit to CLEANUP": 
+    "VALIDATE: no actionable ops (all skip) — short-circuit to CLEANUP":
         "Validation complete: no updates needed, short-circuiting to cleanup",
-    "Calling Distiller LLM (payload checksum %s)": 
+    "Calling Distiller LLM (payload checksum %s)":
         "Calling Distiller model to extract changes (checksum: {0})",
-    "Distiller produced %d updates": 
+    "Distiller produced %d updates":
         "Distiller produced {0} updates",
-    "Validation: hub '%s' does not exist. Injected creation operation at %s": 
+    "Validation: hub '%s' does not exist. Injected creation operation at %s":
         "Hub note '{0}' does not exist. Injected creation operation at {1}",
-    "Restored %s to version %d": 
+    "Restored %s to version %d":
         "Restored file {0} to version {1}",
-    "Rolled back created note: %s": 
+    "Rolled back created note: %s":
         "Undid note creation: {0} (removed during rollback)",
-    "Rolled back created note %s (already absent)": 
+    "Rolled back created note %s (already absent)":
         "Undoing note creation of {0} not needed (already absent)",
-    "Rollback complete for txn %s": 
+    "Rollback complete for txn %s":
         "Rollback successfully completed for transaction {0}",
 
     # Warning messages
-    "restore_version with no version number for %s — skipped": 
+    "restore_version with no version number for %s — skipped":
         "Requested restoration of {0} without specific version number (ignored)",
-    "Failed to load recipe 'injector', using defaults: %s": 
+    "Failed to load recipe 'injector', using defaults: %s":
         "Failed to load recipe for injector, using default values: {0}",
-    "Failed to fetch pre-write links for %s: %s": 
+    "Failed to fetch pre-write links for %s: %s":
         "Failed to fetch pre-write links for {0}: {1}",
-    "Failed to write ledger: %s": 
+    "Failed to write ledger: %s":
         "Failed to write transaction log (ledger): {0}",
-    "Failed to mark rollback in ledger: %s": 
+    "Failed to mark rollback in ledger: %s":
         "Failed to record rollback in ledger: {0}",
-    "Failed to load recipe 'refiner', using defaults: %s": 
+    "Failed to load recipe 'refiner', using defaults: %s":
         "Failed to load recipe for refiner, using default values: {0}",
-    "Distiller provider call failed, falling back to litellm: %s": 
+    "Distiller provider call failed, falling back to litellm: %s":
         "Distiller provider call failed, falling back to standard litellm: {0}",
-    "Failed to index %s: %s": 
+    "Failed to index %s: %s":
         "Failed to index note {0}: {1}",
-    "base_query not implemented in FS backend": 
+    "base_query not implemented in FS backend":
         "Base query is not implemented in the File System backend",
-    "No history available for %s": 
+    "No history available for %s":
         "No history available for {0}",
-    "Convergence guard: tool '%s' with args %s failed consecutively. Injecting warning message.": 
+    "Convergence guard: tool '%s' with args %s failed consecutively. Injecting warning message.":
         "Loop detected: tool '{0}' with args {1} failed consecutively. Injected warning message.",
-    "Agent loop hit max iterations (%d)": 
+    "Agent loop hit max iterations (%d)":
         "Agent loop reached the maximum limit of iterations ({0})",
 
     # Error messages
-    "Rollback error: %s": 
+    "Rollback error: %s":
         "Error during rollback of changes: {0}",
-    "FSM Error in state %s: %s": 
+    "FSM Error in state %s: %s":
         "Error in the state machine in state {0}: {1}",
-    "Failed to take pre-write graph snapshot: %s": 
+    "Failed to take pre-write graph snapshot: %s":
         "Failed to save initial graph snapshot: {0}",
-    "Failed to perform graph-diff check: %s": 
+    "Failed to perform graph-diff check: %s":
         "Failed to compare graph differences: {0}",
-    "Rollback partially failed: %s": 
+    "Rollback partially failed: %s":
         "Rollback partially failed: {0}",
-    "Rollback failed: %s": 
+    "Rollback failed: %s":
         "Annulling changes (rollback) failed: {0}",
-    "Enricher failed for task %d: %s": 
+    "Enricher failed for task %d: %s":
         "Enrichment phase failed for task {0}: {1}",
-    "Distiller call hit maximum tokens limit (generation cut off)": 
+    "Distiller call hit maximum tokens limit (generation cut off)":
         "Distiller call exceeded the maximum limit of allowed tokens",
-    "Transient LLM error, retries exhausted: %s": 
+    "Transient LLM error, retries exhausted: %s":
         "Transient LLM error, retries exhausted: {0}",
-    "Permanent LLM or execution error: %s": 
+    "Permanent LLM or execution error: %s":
         "Permanent LLM or execution error: {0}",
-    "LLM call failed: %s": 
+    "LLM call failed: %s":
         "LLM call failed: {0}",
-    "Failed to execute or parse eval search: %s": 
+    "Failed to execute or parse eval search: %s":
         "Failed to execute or parse evaluation search: {0}",
-    "Failed to restore %s: %s": 
+    "Failed to restore %s: %s":
         "Failed to restore note {0}: {1}",
-    "Failed to delete created note %s during rollback: %s": 
+    "Failed to delete created note %s during rollback: %s":
         "Failed to remove created note {0} during rollback: {1}",
-    "Convergence guard: tool '%s' with args %s failed %d times consecutively. Aborting agent run.": 
+    "Convergence guard: tool '%s' with args %s failed %d times consecutively. Aborting agent run.":
         "Potential infinite loop detected: tool '{0}' with args {1} failed {2} consecutive times. Aborting execution.",
 }
 
+
 class HumanFriendlyFormatter(logging.Formatter):
-    """Custom logging formatter that wraps technical log messages into a human-readable format."""
+    """Logging formatter that maps technical messages to human-readable Rich markup."""
 
     def __init__(self) -> None:
         super().__init__(datefmt="%H:%M:%S")
 
     def format(self, record: logging.LogRecord) -> str:
-        # Get formatted timestamp
         time_str = self.formatTime(record, self.datefmt)
 
-        # Style level icons
         level = record.levelno
         if level == logging.DEBUG:
-            icon = f"{_CYAN}⚙{_RESET}"
+            icon = "[muted]⚙[/muted]"
         elif level == logging.INFO:
-            icon = f"{_GREEN}ℹ{_RESET}"
+            icon = "[tool.ok]ℹ[/tool.ok]"
         elif level == logging.WARNING:
-            icon = f"{_YELLOW}⚠️{_RESET}"
+            icon = "[yellow]⚠️[/yellow]"
         elif level >= logging.ERROR:
-            icon = f"{_RED}❌{_RESET}"
+            icon = "[tool.err]❌[/tool.err]"
         else:
             icon = "•"
 
-        # Interpolate standard string representation of args
         try:
             message = record.getMessage()
         except Exception as e:
@@ -162,7 +150,6 @@ class HumanFriendlyFormatter(logging.Formatter):
             if isinstance(template, str) and template in FRIENDLY_TEMPLATES:
                 friendly_template = FRIENDLY_TEMPLATES[template]
                 try:
-                    # Safely inject formatted arguments into the friendly template
                     if record.args:
                         if isinstance(record.args, dict):
                             friendly_message = friendly_template.format(**record.args)
@@ -173,11 +160,9 @@ class HumanFriendlyFormatter(logging.Formatter):
                     else:
                         friendly_message = friendly_template
                 except Exception:
-                    # Fallback to default message if formatting fails
                     pass
 
-        # If no mapping was found or matched, use the default interpolated message
         if not friendly_message:
             friendly_message = message
 
-        return f"  {_DIM}[{time_str}]{_RESET} {icon} {friendly_message}"
+        return f"  [muted][{time_str}][/muted] {icon} {friendly_message}"
