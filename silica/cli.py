@@ -27,26 +27,42 @@ import silica.tools.wrapped  # noqa: F401
 logger = logging.getLogger(__name__)
 
 
+def _update_context_tokens(messages: list[dict]) -> None:
+    try:
+        import litellm
+        CONFIG.context_tokens = litellm.token_counter(model=CONFIG.model, messages=messages)
+    except Exception:
+        CONFIG.context_tokens = sum(len(m.get("content") or "") for m in messages) // 4
+
+
 def _setup_logging(debug: bool = False) -> None:
     """Configure logging for the CLI session."""
     CONFIG.debug_logging = debug
     level = logging.DEBUG if debug else logging.WARNING
-    
-    # Reset existing handlers to configure cleanly
+
     root = logging.getLogger()
     for h in root.handlers[:]:
         root.removeHandler(h)
 
-    handler = logging.StreamHandler(sys.stderr)
     if debug:
+        from rich.logging import RichHandler
         from silica.ui.logging import HumanFriendlyFormatter
-        formatter = HumanFriendlyFormatter()
-    else:
-        formatter = logging.Formatter(
-            fmt="%(asctime)s [%(name)s] %(levelname)s: %(message)s",
-            datefmt="%H:%M:%S",
+        handler = RichHandler(
+            console=CONSOLE,
+            markup=True,
+            show_path=False,
+            show_level=False,
+            show_time=False,
         )
-    handler.setFormatter(formatter)
+        handler.setFormatter(HumanFriendlyFormatter())
+    else:
+        handler = logging.StreamHandler(sys.stderr)
+        handler.setFormatter(
+            logging.Formatter(
+                fmt="%(asctime)s [%(name)s] %(levelname)s: %(message)s",
+                datefmt="%H:%M:%S",
+            )
+        )
     root.addHandler(handler)
     root.setLevel(level)
 
@@ -394,9 +410,11 @@ def main():
             answer = run_agent(messages, model=CONFIG.model, tool_progress_callback=callback)
             if answer:
                 CONSOLE.print()
+                CONSOLE.print("[role.assistant]⏺ silica[/]")
                 CONSOLE.print(Markdown(answer))
                 CONSOLE.print()
             messages.append({"role": "assistant", "content": answer or ""})
+            _update_context_tokens(messages)
         except KeyboardInterrupt:
             CONSOLE.print("\n  [dim](interrupted)[/]")
         except Exception as e:
