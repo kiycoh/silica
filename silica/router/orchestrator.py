@@ -45,6 +45,41 @@ from silica.router.base_fsm import BaseFSM
 logger = logging.getLogger(__name__)
 
 
+def _inject_graph_ctx(chunk: dict, vault_ctx: dict) -> dict:
+    """Return a shallow-enriched copy of chunk with graph_context added to concepts.
+
+    For every concept that has a vault_collision, adds a graph_context field:
+        {"cluster_id": int, "hub": str|None, "is_hub": bool}
+    Concepts without a vault_collision get graph_context=null.
+    The original chunk dict is never mutated.
+    """
+    if not vault_ctx:
+        return chunk
+
+    enriched_batches = []
+    for batch in chunk.get("batches", []):
+        enriched_concepts = []
+        for concept in batch.get("concepts", []):
+            if not isinstance(concept, dict):
+                enriched_concepts.append(concept)
+                continue
+            collision = concept.get("vault_collision") or {}
+            cpath = collision.get("path", "").removesuffix(".md") if collision else ""
+            gctx = vault_ctx.get(cpath)
+            graph_context = (
+                {
+                    "cluster_id": gctx["cluster_id"],
+                    "hub": gctx["hub"],
+                    "is_hub": gctx["is_hub"],
+                }
+                if gctx and cpath
+                else None
+            )
+            enriched_concepts.append({**concept, "graph_context": graph_context})
+        enriched_batches.append({**batch, "concepts": enriched_concepts})
+    return {**chunk, "batches": enriched_batches}
+
+
 class InjectorState(Enum):
     INIT = auto()
     RECON = auto()         # Phase 1
@@ -521,6 +556,39 @@ class InjectorFSM(BaseFSM[InjectorState]):
         )
         self._transition_success()
 
+    def _build_vault_graph_ctx(self) -> dict[str, dict]:
+        """Compute per-note graph context (cluster/hub/pagerank) from the current vault state.
+
+        Returns a dict keyed by vault-relative path without .md extension:
+            {"cluster_id": int, "hub": str|None, "is_hub": bool, "pagerank": float}
+        Empty dict on any failure — all consumers treat missing context as a no-op.
+        """
+        try:
+            from silica.kernel.graph_report import compute_report
+            _t = time.monotonic()
+            report = compute_report()
+            ctx: dict[str, dict] = {}
+            for cs in report.clusters:
+                for member in cs.members:
+                    ctx[member] = {
+                        "cluster_id": cs.cluster_id,
+                        "hub": cs.hub,
+                        "is_hub": member == cs.hub,
+                        "pagerank": report.pagerank_map.get(member, 0.0),
+                    }
+            # Include isolated nodes (not in any cluster) so pagerank is available
+            for node_id, pr_val in report.pagerank_map.items():
+                if node_id not in ctx:
+                    ctx[node_id] = {"cluster_id": -1, "hub": None, "is_hub": False, "pagerank": pr_val}
+            logger.info(
+                "PAYLOAD: vault graph context built — %d nodes, %d clusters (%.2fs)",
+                len(ctx), len(report.clusters), time.monotonic() - _t,
+            )
+            return ctx
+        except Exception as _e:
+            logger.info("PAYLOAD: vault graph context unavailable (%s) — graph features disabled", _e)
+            return {}
+
     def _source_canonical_for(self, inbox_file: str) -> str:
         """Vault-relative canonical path for an arbitrary inbox file (no .md, lowercase)."""
         vault_path = getattr(CONFIG, "vault_path", None) or ""
@@ -642,6 +710,12 @@ class InjectorFSM(BaseFSM[InjectorState]):
             len(self._chunks),
             [fg["source_file"] for fg in self._file_chunks],
         )
+
+        # Build vault graph context (cluster/hub/pagerank) once per run.
+        # Stored in context["vault_graph_ctx"] and consumed by COLLISION,
+        # DELEGATE (distiller enrichment), AUTOLINK, and HUB_UPDATE.
+        self.context["vault_graph_ctx"] = self._build_vault_graph_ctx()
+
         self._transition_success()
 
     def _handle_salience(self) -> None:
@@ -782,15 +856,23 @@ class InjectorFSM(BaseFSM[InjectorState]):
 
                 top = results[0]
                 score: float = top.get("score", 0.0)
+                existing_path = top.get("path", "")
 
-                if score >= τ_high:
-                    existing_path = top.get("path", "")
+                # Lower effective threshold for cluster hubs: merging into an
+                # anchor note is safer than creating a competing shadow note.
+                _vault_ctx = self.context.get("vault_graph_ctx", {})
+                _match_key = existing_path.removesuffix(".md")
+                _is_hub = _vault_ctx.get(_match_key, {}).get("is_hub", False)
+                τ_eff = τ_high - (0.08 if _is_hub else 0.0)
+
+                if score >= τ_eff:
                     try:
                         DRIVER.read_note(existing_path)
                         # Graph confirms node exists — safe to patch
                         logger.info(
-                            "COLLISION: '%s' → patch '%s' (score=%.3f ≥ τ_high=%.2f)",
-                            concept_text, existing_path, score, τ_high,
+                            "COLLISION: '%s' → patch '%s' (score=%.3f ≥ τ_eff=%.2f%s)",
+                            concept_text, existing_path, score, τ_eff,
+                            " [hub]" if _is_hub else "",
                         )
                         pre_routed_ops.append({
                             "op": "patch",
@@ -799,7 +881,7 @@ class InjectorFSM(BaseFSM[InjectorState]):
                             "source_basename": os.path.basename(inbox_file),
                             "snippet": concept.get("excerpt", "") if isinstance(concept, dict) else "",
                             "hub": self.hub,
-                            "reason": f"collision_routed score={score:.3f}",
+                            "reason": f"collision_routed score={score:.3f}{' [hub]' if _is_hub else ''}",
                         })
                     except Exception:
                         # Node not in graph — treat as new write
@@ -931,9 +1013,15 @@ class InjectorFSM(BaseFSM[InjectorState]):
         if steer_context:
             logger.info("DELEGATE chunk %d: re-attempt with steering correction", idx)
 
+        # Enrich the payload with graph context (cluster/hub/is_hub) for concepts
+        # that have a vault_collision.  The distiller uses this to understand
+        # structural importance of the matched note.  Original chunk is not modified.
+        vault_ctx = self.context.get("vault_graph_ctx", {})
+        enriched_chunk = _inject_graph_ctx(current_chunk, vault_ctx) if vault_ctx else current_chunk
+
         try:
             chunk_result = run_distiller(
-                payload=current_chunk,
+                payload=enriched_chunk,
                 target=self.target_dir,
                 hub=self.hub,
                 ledger_digest=ledger_digest,
@@ -1311,6 +1399,22 @@ class InjectorFSM(BaseFSM[InjectorState]):
             if "snapshot" in self.context and "inverses" in self.context["snapshot"]:
                 self.context["snapshot"]["inverses"].append(hub_inverse.model_dump())
 
+        # Cross-cluster integrity check: warn when new notes land in a different
+        # cluster from the hub.  This is informational only — the MOC link is
+        # still written, but the log helps identify structural drift.
+        _gctx = self.context.get("vault_graph_ctx", {})
+        _hub_key = hub_path.removesuffix(".md")
+        _hub_cluster = _gctx.get(_hub_key, {}).get("cluster_id", -1)
+        if _gctx and _hub_cluster >= 0:
+            for note_name, _ in new_notes:
+                _note_key = f"{self.target_dir}/{note_name}".replace("//", "/")
+                _note_cluster = _gctx.get(_note_key, {}).get("cluster_id", -1)
+                if _note_cluster >= 0 and _note_cluster != _hub_cluster:
+                    logger.warning(
+                        "HUB_UPDATE: '%s' (cluster %d) linked to hub '%s' (cluster %d) — cross-cluster MOC",
+                        note_name, _note_cluster, hub_name, _hub_cluster,
+                    )
+
         # Build MOC block and merge with existing content.
         # Use overwrite (not append) to avoid the create→append settle race:
         # append's _wait_for_content_contains must find the full fragment
@@ -1383,12 +1487,34 @@ class InjectorFSM(BaseFSM[InjectorState]):
             all_refs = DRIVER.list_files()
             title_index = build_title_index(all_refs)
 
+            # Build a reverse map: title (basename, no .md) → cluster_id for fast lookup
+            vault_ctx = self.context.get("vault_graph_ctx", {})
+            _title_to_cluster: dict[str, int] = {
+                k.rsplit("/", 1)[-1]: v["cluster_id"]
+                for k, v in vault_ctx.items()
+                if v.get("cluster_id", -1) >= 0
+            }
+
             total_added = 0
             for path in touched_paths:
                 try:
                     note_title = os.path.splitext(os.path.basename(path))[0]
+                    note_cluster = _title_to_cluster.get(note_title, -1)
+
+                    # Narrow candidates to the same cluster when cluster data is available.
+                    # This prevents cross-cluster noise links (e.g. Economics ↔ Physics).
+                    if vault_ctx and note_cluster >= 0:
+                        candidates = [
+                            t for t in title_index
+                            if _title_to_cluster.get(t, -1) == note_cluster and t != note_title
+                        ]
+                    else:
+                        candidates = None
+
                     nc = DRIVER.read_note(path)
-                    new_body, added = autolink(nc.content or "", title_index, self_title=note_title)
+                    new_body, added = autolink(
+                        nc.content or "", title_index, candidates=candidates, self_title=note_title
+                    )
                     if added:
                         DRIVER.overwrite(path, new_body)
                         total_added += len(added)

@@ -71,6 +71,7 @@ class VaultReport:
     dangling: list[dict]   # [{"target": str, "refs": int}]
     clusters: list[ClusterStat]
     missing_links: list[MissingLink] = field(default_factory=list)
+    pagerank_map: dict[str, float] = field(default_factory=dict)  # all nodes: vault-relative path (no .md) → pagerank
 
 
 # ---------------------------------------------------------------------------
@@ -255,6 +256,7 @@ def compute_report(
         orphans=orphans,
         dangling=dangling,
         clusters=clusters,
+        pagerank_map={nid: round(pr.get(nid, 0.0), 5) for nid in real_ids},
     )
 
     # ------------------------------------------------------------------

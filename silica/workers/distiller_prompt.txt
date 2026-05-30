@@ -42,7 +42,12 @@ The payload file referenced in your task context has shape:
             "match_type": "title" | "body",
             "total_hits": <int>,
             "excerpt": "extracted section/window from the colliding vault note"
-          } | null
+          } | null,
+          "graph_context": {
+            "cluster_id": <int>,    // Louvain cluster the matched note belongs to
+            "hub": "<path>",        // highest-degree note in that cluster (anchor node)
+            "is_hub": <bool>        // true when vault_collision IS the cluster hub
+          } | null                  // null when vault cluster data is unavailable
         }
       ]
     }
@@ -54,7 +59,7 @@ The excerpts are already extracted by the Router via the recon + distiller_paylo
 ## Decision Rubric
 For every concept in every batch, decide exactly ONE action:
 
-- **patch** — vault_collision is not null AND inbox_excerpt contains facts (definitions, formulas, examples, code blocks, structural notes, tables) that are NOT present in vault_collision.excerpt. Extract only the missing facts.
+- **patch** — vault_collision is not null AND inbox_excerpt contains facts (definitions, formulas, examples, code blocks, structural notes, tables) that are NOT present in vault_collision.excerpt. Extract only the missing facts. When `graph_context.is_hub` is true, the matched note is a structural anchor of its cluster — prefer `patch` even at lower confidence rather than creating a shadow note.
 - **write** — vault_collision is null (concept is new to the vault). Extract a complete, factually-dense definition plus supporting details for a new spoke note.
 - **skip** — vault_collision is not null AND already covers everything in inbox_excerpt, OR the concept is genuine semantic noise (generic acronym, slide marker, rhetorical fragment) with no substantive payload.
 - Every write/patch op MUST set `"linked_axis"` to exactly one of `main_thematic_axes`. If a concept does not substantively expand any axis (mere mention, unexpanded acronym, passive bibliographic reference), emit `"op": "skip"` with `"reason": "off-axis"`.
