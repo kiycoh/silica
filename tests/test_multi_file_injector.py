@@ -210,13 +210,16 @@ class TestT2ChunkContainment:
         assert res.get("has_partial_failure") is True
 
     def test_context_reset_between_chunks(self):
-        """Per-chunk keys are cleared in context after _contain_chunk_failure."""
+        """Per-chunk namespace is atomically cleared after _contain_chunk_failure."""
         fsm = InjectorFSM("Inbox/test.md", "Concepts")
-        # Simulate state after a failed chunk: ops_path and snapshot in context
-        fsm.context["ops_path"] = "/tmp/ops.json"
-        fsm.context["sanitized"] = {"parsed": []}
-        fsm.context["snapshot"] = {"txn_id": "txn_1", "inverses": []}
-        fsm.context["txn_id"] = "txn_1"
+        # Simulate state after a failed chunk using the chunk namespace
+        fsm.context["chunk"] = {
+            "ops_path": "/tmp/ops.json",
+            "sanitized": {"parsed": []},
+            "snapshot": {"txn_id": "txn_1", "inverses": []},
+            "txn_id": "txn_1",
+        }
+        # idx-keyed keys live outside the chunk namespace and are safe across chunks
         fsm.context["chunk_0_collision_ops"] = []
         fsm.context["chunk_0_hash"] = "abc123"
         fsm._current_chunk_idx = 0
@@ -225,13 +228,11 @@ class TestT2ChunkContainment:
 
         fsm._contain_chunk_failure()
 
-        # All per-chunk keys must be cleared
-        assert "ops_path" not in fsm.context
-        assert "sanitized" not in fsm.context
-        assert "snapshot" not in fsm.context
-        assert "txn_id" not in fsm.context
-        assert "chunk_0_collision_ops" not in fsm.context
-        assert "chunk_0_hash" not in fsm.context
+        # The chunk namespace must be atomically cleared
+        assert fsm.context.get("chunk") is None
+        # idx-keyed keys are untouched (already safe per-chunk via idx)
+        assert "chunk_0_collision_ops" in fsm.context
+        assert "chunk_0_hash" in fsm.context
         # Advanced to next chunk
         assert fsm._current_chunk_idx == 1
         assert fsm.state in (InjectorState.COLLISION, InjectorState.DELEGATE)
@@ -326,8 +327,8 @@ class TestT4PerFileCleanup:
 
         with patch("silica.router.orchestrator.load_ops", return_value=[mock_op]):
             with patch("silica.kernel.ledger.get_ledger") as mock_ledger:
-                fsm.context["ops_path"] = "/tmp/ops.json"
-                fsm.context["txn_id"] = "txn_1"
+                fsm.context.setdefault("chunk", {})["ops_path"] = "/tmp/ops.json"
+                fsm.context.setdefault("chunk", {})["txn_id"] = "txn_1"
                 fsm._write_ledger_for_file(1, "committed")
                 call_kwargs = mock_ledger.return_value.record.call_args
         # source_canonical should be for fi=1 ("inbox/b")

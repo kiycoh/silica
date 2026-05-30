@@ -119,7 +119,7 @@ def test_fsm_delegate_single_chunk(mock_run_distiller):
         assert isinstance(call_kwargs.get("ledger_digest"), (str, type(None)))
         mock_make_tmp.assert_called_once_with({"updates": [{"op": "write", "path": "notes/note1.md", "heading": "Note 1"}]})
         assert fsm.state == InjectorState.SANITIZE
-        assert fsm.context["distiller_output_path"] == "temp_chunk_path.json"
+        assert fsm.context["chunk"]["distiller_output_path"] == "temp_chunk_path.json"
 
 
 @patch("silica.router.orchestrator.silica_recon")
@@ -251,7 +251,7 @@ def test_fsm_gate_all_rejected_steers_then_defers(mock_validate):
     fsm = InjectorFSM("Inbox/test.md", "TargetDir")
     fsm._chunks = [{"schema_version": 1, "batches": []}]
     fsm._current_chunk_idx = 0
-    fsm.context["sanitized"] = {"parsed": []}
+    fsm.context.setdefault("chunk", {})["sanitized"] = {"parsed": []}
     fsm.state = InjectorState.VALIDATE
 
     # First call: steer attempt 1 → go to DELEGATE
@@ -261,14 +261,14 @@ def test_fsm_gate_all_rejected_steers_then_defers(mock_validate):
     assert fsm.context.get("chunk_0_steer_context") is not None
 
     # Put FSM back at VALIDATE and call again (simulating steer attempt 2)
-    fsm.context["sanitized"] = {"parsed": []}
+    fsm.context.setdefault("chunk", {})["sanitized"] = {"parsed": []}
     fsm.state = InjectorState.VALIDATE
     fsm.step()
     assert fsm.state == InjectorState.DELEGATE
     assert fsm.context.get("chunk_0_steer_attempts") == 2
 
     # Third call: budget exhausted → CLEANUP with "no_ops"
-    fsm.context["sanitized"] = {"parsed": []}
+    fsm.context.setdefault("chunk", {})["sanitized"] = {"parsed": []}
     fsm.state = InjectorState.VALIDATE
     fsm.step()
     assert fsm.state == InjectorState.CLEANUP
@@ -291,7 +291,7 @@ def test_fsm_gate_partial_rejection_continues(mock_validate):
 
     fsm = InjectorFSM("Inbox/test.md", "TargetDir")
     fsm.context["payload"] = {"payload": {"chunk_id": 0}}
-    fsm.context["sanitized"] = {"parsed": []}
+    fsm.context.setdefault("chunk", {})["sanitized"] = {"parsed": []}
     fsm.context["source_content_hash"] = ""  # no deferred store call
     fsm.state = InjectorState.VALIDATE
 
@@ -299,7 +299,7 @@ def test_fsm_gate_partial_rejection_continues(mock_validate):
 
     # Pipeline advances past VALIDATE (to SNAPSHOT)
     assert fsm.state == InjectorState.SNAPSHOT
-    assert "abort_reason" not in fsm.context
+    assert "abort_reason" not in fsm.context.get("chunk", {})
 
 
 @patch("silica.router.orchestrator.silica_lint")
@@ -319,14 +319,14 @@ def test_fsm_graph_regression_gate_rollback(mock_open, mock_restore, mock_driver
     mock_driver.graph_snapshot.return_value = post_graph
     
     fsm = InjectorFSM("Inbox/test.md", "TargetDir")
-    fsm.context["ops_path"] = "dummy_ops.json"
+    fsm.context.setdefault("chunk", {})["ops_path"] = "dummy_ops.json"
     fsm._pre_graph = pre_graph
     fsm._txn = MagicMock()
     fsm._txn.created_paths = ["notes/NoteA.md"]
-    
+
     # Setup snapshot data for rollback inverse application
     inverses = [{"op": "delete", "path": "notes/NoteA.md"}]
-    fsm.context["snapshot"] = {
+    fsm.context.setdefault("chunk", {})["snapshot"] = {
         "txn_id": "txn_123",
         "inverses": inverses
     }
@@ -342,7 +342,7 @@ def test_fsm_graph_regression_gate_rollback(mock_open, mock_restore, mock_driver
         
         # Verify transition to ROLLBACK on gate rejection
         assert fsm.state == InjectorState.ROLLBACK
-        assert "Graph regression gate failed: New orphans detected" in fsm.context["abort_reason"]
+        assert "Graph regression gate failed: New orphans detected" in fsm.context["chunk"]["abort_reason"]
         
     # Now run the ROLLBACK step
     mock_restore.return_value = {"success": True}
@@ -674,7 +674,7 @@ def test_fsm_short_circuit_no_ops(mock_validate):
 
     fsm = InjectorFSM("Inbox/test.md", "TargetDir")
     fsm.context["payload"] = {"payload": {"chunk_id": 0}}
-    fsm.context["sanitized"] = {"parsed": []}
+    fsm.context.setdefault("chunk", {})["sanitized"] = {"parsed": []}
     fsm.state = InjectorState.VALIDATE
 
     with patch.object(fsm, "_make_tmp", return_value="dummy_ops.json"):

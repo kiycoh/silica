@@ -231,15 +231,32 @@ class InjectorFSM(BaseFSM[InjectorState]):
             )
             for p in self._recipe.get("phases", [])
         ]
-        self.task_ledger = TaskLedger.new(
-            run_id=self.progress.run_id,
-            user_request=f"inject {', '.join(self.inbox_files)} → {target_dir}",
-            checkpoints=_checkpoints,
-        )
-        try:
-            self.task_ledger.save()
-        except Exception as _e:
-            logger.debug("TaskLedger save failed (suppressed): %s", _e)
+        if _resumed:
+            # On resume: load the original TaskLedger to preserve its immutable
+            # user_request / created_at / checkpoints.  Fall back to creating a
+            # fresh one only if the file is missing (e.g. run dir was pruned).
+            try:
+                self.task_ledger = TaskLedger.load(self.progress.run_id)
+            except Exception:
+                self.task_ledger = TaskLedger.new(
+                    run_id=self.progress.run_id,
+                    user_request=f"inject {', '.join(self.inbox_files)} → {target_dir}",
+                    checkpoints=_checkpoints,
+                )
+                try:
+                    self.task_ledger.save()
+                except Exception as _e:
+                    logger.debug("TaskLedger save failed (suppressed): %s", _e)
+        else:
+            self.task_ledger = TaskLedger.new(
+                run_id=self.progress.run_id,
+                user_request=f"inject {', '.join(self.inbox_files)} → {target_dir}",
+                checkpoints=_checkpoints,
+            )
+            try:
+                self.task_ledger.save()
+            except Exception as _e:
+                logger.debug("TaskLedger save failed (suppressed): %s", _e)
 
     def _get_chunks_from_context_if_empty(self) -> None:
         """Helper to extract chunks from self.context['payload'] if self._chunks is empty."""
@@ -276,6 +293,11 @@ class InjectorFSM(BaseFSM[InjectorState]):
             self.progress.save()
         except Exception as _e:
             logger.debug("progress shadow error (suppressed): %s", _e)
+
+    @property
+    def _chunk_ctx(self) -> dict:
+        """Per-chunk volatile state namespace — cleared atomically on each chunk boundary."""
+        return self.context.setdefault("chunk", {})
 
     def _save_knowledge_block(self, chunk_idx: int, ops_path: str) -> str:
         """Persist validated ops to a stable (non-tmp) path in the run directory.
@@ -334,7 +356,7 @@ class InjectorFSM(BaseFSM[InjectorState]):
                     self.context["error"] = str(e)
                     next_state = self._ON_ERROR.get(self.state, self._error_state)
                     if next_state == self._rollback_state:
-                        self.context["abort_reason"] = str(e)
+                        self._chunk_ctx["abort_reason"] = str(e)
                         self.state = self._rollback_state
                     else:
                         self.state = self._error_state
@@ -350,6 +372,10 @@ class InjectorFSM(BaseFSM[InjectorState]):
 
     def _eval_loop_or_done(self) -> None:
         """Check if there are more chunks to process or if the queue is empty."""
+        # Clear the per-chunk volatile namespace atomically before advancing
+        self.context.pop("chunk", None)
+        self._txn = None
+        self._pre_graph = None
         self._get_chunks_from_context_if_empty()
         if self._current_chunk_idx + 1 < len(self._chunks):
             self._current_chunk_idx += 1
@@ -747,6 +773,16 @@ class InjectorFSM(BaseFSM[InjectorState]):
         # Store pre-routed ops for merging in VALIDATE (Phase 5)
         self.context[f"chunk_{idx}_collision_ops"] = pre_routed_ops
 
+        # Capture the idempotency hash BEFORE mutating the chunk.
+        # COLLISION re-routes concepts based on what is currently in the vault,
+        # which changes between a partial run and its resume (done chunks have
+        # already written their notes).  Hashing the pre-COLLISION chunk means
+        # the key is stable across runs with the same source input.
+        import json as _json
+        self.context[f"chunk_{idx}_input_hash"] = hashlib.sha256(
+            _json.dumps(chunk, sort_keys=True).encode()
+        ).hexdigest()
+
         # Replace chunk with filtered version (remove patched/deferred concepts)
         self._chunks[idx] = {
             "schema_version": chunk.get("schema_version", 1),
@@ -773,8 +809,12 @@ class InjectorFSM(BaseFSM[InjectorState]):
         # Content-addressed idempotency (Phase 2): if this chunk was already
         # processed in a prior run with identical input, skip DELEGATE→SANITIZE→VALIDATE
         # and reuse the persisted knowledge-block ops file.
+        #
+        # Use the pre-COLLISION hash stored by _handle_collision so the key is
+        # based on the original source input, not the vault-state-dependent
+        # post-COLLISION chunk (which changes when resumed after a partial run).
         import json as _json
-        chunk_hash = hashlib.sha256(
+        chunk_hash = self.context.get(f"chunk_{idx}_input_hash") or hashlib.sha256(
             _json.dumps(current_chunk, sort_keys=True).encode()
         ).hexdigest()
         saved_ops_path = self.progress.is_checkpoint_done(self._chunk_task_id("validate"), chunk_hash)
@@ -816,7 +856,7 @@ class InjectorFSM(BaseFSM[InjectorState]):
                 raise RuntimeError(f"Distiller error on batch {idx}: {chunk_result['error']}")
 
             distiller_path = self._make_tmp(chunk_result)
-            self.context["distiller_output_path"] = distiller_path
+            self._chunk_ctx["distiller_output_path"] = distiller_path
             # Store chunk hash for knowledge-block write at VALIDATE
             self.context[f"chunk_{idx}_hash"] = chunk_hash
             self._progress_note(self._chunk_task_id("distill"), "distill", "done", output_ref=distiller_path)
@@ -828,18 +868,18 @@ class InjectorFSM(BaseFSM[InjectorState]):
     def _handle_sanitize(self) -> None:
         idx = self._current_chunk_idx
         self._progress_note(self._chunk_task_id("sanitize"), "sanitize", "running")
-        res = silica_sanitize(self.context["distiller_output_path"])
+        res = silica_sanitize(self._chunk_ctx["distiller_output_path"])
         if "error" in res:
             self._progress_note(self._chunk_task_id("sanitize"), "sanitize", "failed", error=res["error"])
             raise RuntimeError(f"Sanitize failed: {res['error']}")
-        self.context["sanitized"] = res
+        self._chunk_ctx["sanitized"] = res
         self._progress_note(self._chunk_task_id("sanitize"), "sanitize", "done")
         self._transition_success()
 
     def _handle_validate(self) -> None:
         idx = self._current_chunk_idx
         self._progress_note(self._chunk_task_id("validate"), "validate", "running")
-        sanitized = self.context["sanitized"]["parsed"]
+        sanitized = self._chunk_ctx["sanitized"]["parsed"]
         ops_raw = sanitized.get("updates", sanitized) if isinstance(sanitized, dict) else sanitized
         if not isinstance(ops_raw, list):
             ops_raw = [ops_raw]
@@ -895,7 +935,7 @@ class InjectorFSM(BaseFSM[InjectorState]):
         if res.get("validated_count", 0) == 0 and res.get("rejected_count", 0) == 0:
             logger.info("VALIDATE: no actionable ops (all skip) — short-circuit to CLEANUP")
             self.context["final_status"] = "no_ops"
-            self.context["ops_path"] = ops_path
+            self._chunk_ctx["ops_path"] = ops_path
             self._progress_note(self._chunk_task_id("validate"), "validate", "done")
             self.state = InjectorState.CLEANUP
             return
@@ -976,9 +1016,9 @@ class InjectorFSM(BaseFSM[InjectorState]):
                 return
             # Exhausted steering budget → defer and short-circuit.
             logger.warning("VALIDATE: steer budget exhausted (%d/%d) — deferring chunk %d.", steer_attempts, _max_steer, idx)
-            self.context["abort_reason"] = "All ops rejected — nothing to write"
+            self._chunk_ctx["abort_reason"] = "All ops rejected — nothing to write"
             self.context["final_status"] = "no_ops"
-            self.context["ops_path"] = ops_path
+            self._chunk_ctx["ops_path"] = ops_path
             self._progress_note(self._chunk_task_id("validate"), "validate", "done")
             self.state = InjectorState.CLEANUP
             return
@@ -994,7 +1034,7 @@ class InjectorFSM(BaseFSM[InjectorState]):
             except Exception as _kb_e:
                 logger.debug("Knowledge-block save failed (non-fatal): %s", _kb_e)
 
-        self.context["ops_path"] = kb_path
+        self._chunk_ctx["ops_path"] = kb_path
         self._progress_note(
             f"chunk_{self._current_chunk_idx}_validate",
             "validate",
@@ -1008,12 +1048,12 @@ class InjectorFSM(BaseFSM[InjectorState]):
         idx = self._current_chunk_idx
         self._progress_note(self._chunk_task_id("snapshot"), "snapshot", "running")
         from silica.tools.wrapped import silica_snapshot
-        res = silica_snapshot(self.context["ops_path"])
+        res = silica_snapshot(self._chunk_ctx["ops_path"])
         if "error" in res:
             raise RuntimeError(f"SNAPSHOT failed: {res['error']}")
-        
-        self.context["snapshot"] = res
-        self.context["txn_id"] = res["txn_id"]
+
+        self._chunk_ctx["snapshot"] = res
+        self._chunk_ctx["txn_id"] = res["txn_id"]
         try:
             from silica.driver.base import NoteRef, Txn
             from silica.kernel.ops import InverseOp
@@ -1040,7 +1080,7 @@ class InjectorFSM(BaseFSM[InjectorState]):
         # S3.2: Take pre-write graph snapshot incrementally
         try:
             from silica.kernel.wikilink import extract_links as _extract_links
-            ops = load_ops(self.context["ops_path"])
+            ops = load_ops(self._chunk_ctx["ops_path"])
             touched_refs = []
             snapshot_domain = set()
 
@@ -1084,7 +1124,7 @@ class InjectorFSM(BaseFSM[InjectorState]):
                                 logger.debug("Snapshot domain expansion: could not resolve '%s': %s", link_target, ex)
 
             snapshot_domain_list = list(snapshot_domain)
-            self.context["snapshot_domain"] = [{"name": r.name, "path": r.path} for r in snapshot_domain_list]
+            self._chunk_ctx["snapshot_domain"] = [{"name": r.name, "path": r.path} for r in snapshot_domain_list]
             self._pre_graph = DRIVER.graph_snapshot(snapshot_domain_list)
         except Exception as e:
             logger.error("Failed to take pre-write graph snapshot: %s", e)
@@ -1096,7 +1136,7 @@ class InjectorFSM(BaseFSM[InjectorState]):
     def _handle_write(self) -> None:
         idx = self._current_chunk_idx
         self._progress_note(self._chunk_task_id("write"), "write", "running")
-        res = silica_bulk_write(self.context["ops_path"])
+        res = silica_bulk_write(self._chunk_ctx["ops_path"])
 
         if "error" in res:
             self._progress_note(self._chunk_task_id("write"), "write", "failed", error=res["error"])
@@ -1124,7 +1164,7 @@ class InjectorFSM(BaseFSM[InjectorState]):
             return
 
         try:
-            ops = load_ops(self.context["ops_path"])
+            ops = load_ops(self._chunk_ctx["ops_path"])
         except Exception as e:
             raise RuntimeError(f"HUB_UPDATE: failed to read ops: {e}")
 
@@ -1220,9 +1260,9 @@ class InjectorFSM(BaseFSM[InjectorState]):
             raise RuntimeError(f"HUB_UPDATE: failed to update hub '{hub_path}': {e}")
 
         # Extend snapshot_domain so LINT's graph regression check covers the hub's new links
-        existing_paths = {d["path"] for d in self.context.get("snapshot_domain", [])}
+        existing_paths = {d["path"] for d in self._chunk_ctx.get("snapshot_domain", [])}
         if hub_path not in existing_paths:
-            self.context.setdefault("snapshot_domain", []).append({"name": hub_name, "path": hub_path})
+            self._chunk_ctx.setdefault("snapshot_domain", []).append({"name": hub_name, "path": hub_path})
 
         self._progress_note(self._chunk_task_id("hub_update"), "hub_update", "done")
         self._transition_success()
@@ -1240,7 +1280,7 @@ class InjectorFSM(BaseFSM[InjectorState]):
         try:
             from silica.kernel.autolink import autolink, build_title_index
 
-            ops = load_ops(self.context["ops_path"])
+            ops = load_ops(self._chunk_ctx["ops_path"])
             touched_paths = [
                 op.touched_ref()
                 for op in ops
@@ -1280,7 +1320,7 @@ class InjectorFSM(BaseFSM[InjectorState]):
         idx = self._current_chunk_idx
         self._progress_note(self._chunk_task_id("lint"), "lint", "running")
         try:
-            ops = load_ops(self.context["ops_path"])
+            ops = load_ops(self._chunk_ctx["ops_path"])
         except Exception as e:
             raise RuntimeError(f"LINT: failed to read ops: {e}")
 
@@ -1302,10 +1342,8 @@ class InjectorFSM(BaseFSM[InjectorState]):
                     res.get("errors", []),
                 )
             if not res["success"]:
-                self.context["abort_reason"] = (
-                    f"Lint failed for {path}: {res['errors']}"
-                )
-                self._progress_note(self._chunk_task_id("lint"), "lint", "failed", error=self.context["abort_reason"])
+                self._chunk_ctx["abort_reason"] = f"Lint failed for {path}: {res['errors']}"
+                self._progress_note(self._chunk_task_id("lint"), "lint", "failed", error=self._chunk_ctx["abort_reason"])
                 self.state = InjectorState.ROLLBACK
                 return
 
@@ -1313,13 +1351,13 @@ class InjectorFSM(BaseFSM[InjectorState]):
         regression_rule = self._get_recipe_gate("graph_regression", "forbid_new_orphans")
         if regression_rule != "allow":
             if self._pre_graph is None:
-                self.context["abort_reason"] = "Graph regression gate failed: pre-write snapshot is missing"
-                self._progress_note(self._chunk_task_id("lint"), "lint", "failed", error=self.context["abort_reason"])
+                self._chunk_ctx["abort_reason"] = "Graph regression gate failed: pre-write snapshot is missing"
+                self._progress_note(self._chunk_task_id("lint"), "lint", "failed", error=self._chunk_ctx["abort_reason"])
                 self.state = InjectorState.ROLLBACK
                 return
             try:
                 from silica.driver.base import NoteRef
-                snapshot_domain_dicts = self.context.get("snapshot_domain", [])
+                snapshot_domain_dicts = self._chunk_ctx.get("snapshot_domain", [])
                 if snapshot_domain_dicts:
                     snapshot_domain = [NoteRef(**d) for d in snapshot_domain_dicts]
                 else:
@@ -1347,16 +1385,14 @@ class InjectorFSM(BaseFSM[InjectorState]):
                     )
 
                 if not success:
-                    self.context["abort_reason"] = (
-                        f"Graph regression gate failed: {'; '.join(errors)}"
-                    )
-                    self._progress_note(self._chunk_task_id("lint"), "lint", "failed", error=self.context["abort_reason"])
+                    self._chunk_ctx["abort_reason"] = f"Graph regression gate failed: {'; '.join(errors)}"
+                    self._progress_note(self._chunk_task_id("lint"), "lint", "failed", error=self._chunk_ctx["abort_reason"])
                     self.state = InjectorState.ROLLBACK
                     return
             except Exception as e:
                 logger.error("Failed to perform graph-diff check: %s", e)
-                self.context["abort_reason"] = f"Graph regression gate error during check: {e}"
-                self._progress_note(self._chunk_task_id("lint"), "lint", "failed", error=self.context["abort_reason"])
+                self._chunk_ctx["abort_reason"] = f"Graph regression gate error during check: {e}"
+                self._progress_note(self._chunk_task_id("lint"), "lint", "failed", error=self._chunk_ctx["abort_reason"])
                 self.state = InjectorState.ROLLBACK
                 return
 
@@ -1411,7 +1447,7 @@ class InjectorFSM(BaseFSM[InjectorState]):
 
     def _handle_rollback(self) -> None:
         self._progress_note("rollback", "rollback", "running")
-        snapshot_res = self.context.get("snapshot", {})
+        snapshot_res = self._chunk_ctx.get("snapshot", {})
         inverses = snapshot_res.get("inverses", [])
         txn_id = snapshot_res.get("txn_id")
 
@@ -1444,7 +1480,8 @@ class InjectorFSM(BaseFSM[InjectorState]):
         """
         idx = self._current_chunk_idx
         fi, ci = self._chunk_flat_to_fi_ci.get(idx, (0, idx))
-        abort_reason = self.context.get("abort_reason", "chunk failure")
+        # Read abort_reason before clearing the chunk namespace
+        abort_reason = self._chunk_ctx.get("abort_reason", "chunk failure")
 
         # Mark all f{fi}_c{ci}_* tasks that are not already done as failed
         prefix = f"f{fi}_c{ci}_"
@@ -1459,13 +1496,10 @@ class InjectorFSM(BaseFSM[InjectorState]):
         except Exception:
             pass
 
-        # Reset per-chunk context to prevent state leakage to the next chunk
-        for key in ("ops_path", "sanitized", "distiller_output_path", "snapshot", "txn_id", "abort_reason"):
-            self.context.pop(key, None)
-        self.context.pop(f"chunk_{idx}_collision_ops", None)
-        self.context.pop(f"chunk_{idx}_hash", None)
-        self.context.pop(f"chunk_{idx}_steer_context", None)
-        self.context.pop(f"chunk_{idx}_steer_attempts", None)
+        # Clear the per-chunk namespace atomically (prevents state leakage to next chunk).
+        # idx-keyed context keys (chunk_{idx}_*) are already safe — each chunk uses
+        # its own idx — so only the chunk namespace dict needs explicit teardown.
+        self.context.pop("chunk", None)
         self._txn = None
         self._pre_graph = None
 
@@ -1501,7 +1535,7 @@ class InjectorFSM(BaseFSM[InjectorState]):
         try:
             from silica.kernel.ledger import get_ledger
             ledger = get_ledger()
-            txn_id = self.context.get("txn_id", "unknown")
+            txn_id = self._chunk_ctx.get("txn_id", "unknown")
 
             # Use per-file canonical/hash when available; fall back to context
             if fi < len(self._file_canonicals):
@@ -1511,7 +1545,7 @@ class InjectorFSM(BaseFSM[InjectorState]):
                 source_canonical = self.context.get("source_canonical", "")
                 content_hash = self.context.get("source_content_hash")
 
-            ops = load_ops(self.context["ops_path"])
+            ops = load_ops(self._chunk_ctx["ops_path"])
             for op in ops:
                 if op.op == OpType.skip:
                     continue
