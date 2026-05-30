@@ -250,13 +250,13 @@ class _ProgressRenderer:
             self._stop_spinner()
             if CONFIG.show_thinking or mode == "verbose" or CONFIG.verbose:
                 body = _head_cap(event.text).strip()
-                indented = "\n".join(f"  [#6366f1]│[/] [dim]{line}[/]" for line in body.splitlines())
-                CONSOLE.print(f"  [#22d3ee]✦ thinking[/]\n{indented}\n")
+                indented = "\n".join(f"  [reasoning.gutter]│[/] [dim]{line}[/]" for line in body.splitlines())
+                CONSOLE.print(f"  [reasoning]✦ thinking[/]\n{indented}\n")
             return
 
         if isinstance(event, ToolErrorEvent):
             self._stop_spinner()
-            CONSOLE.print(f"  [red]✗[/] [bold]{escape(event.name)}[/]: [red]{escape(event.error)}[/]")
+            CONSOLE.print(f"  [tool.err]✗[/] [bold]{escape(event.name)}[/]: [tool.err]{escape(event.error)}[/]")
             self._active_tools.pop(event.call_id, None)
             self._update_live()
             return
@@ -287,7 +287,7 @@ class _ProgressRenderer:
                 self._stop_spinner()
                 desc = _synthetic_tool_desc(event.name, event.args)
                 
-                CONSOLE.print(f"  [green]✓[/] {desc} [dim]({dur})[/]")
+                CONSOLE.print(f"  [tool.ok]✓[/] {desc} [dim]({dur})[/]")
                 if mode == "verbose":
                     redacted = _redact(event.result)
                     if redacted is not None:
@@ -303,16 +303,16 @@ class _ProgressRenderer:
                 # Non-interactive fallback
                 desc = _synthetic_tool_desc(event.name, event.args)
                 if mode in ("new", "all"):
-                    CONSOLE.print(f"  [green]✓[/] {desc} [dim]({dur})[/]")
+                    CONSOLE.print(f"  [tool.ok]✓[/] {desc} [dim]({dur})[/]")
                 elif mode == "verbose":
                     redacted = _redact(event.result)
                     if redacted is not None:
                         head = _head_result(redacted.strip())
-                        CONSOLE.print(f"  [green]✓[/] {desc} [dim]({dur})[/]")
+                        CONSOLE.print(f"  [tool.ok]✓[/] {desc} [dim]({dur})[/]")
                         if head:
                             CONSOLE.print(f"  [dim]{escape(head)}[/]")
                     else:
-                        CONSOLE.print(f"  [green]✓[/] {desc} [dim]({dur}) [result redacted][/]")
+                        CONSOLE.print(f"  [tool.ok]✓[/] {desc} [dim]({dur}) [result redacted][/]")
 
 
 def make_progress_callback() -> _ProgressRenderer:
