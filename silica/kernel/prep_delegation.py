@@ -46,6 +46,7 @@ def run_distiller(
     hub: str | None = None,
     ledger_digest: str | None = None,
     steer_context: str | None = None,
+    substrate: str | None = None,
 ) -> dict:
     """Call the Distiller LLM (single-turn) for one payload chunk.
 
@@ -77,6 +78,7 @@ def run_distiller(
         checkpoint_id="distill",
         payload=payload,
         ledger_digest=ledger_digest,
+        substrate=substrate,
     )
 
     steer_section = (

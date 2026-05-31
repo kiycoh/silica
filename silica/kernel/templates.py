@@ -14,15 +14,19 @@ def slugify(s: str) -> str:
     return s.strip().replace('  ', ' ')  # keep spaces, Obsidian likes them
 
 
-def template_spoke(heading: str, snippet: str, hub: str, tags: list[str] | None = None, related: list[str] | None = None) -> str:
+def template_spoke(heading: str, snippet: str, hub: str, tags: list[str] | None = None, related: list[str] | None = None, parent: str | None = None) -> str:
     today = datetime.date.today().strftime("%Y, %m, %d")
     body = snippet.strip() or "(da espandere)"
 
-    # parent note link
-    parent_note = f'"[[{hub}]]"'
+    # parent note link — specific parent overrides hub when provided
+    if parent:
+        parent_note = f'"[[{parent}]]"'
+        related_items = [f'"[[{parent}]]"', f'"[[{hub}]]"']
+    else:
+        parent_note = f'"[[{hub}]]"'
+        related_items = [f'"[[{hub}]]"']
 
     # related list
-    related_items = [f'"[[{hub}]]"']
     if related:
         for r in related:
             r_link = f'"[[{r}]]"'

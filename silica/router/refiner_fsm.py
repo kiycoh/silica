@@ -35,6 +35,7 @@ class RefinerState(Enum):
     SNAPSHOT = auto()      # build inverses
     WRITE = auto()         # bulk write ops
     AUTOLINK = auto()      # Phase 4 — inject wikilinks into touched notes (best-effort)
+    BACKLINK = auto()      # Phase 4.5 — reverse: inject links to new notes into pre-existing ones
     LINT = auto()          # Gate: lint + graph diff
     CLEANUP = auto()       # mark committed
     ROLLBACK = auto()      # rollback txn if gate fails
@@ -99,6 +100,7 @@ class RefinerFSM(BaseFSM[RefinerState]):
             "snapshot": RefinerState.SNAPSHOT,
             "write":    RefinerState.WRITE,
             "autolink": RefinerState.AUTOLINK,
+            "backlink": RefinerState.BACKLINK,
             "lint":     RefinerState.LINT,
             "cleanup":  RefinerState.CLEANUP,
             "rollback": RefinerState.ROLLBACK,
@@ -111,6 +113,7 @@ class RefinerFSM(BaseFSM[RefinerState]):
             RefinerState.SNAPSHOT: self._handle_snapshot,
             RefinerState.WRITE: self._handle_write,
             RefinerState.AUTOLINK: self._handle_autolink,
+            RefinerState.BACKLINK: self._handle_backlink,
             RefinerState.LINT: self._handle_lint,
             RefinerState.CLEANUP: self._handle_cleanup,
             RefinerState.ROLLBACK: self._handle_rollback,
@@ -525,6 +528,55 @@ class RefinerFSM(BaseFSM[RefinerState]):
                 logger.info("AUTOLINK: finished — %d link(s) added", total_added)
         except Exception as e:
             logger.warning("AUTOLINK: phase failed (non-fatal): %s", e)
+
+        self._transition_success()
+
+    def _handle_backlink(self) -> None:
+        """Best-effort reverse link injection for newly written notes."""
+        ops_path = self.context.get("ops_path")
+        if not ops_path:
+            self._transition_success()
+            return
+
+        try:
+            from silica.kernel.autolink import backlink_pass, build_title_index
+
+            ops = load_ops(ops_path)
+            new_titles: list[str] = [
+                os.path.splitext(os.path.basename(op.touched_ref()))[0]
+                for op in ops
+                if op.op == OpType.write and op.touched_ref()
+            ]
+
+            if not new_titles:
+                self._transition_success()
+                return
+
+            touched_paths_abs: set[str] = {
+                os.path.abspath(op.touched_ref())
+                for op in ops if op.touched_ref()
+            }
+            neighbourhood: list[str] = []
+            seen_norm: set[str] = set()
+            for title in new_titles:
+                try:
+                    for hit in DRIVER.search_context(title):
+                        p = hit.ref.path or hit.ref.name
+                        norm = os.path.abspath(p)
+                        if norm not in seen_norm and norm not in touched_paths_abs:
+                            seen_norm.add(norm)
+                            neighbourhood.append(p)
+                except Exception as _se:
+                    logger.debug("BACKLINK: search_context for '%s': %s", title, _se)
+
+            if neighbourhood:
+                all_refs = DRIVER.list_files()
+                title_index = build_title_index(all_refs)
+                added_map = backlink_pass(new_titles, title_index=title_index, neighbourhood=neighbourhood)
+                total = sum(len(v) for v in added_map.values())
+                logger.info("BACKLINK: %d link(s) added in %d note(s)", total, len(added_map))
+        except Exception as e:
+            logger.warning("BACKLINK: phase failed (non-fatal): %s", e)
 
         self._transition_success()
 

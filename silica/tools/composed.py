@@ -468,6 +468,31 @@ def silica_autolink(note_path: str, use_candidates: bool = True) -> dict[str, An
     return {"note": note_path, "added": len(added), "links": added}
 
 
+class BacklinkArgs(BaseModel):
+    new_titles: list[str] = Field(description="Titles of notes just created in this run")
+    neighbourhood: list[str] = Field(description="Vault-relative paths of candidate notes to scan")
+
+@tool(BacklinkArgs, cls="composed")
+def silica_backlink(new_titles: list[str], neighbourhood: list[str]) -> dict[str, Any]:
+    """Inject wikilinks to newly-created notes into pre-existing neighbouring notes.
+
+    For each note in `neighbourhood`, wraps mentions of any title in `new_titles`
+    with a wikilink — the reverse direction of AUTOLINK.  Skips frontmatter, code,
+    math, and already-linked spans.  Returns {path: [titles_added]}.
+    """
+    from silica.kernel.autolink import backlink_pass, build_title_index
+
+    try:
+        all_refs = DRIVER.list_files()
+    except Exception as e:
+        return {"error": f"Failed to list vault files: {e}"}
+
+    title_index = build_title_index(all_refs)
+    added_map = backlink_pass(new_titles, title_index=title_index, neighbourhood=neighbourhood)
+    total = sum(len(v) for v in added_map.values())
+    return {"added": total, "notes_modified": len(added_map), "details": added_map}
+
+
 class SemanticSearchArgs(BaseModel):
     query: str = Field(description="Free-form query text to embed and search against the vault index")
     k: int = Field(default=5, description="Number of results to return")

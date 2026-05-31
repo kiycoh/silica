@@ -94,6 +94,7 @@ class InjectorState(Enum):
     WRITE = auto()         # Phase 3
     HUB_UPDATE = auto()    # Phase 3.5 — patch Hub note with MOC links
     AUTOLINK = auto()      # Phase 4 — inject wikilinks into touched notes
+    BACKLINK = auto()      # Phase 4.5 — reverse: inject links to new notes into pre-existing ones
     LINT = auto()          # Phase 5 (Gate)
     CLEANUP = auto()       # Phase 5 — C5: only from DONE
     ROLLBACK = auto()      # On gate fail — C3: apply inverses
@@ -148,7 +149,7 @@ class InjectorFSM(BaseFSM[InjectorState]):
         self._chunk_flat_to_fi_ci: dict[int, tuple[int, int]] = {}  # flat_idx → (file_idx, chunk_idx)
 
         # Shadow ProgressLedger — mirrors FSM state on disk; FSM remains canonical
-        from silica.planner.progress import ProgressLedger
+        from silica.planner.progress import ProgressLedger, RunManifest
         _resumed = False
         if resume_run_id:
             try:
@@ -169,6 +170,9 @@ class InjectorFSM(BaseFSM[InjectorState]):
             )
             self.progress.add_task("recon",   task_id="recon")
             self.progress.add_task("payload", task_id="payload", depends_on=["recon"])
+
+        # RunManifest — short-term memory of what was injected in this run
+        self.manifest = RunManifest(run_id=self.progress.run_id)
 
         # S3.3: Load the recipe for dynamic configuration
         from silica.router.recipe_parser import load_recipe
@@ -196,6 +200,8 @@ class InjectorFSM(BaseFSM[InjectorState]):
                     { "id": "snapshot",     "kind": "txn",        "tool": "silica_snapshot" },
                     { "id": "write",        "kind": "mechanical", "tool": "silica_bulk_write" },
                     { "id": "hub_update",   "kind": "mechanical", "tool": "silica_hub_update" },
+                    { "id": "autolink",     "kind": "mechanical", "tool": "silica_autolink",  "best_effort": True },
+                    { "id": "backlink",     "kind": "mechanical", "tool": "silica_backlink",  "best_effort": True },
                     { "id": "lint",         "kind": "gate",       "tool": "silica_lint" },
                     { "id": "cleanup",      "kind": "mechanical", "tool": "silica_cleanup", "on_success_only": True },
                     { "id": "rollback",     "kind": "txn",        "tool": "silica_restore", "on_gate_fail": True }
@@ -220,6 +226,7 @@ class InjectorFSM(BaseFSM[InjectorState]):
             "write":      InjectorState.WRITE,
             "hub_update": InjectorState.HUB_UPDATE,
             "autolink":   InjectorState.AUTOLINK,
+            "backlink":   InjectorState.BACKLINK,
             "lint":       InjectorState.LINT,
             "cleanup":    InjectorState.CLEANUP,
             "rollback":   InjectorState.ROLLBACK,
@@ -239,6 +246,7 @@ class InjectorFSM(BaseFSM[InjectorState]):
             InjectorState.WRITE: self._handle_write,
             InjectorState.HUB_UPDATE: self._handle_hub_update,
             InjectorState.AUTOLINK: self._handle_autolink,
+            InjectorState.BACKLINK: self._handle_backlink,
             InjectorState.LINT: self._handle_lint,
             InjectorState.CLEANUP: self._handle_cleanup,
             InjectorState.ROLLBACK: self._handle_rollback,
@@ -690,7 +698,7 @@ class InjectorFSM(BaseFSM[InjectorState]):
         self.progress.inputs["sources"] = sources_facts
 
         # Register per-chunk tasks with f{fi}_c{ci}_{cap} IDs and intra-file deps
-        caps = ("collision", "distill", "sanitize", "validate", "snapshot", "write", "hub_update", "autolink", "lint", "cleanup")
+        caps = ("collision", "distill", "sanitize", "validate", "snapshot", "write", "hub_update", "autolink", "backlink", "lint", "cleanup")
         for fi, fg in enumerate(self._file_chunks):
             prev_in_file = "payload"
             for ci in range(len(fg.get("chunks", []))):
@@ -1002,9 +1010,10 @@ class InjectorFSM(BaseFSM[InjectorState]):
         self._progress_note(self._chunk_task_id("distill"), "distill", "running")
 
         # Assemble compact ledger digest for LLM context (Phase 2 rails).
+        # Include the RunManifest so the distiller knows what was injected in prior chunks.
         ledger_digest: str | None = None
         try:
-            ledger_digest = self.progress.digest()
+            ledger_digest = self.progress.digest(manifest=self.manifest)
         except Exception:
             pass
 
@@ -1019,6 +1028,18 @@ class InjectorFSM(BaseFSM[InjectorState]):
         vault_ctx = self.context.get("vault_graph_ctx", {})
         enriched_chunk = _inject_graph_ctx(current_chunk, vault_ctx) if vault_ctx else current_chunk
 
+        # Build per-chunk substrate: semantically close vault notes that are not
+        # yet directly linked to run notes — candidates for `parent` and wikilinks.
+        substrate: str | None = None
+        try:
+            from silica.kernel.run_substrate import build_substrate
+            substrate = build_substrate(
+                enriched_chunk,
+                manifest_titles=self.manifest.titles(),
+            )
+        except Exception as _sub_e:
+            logger.debug("DELEGATE: substrate build failed (non-fatal): %s", _sub_e)
+
         try:
             chunk_result = run_distiller(
                 payload=enriched_chunk,
@@ -1026,6 +1047,7 @@ class InjectorFSM(BaseFSM[InjectorState]):
                 hub=self.hub,
                 ledger_digest=ledger_digest,
                 steer_context=steer_context,
+                substrate=substrate,
             )
             if "error" in chunk_result:
                 self._progress_note(self._chunk_task_id("distill"), "distill", "failed", error=chunk_result["error"])
@@ -1326,6 +1348,52 @@ class InjectorFSM(BaseFSM[InjectorState]):
             )
 
         self.context["write"] = res
+
+        # Register written notes in the RunManifest and refresh embedding index
+        # incrementally so later chunks can use these notes as autolink candidates.
+        try:
+            from silica.planner.progress import RunManifestEntry
+            vault_ctx = self.context.get("vault_graph_ctx", {})
+            ops_written = load_ops(self._chunk_ctx["ops_path"])
+            for op in ops_written:
+                path = op.touched_ref()
+                if op.op not in (OpType.write, OpType.patch) or not path:
+                    continue
+                stem = os.path.splitext(os.path.basename(path))[0]
+                path_key = path.removesuffix(".md")
+                cluster_id = vault_ctx.get(path_key, {}).get("cluster_id", -1)
+                self.manifest.record(RunManifestEntry(
+                    title=stem,
+                    path=path_key,
+                    parent=op.parent,
+                    cluster_id=cluster_id,
+                    source_basename=op.source_basename or "",
+                    op=op.op.value,
+                ))
+            self.manifest.save()
+
+            # Best-effort incremental embed index refresh
+            try:
+                from silica.agent.providers import get_embedder
+                from silica.kernel.embed import EmbedStore, refresh_note
+                embedder = get_embedder(CONFIG)
+                store = EmbedStore()
+                for op in ops_written:
+                    path = op.touched_ref()
+                    if op.op not in (OpType.write, OpType.patch) or not path:
+                        continue
+                    stem = os.path.splitext(os.path.basename(path))[0]
+                    idx_path = path.removesuffix(".md")
+                    try:
+                        body = DRIVER.read_note(path).content or ""
+                        refresh_note(embedder, idx_path, stem, body, store=store)
+                    except Exception as _re:
+                        logger.debug("WRITE: embed refresh failed for '%s': %s", path, _re)
+            except Exception as _ee:
+                logger.debug("WRITE: embed refresh skipped (%s)", _ee)
+        except Exception as _me:
+            logger.debug("WRITE: manifest update failed (non-fatal): %s", _me)
+
         self._progress_note(self._chunk_task_id("write"), "write", "done")
         self._transition_success()
 
@@ -1347,8 +1415,10 @@ class InjectorFSM(BaseFSM[InjectorState]):
         hub_name = self.hub.strip("[]")
         hub_name_lower = hub_name.lower()
 
-        # Collect write ops for new notes, excluding the hub auto-creation itself
-        new_notes: list[tuple[str, str]] = []
+        # Collect write ops grouped by effective parent:
+        # notes with op.parent set go to that parent note; others fall back to hub.
+        hub_notes: list[tuple[str, str]] = []       # (note_name, desc)
+        parent_notes: dict[str, list[tuple[str, str]]] = {}  # parent_name → [(note_name, desc)]
         for op in ops:
             if op.op != OpType.write:
                 continue
@@ -1360,9 +1430,16 @@ class InjectorFSM(BaseFSM[InjectorState]):
                 continue
             snippet = (op.snippet or "").strip()
             desc = snippet.split("\n")[0][:120] if snippet else ""
-            new_notes.append((note_name, desc))
+            effective_parent = (op.parent.strip("[]") if op.parent else None) or hub_name
+            if effective_parent.lower() == hub_name_lower:
+                hub_notes.append((note_name, desc))
+            else:
+                parent_notes.setdefault(effective_parent, []).append((note_name, desc))
 
-        if not new_notes:
+        # Flatten for backward-compat references below
+        new_notes = hub_notes
+
+        if not new_notes and not parent_notes:
             logger.info("HUB_UPDATE: no new notes to link, skipping")
             self._progress_note(self._chunk_task_id("hub_update"), "hub_update", "done")
             self._transition_success()
@@ -1456,6 +1533,44 @@ class InjectorFSM(BaseFSM[InjectorState]):
         if hub_path not in existing_paths:
             self._chunk_ctx.setdefault("snapshot_domain", []).append({"name": hub_name, "path": hub_path})
 
+        # Write MOC sections to specific parent notes (best-effort — only active when
+        # the distiller emits op.parent, which requires the Block 4 prompt update).
+        if parent_notes:
+            from silica.kernel.ops import InverseOp, InverseOpKind
+            for parent_name, p_new_notes in parent_notes.items():
+                parent_path = f"{self.target_dir}/{parent_name}.md".replace("//", "/")
+                try:
+                    from silica.driver.base import NoteRef as _NR
+                    p_ref = _NR(name=parent_name, path=parent_path)
+                    p_note = DRIVER.read_note(p_ref)
+                    # Register rollback inverse for parent note
+                    if self._txn is not None:
+                        p_inverse = InverseOp(
+                            kind=InverseOpKind.restore_version,
+                            path=parent_path,
+                            prior_content=p_note.content,
+                        )
+                        self._txn.inverses.append(p_inverse)
+                        if "snapshot" in self.context and "inverses" in self.context["snapshot"]:
+                            self.context["snapshot"]["inverses"].append(p_inverse.model_dump())
+                    # Build and write parent MOC block
+                    p_lines = [f"\n## From: {source_name} (spoke notes)\n"]
+                    for n_name, n_desc in p_new_notes:
+                        p_lines.append(f"- [[{n_name}]] — {n_desc}" if n_desc else f"- [[{n_name}]]")
+                    new_p_content = p_note.content.rstrip() + "\n" + "\n".join(p_lines) + "\n"
+                    DRIVER.overwrite(parent_path, new_p_content)
+                    existing_paths = {d["path"] for d in self._chunk_ctx.get("snapshot_domain", [])}
+                    if parent_path not in existing_paths:
+                        self._chunk_ctx.setdefault("snapshot_domain", []).append(
+                            {"name": parent_name, "path": parent_path}
+                        )
+                    logger.info(
+                        "HUB_UPDATE: updated parent '%s' with %d sub-spoke link(s)",
+                        parent_path, len(p_new_notes),
+                    )
+                except Exception as _pe:
+                    logger.warning("HUB_UPDATE: failed to update parent '%s': %s", parent_path, _pe)
+
         self._progress_note(self._chunk_task_id("hub_update"), "hub_update", "done")
         self._transition_success()
 
@@ -1528,6 +1643,108 @@ class InjectorFSM(BaseFSM[InjectorState]):
             logger.warning("AUTOLINK: phase failed (non-fatal): %s", e)
 
         self._progress_note(self._chunk_task_id("autolink"), "autolink", "done")
+        self._transition_success()
+
+    def _handle_backlink(self) -> None:
+        """Best-effort reverse link injection into pre-existing neighbouring notes (Phase 4.5).
+
+        For each newly-written note (write ops, excluding the hub auto-creation),
+        scans pre-existing notes that textually mention the new title and wraps
+        those mentions as wikilinks.  Extends snapshot_domain and registers
+        rollback inverses for any modified note so ROLLBACK and LINT graph-diff
+        both cover the backlinks.
+        """
+        idx = self._current_chunk_idx
+        self._progress_note(self._chunk_task_id("backlink"), "backlink", "running")
+
+        try:
+            from silica.kernel.autolink import backlink_pass, build_title_index
+
+            ops = load_ops(self._chunk_ctx["ops_path"])
+
+            hub_name_lower = (self.hub or "").strip("[]").lower()
+            new_titles: list[str] = []
+            for op in ops:
+                if op.op != OpType.write:
+                    continue
+                path = op.touched_ref()
+                if not path:
+                    continue
+                stem = os.path.splitext(os.path.basename(path))[0]
+                if stem.lower() != hub_name_lower:
+                    new_titles.append(stem)
+
+            if not new_titles:
+                self._progress_note(self._chunk_task_id("backlink"), "backlink", "done")
+                self._transition_success()
+                return
+
+            touched_paths_abs: set[str] = {
+                os.path.abspath(p)
+                for op in ops
+                for p in (op.touched_ref(),)
+                if p is not None
+            }
+
+            neighbourhood: list[str] = []
+            seen_norm: set[str] = set()
+            for title in new_titles:
+                try:
+                    for hit in DRIVER.search_context(title):
+                        p = hit.ref.path or hit.ref.name
+                        norm = os.path.abspath(p)
+                        if norm not in seen_norm and norm not in touched_paths_abs:
+                            seen_norm.add(norm)
+                            neighbourhood.append(p)
+                except Exception as _se:
+                    logger.debug("BACKLINK: search_context for '%s': %s", title, _se)
+
+            if not neighbourhood:
+                self._progress_note(self._chunk_task_id("backlink"), "backlink", "done")
+                self._transition_success()
+                return
+
+            # Pre-read prior content before backlink_pass writes, for rollback inverses
+            prior_contents: dict[str, str] = {}
+            for path in neighbourhood:
+                try:
+                    prior_contents[path] = DRIVER.read_note(path).content or ""
+                except Exception:
+                    pass
+
+            all_refs = DRIVER.list_files()
+            title_index = build_title_index(all_refs)
+            added_map = backlink_pass(new_titles, title_index=title_index, neighbourhood=neighbourhood)
+
+            if added_map and self._txn is not None:
+                from silica.driver.base import NoteRef
+                from silica.kernel.ops import InverseOp, InverseOpKind
+                existing_snapshot_paths = {d["path"] for d in self._chunk_ctx.get("snapshot_domain", [])}
+                for path_modified in added_map:
+                    if path_modified not in existing_snapshot_paths:
+                        stem = os.path.splitext(os.path.basename(path_modified))[0]
+                        self._chunk_ctx.setdefault("snapshot_domain", []).append(
+                            {"name": stem, "path": path_modified}
+                        )
+                        existing_snapshot_paths.add(path_modified)
+                    if path_modified in prior_contents:
+                        inverse = InverseOp(
+                            kind=InverseOpKind.restore_version,
+                            path=path_modified,
+                            prior_content=prior_contents[path_modified],
+                        )
+                        self._txn.inverses.append(inverse)
+                        if "snapshot" in self.context and "inverses" in self.context["snapshot"]:
+                            self.context["snapshot"]["inverses"].append(inverse.model_dump())
+
+            total_links = sum(len(v) for v in added_map.values())
+            logger.info(
+                "BACKLINK: %d link(s) added to %d pre-existing note(s)", total_links, len(added_map)
+            )
+        except Exception as e:
+            logger.warning("BACKLINK: phase failed (non-fatal): %s", e)
+
+        self._progress_note(self._chunk_task_id("backlink"), "backlink", "done")
         self._transition_success()
 
     def _handle_lint(self) -> None:
@@ -1679,6 +1896,23 @@ class InjectorFSM(BaseFSM[InjectorState]):
                 logger.error("Rollback failed: %s", e)
                 self.context["rollback_error"] = str(e)
             self._write_ledger_rollback(txn_id)
+
+        # Clean up the embedding index for notes that were created and then rolled back
+        # to prevent stale phantom entries that would bias future candidate searches.
+        created_paths: list[str] = []
+        if self._txn is not None and self._txn.created_paths:
+            created_paths = list(self._txn.created_paths)
+        elif snapshot_res.get("created_paths"):
+            created_paths = list(snapshot_res["created_paths"])
+        if created_paths:
+            try:
+                from silica.kernel.embed import EmbedStore
+                store = EmbedStore()
+                for cp in created_paths:
+                    store.delete(cp.removesuffix(".md"))
+                store.save()
+            except Exception as _ee:
+                logger.debug("ROLLBACK: embed index cleanup failed (non-fatal): %s", _ee)
 
         self._progress_note("rollback", "rollback", "done")
         # Contain the failure at chunk level instead of aborting the whole run

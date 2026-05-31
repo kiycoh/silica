@@ -30,6 +30,7 @@ def _execute_write(op: Op, path: str) -> dict:
         hub=hub,
         tags=op.tags,
         related=op.related,
+        parent=op.parent,
     )
     DRIVER.create(path, content)
     return {"path": path, "op": "write", "success": True}
