@@ -103,7 +103,7 @@ def run_distiller(
             messages=[{"role": "user", "content": user_message}],
             tools=None,
             response_schema=DistillerOutput,
-            max_tokens=4000,
+            max_tokens=8192,
         )
     except Exception as e:
         logger.warning("Distiller provider call failed, falling back to litellm: %s", e)
@@ -112,7 +112,7 @@ def run_distiller(
             model=CONFIG.model,
             messages=[{"role": "user", "content": user_message}],
             tools=None,
-            max_tokens=4000,
+            max_tokens=8192,
         )
 
     if response.finish_reason == "length":
