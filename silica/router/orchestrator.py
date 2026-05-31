@@ -882,6 +882,36 @@ class InjectorFSM(BaseFSM[InjectorState]):
         deferred_concepts: list[dict] = []
         modified_batches: list[dict] = []
 
+        # Embed every concept in the chunk in a SINGLE call (one network
+        # round-trip per chunk instead of one per concept).  Falls back to
+        # per-concept embedding only if the embedder returns a ragged response,
+        # so a short/odd reply can never silently drop concepts.
+        all_texts: list[str] = []
+        for batch in chunk.get("batches", []):
+            for concept in batch.get("concepts", []):
+                ct = concept.get("name", "") if isinstance(concept, dict) else str(concept)
+                if ct:
+                    all_texts.append(ct)
+
+        vec_by_text: dict[str, Any] = {}
+        uniq_texts = list(dict.fromkeys(all_texts))
+        if uniq_texts:
+            try:
+                embedded = embedder.embed(uniq_texts)
+                batched_ok = len(embedded) == len(uniq_texts)
+            except Exception as _embed_err:
+                logger.debug("COLLISION: batch embed failed (%s) — keeping concepts unrouted", _embed_err)
+                embedded, batched_ok = [], False
+            if batched_ok:
+                vec_by_text = dict(zip(uniq_texts, embedded))
+            else:
+                for _t in uniq_texts:
+                    try:
+                        _ev = embedder.embed([_t])
+                        vec_by_text[_t] = _ev[0]
+                    except Exception as _embed_err:
+                        logger.debug("COLLISION: embed failed for '%s': %s", _t, _embed_err)
+
         for batch in chunk.get("batches", []):
             inbox_file = batch.get("inbox_file", self.inbox_file)
             kept: list = []
@@ -892,11 +922,16 @@ class InjectorFSM(BaseFSM[InjectorState]):
                     kept.append(concept)
                     continue
 
+                vec = vec_by_text.get(concept_text)
+                if vec is None:
+                    # Embedding unavailable for this concept (batch failed or
+                    # missing) — keep it for normal distillation.
+                    kept.append(concept)
+                    continue
                 try:
-                    vecs = embedder.embed([concept_text])
-                    results = store.cosine_top_k(vecs[0], k=1)
-                except Exception as _embed_err:
-                    logger.debug("COLLISION: embed failed for '%s': %s", concept_text, _embed_err)
+                    results = store.cosine_top_k(vec, k=1)
+                except Exception as _search_err:
+                    logger.debug("COLLISION: search failed for '%s': %s", concept_text, _search_err)
                     kept.append(concept)
                     continue
 

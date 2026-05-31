@@ -201,7 +201,16 @@ class OpenAIEmbedder:
     """
 
     def __init__(self, base_url: str, api_key: str, model: str):
-        self.client = openai.OpenAI(base_url=base_url, api_key=api_key, timeout=60.0)
+        # Mirror the LLM provider's hardening: a granular read-timeout turns a
+        # frozen embedding server (e.g. a cold/contended local model) into a
+        # fast failure instead of an indefinite hang, and max_retries=1 stops
+        # the SDK's default 2 silent retries from stacking 60s waits. COLLISION
+        # is best_effort, so a bounded failure degrades to "skip dedup" rather
+        # than freezing the run.
+        _timeout = httpx.Timeout(connect=10.0, read=60.0, write=10.0, pool=5.0)
+        self.client = openai.OpenAI(
+            base_url=base_url, api_key=api_key, timeout=_timeout, max_retries=1
+        )
         self.model = model
 
     def embed(self, texts: list[str]) -> list[list[float]]:

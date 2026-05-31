@@ -21,6 +21,7 @@ dependencies = [
   "markdown-it-py",
   "orjson",
   "openai",
+  "numpy>=2.4.6",
 ]
 
 [project.optional-dependencies]

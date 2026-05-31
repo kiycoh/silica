@@ -17,6 +17,7 @@ import time
 from pathlib import Path
 from typing import Any
 
+import numpy as np
 import orjson
 
 _INDEX_PATH = Path.home() / ".silica" / "index" / "embeddings.json"
@@ -96,13 +97,25 @@ class EmbedStore:
         # Resolve lazily so tests can monkeypatch `_INDEX_PATH` after import
         self._path = path if path is not None else _INDEX_PATH
         self._notes: dict[str, dict[str, Any]] = {}
+        # Lazily-built, unit-normalized search matrix (numpy). Invalidated on any
+        # mutation; rebuilt on the next cosine_top_k. Keeps _notes authoritative
+        # while making search a single BLAS matrix-vector product.
+        self._mat: np.ndarray | None = None
+        self._mat_paths: list[str] = []
+        self._mat_dim: int | None = None
         self._load()
+
+    def _invalidate_matrix(self) -> None:
+        self._mat = None
+        self._mat_paths = []
+        self._mat_dim = None
 
     # ------------------------------------------------------------------
     # I/O
     # ------------------------------------------------------------------
 
     def _load(self) -> None:
+        self._invalidate_matrix()
         if self._path.exists():
             try:
                 data = orjson.loads(self._path.read_bytes())
@@ -127,9 +140,11 @@ class EmbedStore:
     def upsert(self, path: str, name: str, vec: list[float]) -> None:
         """Insert or replace a note's embedding."""
         self._notes[path] = {"vec": vec, "name": name, "ts": time.time()}
+        self._invalidate_matrix()
 
     def delete(self, path: str) -> None:
         self._notes.pop(path, None)
+        self._invalidate_matrix()
 
     # ------------------------------------------------------------------
     # Lookup
@@ -152,6 +167,32 @@ class EmbedStore:
     # Search
     # ------------------------------------------------------------------
 
+    def _ensure_matrix(self) -> None:
+        """Build the unit-normalized search matrix from _notes (lazy, cached).
+
+        Only notes sharing the modal embedding dimension (that of the first
+        note) are placed in the matrix; any odd-dimension note falls through to
+        a 0.0 score, exactly matching the old per-pair _cosine length guard.
+        Zero vectors are normalized to zero rows so they score 0.0.
+        """
+        if self._mat is not None:
+            return
+        paths = list(self._notes.keys())
+        if not paths:
+            self._mat = np.zeros((0, 0), dtype=np.float32)
+            self._mat_paths = []
+            self._mat_dim = None
+            return
+        dim = len(self._notes[paths[0]]["vec"])
+        rows = [self._notes[p]["vec"] for p in paths if len(self._notes[p]["vec"]) == dim]
+        kept = [p for p in paths if len(self._notes[p]["vec"]) == dim]
+        mat = np.asarray(rows, dtype=np.float32)
+        norms = np.linalg.norm(mat, axis=1, keepdims=True)
+        norms[norms == 0.0] = 1.0  # zero rows stay zero → 0.0 similarity
+        self._mat = mat / norms
+        self._mat_paths = kept
+        self._mat_dim = dim
+
     def cosine_top_k(
         self,
         query_vec: list[float],
@@ -161,17 +202,28 @@ class EmbedStore:
         """Return the top-k most similar notes as dicts with keys:
             path, name, score
         Optionally exclude a set of paths (e.g. the query note itself).
+
+        Search is a single normalized matrix-vector product (numpy/BLAS); this
+        is the hot path for COLLISION and AUTOLINK on large vaults.
         """
         exclude = exclude or set()
-        results: list[tuple[float, str]] = []
-        for path, entry in self._notes.items():
-            if path in exclude:
-                continue
-            score = _cosine(query_vec, entry["vec"])
-            results.append((score, path))
-        results.sort(reverse=True)
+        self._ensure_matrix()
+
+        # Every note defaults to 0.0 — matches _cosine's degenerate cases
+        # (zero query, zero vector, or dimension mismatch).
+        scores: dict[str, float] = {p: 0.0 for p in self._notes}
+
+        q = np.asarray(query_vec, dtype=np.float32)
+        q_norm = float(np.linalg.norm(q))
+        if q_norm != 0.0 and self._mat is not None and self._mat.size and self._mat_dim == q.shape[0]:
+            sims = self._mat @ (q / q_norm)
+            for path, sim in zip(self._mat_paths, sims.tolist()):
+                scores[path] = sim
+
+        results = [(s, p) for p, s in scores.items() if p not in exclude]
+        results.sort(reverse=True)  # by (score, path) desc — preserves tie-break
         return [
-            {"path": path, "name": self._notes[path]["name"], "score": round(score, 4)}
+            {"path": path, "name": self._notes[path]["name"], "score": round(float(score), 4)}
             for score, path in results[:k]
         ]
 
