@@ -172,6 +172,15 @@ class InjectorFSM(BaseFSM[InjectorState]):
         self._txn: Txn | None = None  # holds the live Txn object for ROLLBACK
         self._pre_graph: GraphSnapshot | None = None  # S3.2 pre-write graph snapshot
 
+        # Optional producer channel to the leashed sub-agent pool.  Set by the
+        # Coordinator; when None the FSM runs standalone (legacy behaviour) and
+        # never produces work items.
+        self.work_queue: Any | None = None
+
+        # Optional run-scoped memory of non-blocking warnings (orphans).  Set by
+        # the Coordinator; drained for repair at end of run.  None ⇒ no recording.
+        self.warning_ledger: Any | None = None
+
         # Per-file content info — populated by run() before _run_loop starts
         self._file_canonicals: list[str] = []
         self._file_content_hashes: list[str] = []
@@ -1025,6 +1034,38 @@ class InjectorFSM(BaseFSM[InjectorState]):
                 except Exception as _de:
                     logger.warning("COLLISION: failed to save deferred concepts: %s", _de)
 
+        # Producer: hand each borderline pair to the leashed dedup sub-agent so it
+        # can run concurrently while the Injector keeps writing its other batches.
+        # The candidate match is a pre-existing (committed) vault note, so the
+        # sub-agent's append-only patch never races the Injector's new-note writes;
+        # the per-path lease covers the rare same-note overlap.
+        if deferred_concepts and self.work_queue is not None:
+            from silica.planner.workqueue import WorkItem
+            for d in deferred_concepts:
+                concept = d["concept"]
+                match = d.get("top_match", {})
+                candidate_path = match.get("path", "")
+                if not candidate_path:
+                    continue
+                name = concept.get("name", "") if isinstance(concept, dict) else str(concept)
+                excerpt = concept.get("excerpt", "") if isinstance(concept, dict) else ""
+                try:
+                    self.work_queue.enqueue(WorkItem(
+                        kind="dedup",
+                        target_path=candidate_path,
+                        context={
+                            "concept": name,
+                            "excerpt": excerpt,
+                            "candidate": match.get("name", candidate_path),
+                            "score": d.get("score"),
+                            "inbox_file": d.get("inbox_file", self.inbox_file),
+                            "hub": self.hub,
+                        },
+                        reason=f"borderline_similarity score={d.get('score', 0):.3f}",
+                    ))
+                except Exception as _qe:
+                    logger.debug("COLLISION: failed to enqueue dedup item: %s", _qe)
+
         # Store pre-routed ops for merging in VALIDATE (Phase 5)
         self.context[f"chunk_{idx}_collision_ops"] = pre_routed_ops
 
@@ -1434,6 +1475,9 @@ class InjectorFSM(BaseFSM[InjectorState]):
             raise RuntimeError(f"Write failed: {res['error']}")
 
         _failed_idx: set[int] = {fo["index"] for fo in res.get("failed", [])}
+        # Stems of planned-but-unwritten notes — exposed to the regression gate so
+        # forward refs to these targets are not treated as new ghost links.
+        _deferred_stems: frozenset[str] = frozenset()
 
         if _failed_idx:
             if res.get("successful", 0) == 0:
@@ -1450,6 +1494,11 @@ class InjectorFSM(BaseFSM[InjectorState]):
             # and continue the pipeline with the committed notes.
             try:
                 _all_ops = load_ops(self._chunk_ctx["ops_path"])
+                _deferred_stems = frozenset(
+                    os.path.splitext(os.path.basename(_all_ops[i].path or ""))[0].lower()
+                    for i in _failed_idx
+                    if i < len(_all_ops) and _all_ops[i].path
+                )
                 _deferred = [
                     _all_ops[i].model_dump()
                     for i in sorted(_failed_idx)
@@ -1487,6 +1536,7 @@ class InjectorFSM(BaseFSM[InjectorState]):
                 logger.debug("WRITE: deferred save failed (non-fatal): %s", _de)
             self.context["has_partial_failure"] = True
 
+        self._chunk_ctx["deferred_stems"] = list(_deferred_stems)
         self.context["write"] = res
 
         # Register written notes in the RunManifest and refresh embedding index
@@ -1958,7 +2008,10 @@ class InjectorFSM(BaseFSM[InjectorState]):
                 from silica.kernel.graph_diff import check_graph_regression
                 
                 created_paths = self._txn.created_paths if self._txn else []
-                success, errors = check_graph_regression(self._pre_graph, post_graph, created_paths)
+                deferred_stems = frozenset(self._chunk_ctx.get("deferred_stems", []))
+                success, errors = check_graph_regression(
+                    self._pre_graph, post_graph, created_paths, deferred_stems
+                )
 
                 if CONFIG.verbose:
                     logger.info(
@@ -1977,9 +2030,28 @@ class InjectorFSM(BaseFSM[InjectorState]):
                             "[Graph Regression Gate]: Orphan warning (non-blocking): %s",
                             "; ".join(orphan_errors),
                         )
+                        # Record run-created notes that ended this chunk orphaned.
+                        # Acted on (if still orphaned) at end of run, not now —
+                        # AUTOLINK/BACKLINK or a later chunk may yet connect them.
+                        if self.warning_ledger is not None:
+                            try:
+                                from silica.kernel.graph_diff import normalize_ref
+                                post_orphan_keys = {normalize_ref(r) for r in post_graph.orphans}
+                                detail = "; ".join(orphan_errors)
+                                for op in ops:
+                                    p = op.touched_ref()
+                                    if not p or op.op != OpType.write:
+                                        continue
+                                    name = os.path.splitext(os.path.basename(p))[0]
+                                    if normalize_ref(NoteRef(name=name, path=p)) in post_orphan_keys:
+                                        self.warning_ledger.add(p, "orphan", detail)
+                            except Exception as _we:
+                                logger.debug("orphan warning record failed (non-fatal): %s", _we)
                     if blocking_errors:
-                        self._chunk_ctx["abort_reason"] = f"Graph regression gate failed: {'; '.join(blocking_errors)}"
-                        self._progress_note(self._chunk_task_id("lint"), "lint", "failed", error=self._chunk_ctx["abort_reason"])
+                        reason = f"Graph regression gate failed: {'; '.join(blocking_errors)}"
+                        logger.warning("[Graph Regression Gate]: Blocking errors (triggering rollback): %s", "; ".join(blocking_errors))
+                        self._chunk_ctx["abort_reason"] = reason
+                        self._progress_note(self._chunk_task_id("lint"), "lint", "failed", error=reason)
                         self.state = InjectorState.ROLLBACK
                         return
             except Exception as e:

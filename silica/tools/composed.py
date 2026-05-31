@@ -360,8 +360,12 @@ def silica_run_injector(
     containment: a failed chunk is rolled back and marked 'failed' while the
     remaining chunks continue.  Pass resume_run_id to re-run only the chunks
     that failed in a previous partial run (content-addressed idempotency).
+
+    When sub-agents are enabled (CONFIG.subagents_enabled), the run is driven by
+    the Coordinator, which fans borderline-pair dedup work out to leashed
+    sub-agents on the worker model concurrently with the injection batches.
     """
-    from silica.router.orchestrator import InjectorFSM
+    from silica.router.coordinator import Coordinator
 
     files: list[str] = list(inbox_files or [])
     if inbox_file and inbox_file not in files:
@@ -369,13 +373,13 @@ def silica_run_injector(
     if not files:
         return {"error": "No inbox file(s) specified"}
 
-    fsm = InjectorFSM(
+    coordinator = Coordinator(
         inbox_files=files,
         target_dir=target_dir,
         hub=hub or None,
         resume_run_id=resume_run_id or None,
     )
-    return fsm.run()
+    return coordinator.run()
 
 
 # ---------------------------------------------------------------------------
@@ -852,5 +856,125 @@ def silica_deferred_retry(content_hash: str) -> dict[str, Any]:
         "still_deferred": len(still_rejected),
         "bundle_cleared": len(still_rejected) == 0,
     }
+
+
+# ---------------------------------------------------------------------------
+# silica_dedup / silica_refine — ad-hoc leashed sub-agent passes (out of pipeline)
+# ---------------------------------------------------------------------------
+
+def _in_folder(path: str, folder: str) -> bool:
+    """True if vault-rel `path` is inside `folder` (empty folder ⇒ whole vault)."""
+    if not folder:
+        return True
+    f = folder.replace("\\", "/").strip("/").lower()
+    p = path.replace("\\", "/").removesuffix(".md").lower()
+    return p == f or p.startswith(f + "/")
+
+
+class DedupFolderArgs(BaseModel):
+    folder: str = Field(default="", description="Vault folder to scan for near-duplicate notes (empty = whole vault)")
+
+
+@tool(DedupFolderArgs, cls="composed")
+def silica_dedup(folder: str = "") -> dict[str, Any]:
+    """Find near-duplicate note pairs and merge the smaller into the larger.
+
+    Uses the embedding index to surface borderline pairs (sim between the low and
+    high thresholds), then runs the leashed dedup sub-agent on each pair: it
+    appends only the smaller note's genuinely-new info into the larger note (a
+    single append-only patch). Never rewrites/deletes/creates. Run /embed first.
+    """
+    from silica.kernel.embed import EmbedStore
+    from silica.planner.workqueue import WorkItem
+    from silica.agent.subagent import run_subagent_batch
+    from silica.config import CONFIG as _C
+
+    store = EmbedStore()
+    if len(store) == 0:
+        return {"error": "Embedding index empty — run /embed first."}
+
+    τ_high = getattr(_C, "sim_threshold_high", 0.85)
+    τ_low = getattr(_C, "sim_threshold_low", 0.65)
+
+    scope = [p for p in store.paths() if _in_folder(p, folder)]
+    seen_pairs: set[tuple[str, str]] = set()
+    items: list[WorkItem] = []
+
+    for p in scope:
+        vec = store.get_vec(p)
+        if not vec:
+            continue
+        top = store.cosine_top_k(vec, k=1, exclude={p})
+        if not top:
+            continue
+        match = top[0]
+        score = match.get("score", 0.0)
+        other = match.get("path", "")
+        if not other or not (τ_low < score < τ_high):
+            continue
+        key = tuple(sorted((p, other)))
+        if key in seen_pairs:
+            continue
+        seen_pairs.add(key)
+
+        try:
+            body_p = DRIVER.read_note(p).content or ""
+            body_o = DRIVER.read_note(other).content or ""
+        except Exception:
+            continue
+
+        # The larger note is the merge target; the smaller is the source of new info.
+        if len(body_o) >= len(body_p):
+            larger, smaller, smaller_body = other, p, body_p
+        else:
+            larger, smaller, smaller_body = p, other, body_o
+
+        items.append(WorkItem(
+            kind="dedup",
+            target_path=larger,
+            context={
+                "concept": smaller.rsplit("/", 1)[-1],
+                "excerpt": smaller_body[:4000],
+                "candidate": larger.rsplit("/", 1)[-1],
+                "score": score,
+                "inbox_file": smaller,
+            },
+            reason=f"folder_dedup score={score:.3f}",
+        ))
+
+    res = run_subagent_batch(items)
+    res["pairs_found"] = len(items)
+    res["folder"] = folder or "(vault)"
+    return res
+
+
+class RefineFolderArgs(BaseModel):
+    folder: str = Field(description="Vault folder whose notes to stylistically refine (required)")
+
+
+@tool(RefineFolderArgs, cls="composed")
+def silica_refine(folder: str = "") -> dict[str, Any]:
+    """Stylistically refine every note in a folder (leashed refiner sub-agent).
+
+    Each note is reformatted for clarity/Obsidian style WITHOUT information loss —
+    the refiner leash rejects any rewrite that drops a wikilink or shrinks the note.
+    A folder is required so this never sweeps the whole vault by accident.
+    """
+    if not folder.strip():
+        return {"error": "/refine requires a folder (refusing to sweep the whole vault)."}
+
+    from silica.planner.workqueue import WorkItem
+    from silica.agent.subagent import run_subagent_batch
+
+    refs = DRIVER.list_files(folder=folder)
+    items = [
+        WorkItem(kind="refine", target_path=ref.path, context={})
+        for ref in refs
+        if _in_folder(ref.path, folder)
+    ]
+    res = run_subagent_batch(items)
+    res["notes"] = len(items)
+    res["folder"] = folder
+    return res
 
 
