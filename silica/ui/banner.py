@@ -1,40 +1,41 @@
 from __future__ import annotations
 
-from importlib.resources import files
-
+import pyfiglet
 from rich.text import Text
 
 from silica.config import CONFIG
 from silica.ui.console import CONSOLE
+from silica.ui.theme import BRAND_CYAN, BRAND_INDIGO
 
 _VERSION = "0.2.1"
 _CAPTION = f"  [dim]v{_VERSION} · Your personal note curator agent[/]"
 
 
-def _load_wordmark() -> list[str]:
-    # Load the static wordmark from the asset
-    text = (files("silica.ui") / "assets" / "ascii-art-font.txt").read_text(encoding="utf-8")
-    return text.rstrip("\n").split("\n") + [""]
-
-
-def _gradient(n: int, c0=(0x22, 0xd3, 0xee), c1=(0x63, 0x66, 0xf1)) -> list[str]:
+def _gradient(n: int, c0: tuple[int, int, int] = BRAND_CYAN, c1: tuple[int, int, int] = BRAND_INDIGO) -> list[str]:
     if n <= 1:
         return [f"#{c0[0]:02x}{c0[1]:02x}{c0[2]:02x}"]
     out = []
     for i in range(n):
         t = i / (n - 1)
-        r, g, b = (round(a + (b - a) * t) for a, b in zip(c0, c1))
+        r, g, b = (round(a + (bb - a) * t) for a, bb in zip(c0, c1))
         out.append(f"#{r:02x}{g:02x}{b:02x}")
     return out  # cyan → indigo
 
 
 def _print_wordmark() -> bool:
-    if CONSOLE.width < 60:
-        return False
     try:
-        art = _load_wordmark()
+        raw = pyfiglet.figlet_format("silica", font=CONFIG.banner_font)
+        art = [ln for ln in raw.rstrip("\n").split("\n")]
+        # Drop trailing blank lines
+        while art and not art[-1].strip():
+            art.pop()
     except Exception:
         return False
+
+    min_width = max((len(ln) for ln in art), default=0) + 2
+    if CONSOLE.width < min_width:
+        return False
+
     for line, color in zip(art, _gradient(len(art))):
         CONSOLE.print(Text(line, style=f"bold {color}"))
     CONSOLE.print(_CAPTION)

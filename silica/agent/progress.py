@@ -2,6 +2,8 @@ from __future__ import annotations
 import re
 import json
 import logging
+import time
+from typing import Callable
 from rich.live import Live
 from rich.spinner import Spinner
 from rich.panel import Panel
@@ -21,6 +23,24 @@ from silica.config import CONFIG
 from silica.ui.console import CONSOLE
 
 logger = logging.getLogger(__name__)
+
+# Module-level hook for pipeline phase events emitted by InjectorFSM.
+# Set by _ProgressRenderer when silica_run_injector starts; cleared on completion.
+_pipeline_phase_hook: Callable[[str, str, float | None], None] | None = None
+
+
+def _set_pipeline_hook(hook: Callable[[str, str, float | None], None] | None) -> None:
+    global _pipeline_phase_hook
+    _pipeline_phase_hook = hook
+
+
+def emit_pipeline_phase(phase: str, status: str, elapsed: float | None = None) -> None:
+    """Called by InjectorFSM to surface phase transitions into the TUI. No-op if not registered."""
+    if _pipeline_phase_hook is not None:
+        try:
+            _pipeline_phase_hook(phase, status, elapsed)
+        except Exception:
+            pass
 
 _MAX_RESULT_CHARS = 600
 _MAX_RESULT_LINES = 12
@@ -173,11 +193,36 @@ def _synthetic_tool_desc(name: str, args: dict) -> str:
     return f"Executing {clean_name}"
 
 
+_PHASE_LABELS: dict[str, str] = {
+    "recon":      "recon",
+    "crossdedup": "cross-dedup",
+    "payload":    "payload",
+    "salience":   "salience",
+    "collision":  "collision",
+    "distill":    "distill",
+    "sanitize":   "sanitize",
+    "validate":   "validate",
+    "snapshot":   "snapshot",
+    "write":      "write",
+    "hub_update": "hub-update",
+    "autolink":   "autolink",
+    "backlink":   "backlink",
+    "lint":       "lint",
+    "cleanup":    "cleanup",
+    "rollback":   "rollback",
+}
+
+
 class _ProgressRenderer:
     def __init__(self) -> None:
         self._live: Live | None = None
         self._last_tool_name: str = ""
         self._active_tools: dict[str, dict] = {}
+        # Pipeline phase tracking (populated when silica_run_injector is active)
+        self._injector_call_id: str | None = None
+        self._injector_desc: str = ""
+        self._pipeline_phases: list[dict] = []   # ordered: {phase, status, elapsed}
+        self._phase_start_times: dict[str, float] = {}
 
     def _start_spinner(self) -> None:
         if self._live is not None:
@@ -198,6 +243,30 @@ class _ProgressRenderer:
             self._live.stop()
             self._live = None
 
+    def _on_pipeline_phase(self, phase: str, status: str, elapsed: float | None) -> None:
+        """Callback registered as the global pipeline hook while injector runs."""
+        label = _PHASE_LABELS.get(phase, phase)
+        if status == "running":
+            self._phase_start_times[phase] = time.monotonic()
+            for entry in self._pipeline_phases:
+                if entry["phase"] == label:
+                    entry["status"] = "running"
+                    entry["elapsed"] = None
+                    break
+            else:
+                self._pipeline_phases.append({"phase": label, "status": "running", "elapsed": None})
+        elif status in ("done", "failed"):
+            start = self._phase_start_times.pop(phase, time.monotonic())
+            dur = elapsed if elapsed is not None else (time.monotonic() - start)
+            for entry in self._pipeline_phases:
+                if entry["phase"] == label:
+                    entry["status"] = status
+                    entry["elapsed"] = dur
+                    break
+            else:
+                self._pipeline_phases.append({"phase": label, "status": status, "elapsed": dur})
+        self._update_live()
+
     def _update_live(self) -> None:
         mode = CONFIG.tool_progress
         if mode == "off" or not CONSOLE.is_terminal:
@@ -213,9 +282,30 @@ class _ProgressRenderer:
             name = tinfo["name"]
             args = tinfo["args"]
             desc = _synthetic_tool_desc(name, args)
-            
-            tool_spinner = Spinner("dots", text=f"  [cyan]Running[/] {desc}…", style="cyan")
-            renderables.append(tool_spinner)
+
+            if name == "silica_run_injector" and self._pipeline_phases:
+                # Injector: show a nested subprocess panel
+                phase_lines: list[str] = []
+                for entry in self._pipeline_phases:
+                    p_label = entry["phase"]
+                    p_status = entry["status"]
+                    p_elapsed = entry["elapsed"]
+                    if p_status == "running":
+                        phase_lines.append(f"    [dim]⠿[/] [cyan]{p_label}[/]…")
+                    elif p_status == "done":
+                        dur_str = f"[dim]{p_elapsed:.2f}s[/]" if p_elapsed is not None else ""
+                        phase_lines.append(f"    [tool.ok]✓[/] [dim]{p_label}[/] {dur_str}")
+                    elif p_status == "failed":
+                        phase_lines.append(f"    [tool.err]✗[/] [dim red]{p_label}[/]")
+                header = Spinner("dots", text=f"  [cyan]Running[/] {desc}…", style="cyan")
+                phases_text = Text.from_markup("\n".join(phase_lines)) if phase_lines else None
+                if phases_text:
+                    renderables.append(Group(header, phases_text))
+                else:
+                    renderables.append(header)
+            else:
+                tool_spinner = Spinner("dots", text=f"  [cyan]Running[/] {desc}…", style="cyan")
+                renderables.append(tool_spinner)
 
         if self._live:
             self._live.update(Group(*renderables))
@@ -250,13 +340,13 @@ class _ProgressRenderer:
             self._stop_spinner()
             if CONFIG.show_thinking or mode == "verbose" or CONFIG.verbose:
                 body = _head_cap(event.text).strip()
-                indented = "\n".join(f"  [#6366f1]│[/] [dim]{line}[/]" for line in body.splitlines())
-                CONSOLE.print(f"  [#22d3ee]✦ thinking[/]\n{indented}\n")
+                indented = "\n".join(f"  [reasoning.gutter]│[/] [dim]{line}[/]" for line in body.splitlines())
+                CONSOLE.print(f"  [reasoning]✦ thinking[/]\n{indented}\n")
             return
 
         if isinstance(event, ToolErrorEvent):
             self._stop_spinner()
-            CONSOLE.print(f"  [red]✗[/] [bold]{escape(event.name)}[/]: [red]{escape(event.error)}[/]")
+            CONSOLE.print(f"  [tool.err]✗[/] [bold]{escape(event.name)}[/]: [tool.err]{escape(event.error)}[/]")
             self._active_tools.pop(event.call_id, None)
             self._update_live()
             return
@@ -267,6 +357,12 @@ class _ProgressRenderer:
         if isinstance(event, ToolStartEvent):
             if CONSOLE.is_terminal:
                 self._active_tools[event.call_id] = {"name": event.name, "args": event.args}
+                if event.name == "silica_run_injector":
+                    self._injector_call_id = event.call_id
+                    self._injector_desc = _synthetic_tool_desc(event.name, event.args)
+                    self._pipeline_phases = []
+                    self._phase_start_times = {}
+                    _set_pipeline_hook(self._on_pipeline_phase)
                 self._update_live()
             else:
                 # Non-interactive fallback: print immediately
@@ -286,33 +382,59 @@ class _ProgressRenderer:
             if CONSOLE.is_terminal:
                 self._stop_spinner()
                 desc = _synthetic_tool_desc(event.name, event.args)
-                
-                CONSOLE.print(f"  [green]✓[/] {desc} [dim]({dur})[/]")
-                if mode == "verbose":
-                    redacted = _redact(event.result)
-                    if redacted is not None:
-                        head = _head_result(redacted.strip())
-                        if head:
-                            CONSOLE.print(f"    [dim]{escape(head)}[/]")
-                    else:
-                        CONSOLE.print(f"    [dim][result redacted][/]")
-                
+
+                if event.name == "silica_run_injector" and self._injector_call_id == event.call_id:
+                    # Deregister pipeline hook and print a compact subprocess summary
+                    _set_pipeline_hook(None)
+                    self._injector_call_id = None
+                    CONSOLE.print(f"  [tool.ok]✓[/] {desc} [dim]({dur})[/]")
+                    for entry in self._pipeline_phases:
+                        p_label = entry["phase"]
+                        p_elapsed = entry["elapsed"]
+                        p_status = entry["status"]
+                        if p_status == "done":
+                            dur_str = f"[dim]{p_elapsed:.2f}s[/]" if p_elapsed is not None else ""
+                            CONSOLE.print(f"    [tool.ok]✓[/] [dim]{p_label}[/] {dur_str}")
+                        elif p_status == "failed":
+                            CONSOLE.print(f"    [tool.err]✗[/] [dim red]{p_label}[/]")
+                    self._pipeline_phases = []
+                else:
+                    CONSOLE.print(f"  [tool.ok]✓[/] {desc} [dim]({dur})[/]")
+                    if mode == "verbose":
+                        redacted = _redact(event.result)
+                        if redacted is not None:
+                            head = _head_result(redacted.strip())
+                            if head:
+                                CONSOLE.print(f"    [dim]{escape(head)}[/]")
+                        else:
+                            CONSOLE.print(f"    [dim][result redacted][/]")
+
                 self._active_tools.pop(event.call_id, None)
                 self._update_live()
             else:
                 # Non-interactive fallback
                 desc = _synthetic_tool_desc(event.name, event.args)
                 if mode in ("new", "all"):
-                    CONSOLE.print(f"  [green]✓[/] {desc} [dim]({dur})[/]")
+                    CONSOLE.print(f"  [tool.ok]✓[/] {desc} [dim]({dur})[/]")
                 elif mode == "verbose":
                     redacted = _redact(event.result)
                     if redacted is not None:
                         head = _head_result(redacted.strip())
-                        CONSOLE.print(f"  [green]✓[/] {desc} [dim]({dur})[/]")
+                        CONSOLE.print(f"  [tool.ok]✓[/] {desc} [dim]({dur})[/]")
                         if head:
                             CONSOLE.print(f"  [dim]{escape(head)}[/]")
                     else:
-                        CONSOLE.print(f"  [green]✓[/] {desc} [dim]({dur}) [result redacted][/]")
+                        CONSOLE.print(f"  [tool.ok]✓[/] {desc} [dim]({dur}) [result redacted][/]")
+
+
+    def close(self) -> None:
+        """Unconditionally stop the live display and deregister the pipeline hook.
+
+        Called on KeyboardInterrupt / uncaught exceptions so the terminal is
+        always restored before the next prompt is printed.
+        """
+        _set_pipeline_hook(None)
+        self._stop_spinner()
 
 
 def make_progress_callback() -> _ProgressRenderer:

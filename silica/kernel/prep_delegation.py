@@ -46,6 +46,7 @@ def run_distiller(
     hub: str | None = None,
     ledger_digest: str | None = None,
     steer_context: str | None = None,
+    substrate: str | None = None,
 ) -> dict:
     """Call the Distiller LLM (single-turn) for one payload chunk.
 
@@ -77,6 +78,7 @@ def run_distiller(
         checkpoint_id="distill",
         payload=payload,
         ledger_digest=ledger_digest,
+        substrate=substrate,
     )
 
     steer_section = (
@@ -101,7 +103,7 @@ def run_distiller(
             messages=[{"role": "user", "content": user_message}],
             tools=None,
             response_schema=DistillerOutput,
-            max_tokens=4000,
+            max_tokens=8192,
         )
     except Exception as e:
         logger.warning("Distiller provider call failed, falling back to litellm: %s", e)
@@ -110,7 +112,7 @@ def run_distiller(
             model=CONFIG.model,
             messages=[{"role": "user", "content": user_message}],
             tools=None,
-            max_tokens=4000,
+            max_tokens=8192,
         )
 
     if response.finish_reason == "length":

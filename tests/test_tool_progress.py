@@ -291,10 +291,11 @@ def test_llm_openrouter_include_reasoning(mock_completion):
         mock_completion.assert_called_with(
             model="openrouter/some-model",
             messages=messages,
+            max_tokens=8192,
             include_reasoning=True,
             timeout=120.0
         )
-        
+
         # Test openrouter model with show_thinking=False and verbose=True
         CONFIG.show_thinking = False
         CONFIG.verbose = True
@@ -302,6 +303,7 @@ def test_llm_openrouter_include_reasoning(mock_completion):
         mock_completion.assert_called_with(
             model="openrouter/some-model",
             messages=messages,
+            max_tokens=8192,
             include_reasoning=True,
             timeout=120.0
         )
@@ -350,7 +352,8 @@ def test_print_banner_styles(capsys):
             CONFIG.banner_style = "wordmark"
             print_banner()
             captured = capsys.readouterr()
-            assert "___" in captured.out or "\\/" in captured.out
+            # wordmark renders multi-line ASCII/block art; minimal would be a single line
+            assert len(captured.out.splitlines()) > 2
             assert "Your personal note curator agent" in captured.out
 
             # crystal is removed — falls back to minimal banner

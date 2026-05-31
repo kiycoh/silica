@@ -143,6 +143,9 @@ venv.bak/
 *.swp
 *.swo
 
+# Graphs
+graph.html
+
 # OS files
 .DS_Store
 Thumbs.db
@@ -153,6 +156,10 @@ Thumbs.db
 # Agents
 CLAUDE.md
 /.claude
+/memory
 
 # DB
 ruvector.db
+
+# Locks
+*.rvf.lock

@@ -187,6 +187,47 @@ def autolink(
 
 
 # ---------------------------------------------------------------------------
+# Reverse-link pass — inject links to newly created notes into pre-existing ones
+# ---------------------------------------------------------------------------
+
+def backlink_pass(
+    new_titles: list[str],
+    *,
+    title_index: list[str],
+    neighbourhood: list[str],
+) -> dict[str, list[str]]:
+    """For each note in `neighbourhood`, autolink only the `new_titles`.
+
+    Runs `autolink(body, title_index, candidates=new_titles)` on every neighbour,
+    wrapping mentions of newly-created notes with wikilinks in pre-existing content.
+    Returns {path: titles_added}. Inherits all autolink() guarantees (graph-safe,
+    skip-region aware, idempotent). Best-effort: per-note failures are logged and
+    skipped.
+    """
+    import os as _os
+    from silica.driver import DRIVER
+
+    result: dict[str, list[str]] = {}
+    for path in neighbourhood:
+        try:
+            nc = DRIVER.read_note(path)
+            body = nc.content or ""
+            if not body.strip():
+                continue
+            stem = _os.path.splitext(_os.path.basename(path))[0]
+            new_body, added = autolink(body, title_index, candidates=new_titles, self_title=stem)
+            if added:
+                DRIVER.overwrite(path, new_body)
+                result[path] = added
+                import logging as _l
+                _l.getLogger(__name__).info("BACKLINK: %s ← %s", path, added)
+        except Exception as _e:
+            import logging as _l
+            _l.getLogger(__name__).debug("BACKLINK: skipped '%s' (non-fatal): %s", path, _e)
+    return result
+
+
+# ---------------------------------------------------------------------------
 # Title index helpers
 # ---------------------------------------------------------------------------
 

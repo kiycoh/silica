@@ -76,17 +76,17 @@ class TestProviders(unittest.TestCase):
         # beta.chat.completions.parse raises an exception (not supported, e.g., older server)
         mock_client.beta.chat.completions.parse.side_effect = Exception("Not supported")
 
-        # Mock standard chat.completions.create fallback
-        mock_create_response = MagicMock()
-        mock_choice = MagicMock()
-        mock_message = MagicMock()
-        mock_message.content = '{"key": "fallback", "value": 456}'
-        mock_message.tool_calls = None
-        mock_choice.message = mock_message
-        mock_create_response.choices = [mock_choice]
-        mock_create_response.usage = {"prompt_tokens": 20}
+        # Non-structured fallback path now streams.
+        mock_delta = MagicMock()
+        mock_delta.content = '{"key": "fallback", "value": 456}'
+        mock_delta.tool_calls = None
+        mock_chunk_choice = MagicMock()
+        mock_chunk_choice.finish_reason = "stop"
+        mock_chunk_choice.delta = mock_delta
+        mock_chunk = MagicMock()
+        mock_chunk.choices = [mock_chunk_choice]
 
-        mock_client.chat.completions.create.return_value = mock_create_response
+        mock_client.chat.completions.create.return_value = [mock_chunk]
 
         # Execute
         provider = OpenAICompatibleProvider(base_url="http://dummy", api_key="dummy", model="test-model")
@@ -109,21 +109,23 @@ class TestProviders(unittest.TestCase):
         mock_client = MagicMock()
         mock_openai_cls.return_value = mock_client
 
-        # First two calls raise APITimeoutError, third call succeeds
-        mock_create_response = MagicMock()
-        mock_choice = MagicMock()
-        mock_message = MagicMock()
-        mock_message.content = "Success after retries"
-        mock_message.tool_calls = None
-        mock_choice.message = mock_message
-        mock_create_response.choices = [mock_choice]
-        mock_create_response.usage = {}
+        # First two calls raise APITimeoutError, third call succeeds.
+        # Non-structured path now streams: successful response is an iterable of chunks.
+        mock_delta = MagicMock()
+        mock_delta.content = "Success after retries"
+        mock_delta.tool_calls = None
+        mock_chunk_choice = MagicMock()
+        mock_chunk_choice.finish_reason = "stop"
+        mock_chunk_choice.delta = mock_delta
+        mock_chunk = MagicMock()
+        mock_chunk.choices = [mock_chunk_choice]
+        success_stream = [mock_chunk]
 
         # Set up side effect to fail twice then succeed
         mock_client.chat.completions.create.side_effect = [
             openai.APITimeoutError(request=MagicMock()),
             openai.APIConnectionError(request=MagicMock(), message="Connection issue"),
-            mock_create_response
+            success_stream,
         ]
 
         provider = OpenAICompatibleProvider(base_url="http://dummy", api_key="dummy", model="test-model")

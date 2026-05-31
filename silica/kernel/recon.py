@@ -4,6 +4,8 @@ MIN_LEN, MAX_LEN = 3, 50
 TITLE_BONUS = 50
 TOP_K_HITS = 3
 
+_FRONTMATTER_RE = re.compile(r"\A---\n.*?\n---\n?", re.DOTALL)
+
 STOPWORDS = {
     "di", "da", "in", "con", "su", "per", "tra", "fra", "a", "e", "o", "ma", "se", "anche", "come",
     "il", "lo", "la", "i", "gli", "le", "un", "uno", "una", "del", "dello", "della", "dei", "degli",
@@ -14,12 +16,17 @@ STOPWORDS = {
     "parte", "testo", "esame", "contenuti", "libri", "unipa", "anno", "corso", "appunti",
     "lezione", "capitolo", "studio", "domande", "risposte", "esercizio", "esercizi", "tema", "temi",
     "prof", "professore", "docente", "università", "universita", "sito", "web", "link", "online",
-    "slide", "slides", "presentazione", "pagine", "pagina", "riferimenti", "argomenti", "riassunto"
+    "slide", "slides", "presentazione", "pagine", "pagina", "riferimenti", "argomenti", "riassunto",
+    # Course-metadata structural headings (not content concepts)
+    "didattico", "didattica", "didattici", "didattiche",
+    "materiale didattico", "materiale di studio", "materiale del corso",
+    "obiettivi", "prerequisiti", "modalità", "valutazione", "calendario",
 }
 
 NOISE_PATTERNS = [re.compile(p, re.IGNORECASE) for p in [
     r'^(Capitolo|Lezione|Esercizio)\b[:\s]',
-    r'^(Riassunto|Argomenti|Riferimenti)\s*$',
+    r'^(Riassunto|Argomenti|Riferimenti|Obiettivi|Prerequisiti|Calendario)\s*$',
+    r'^Materiale\b',  # "Materiale Didattico", "Materiale di Studio", etc.
     r'\((continua|segue)\)\s*$',
     r'^q\s',
     r'^[A-Z]{2,6}:\s',
@@ -52,11 +59,15 @@ def from_headings(content: str) -> set:
 def from_bold(content: str) -> set:
     return {m.group(1) for m in re.finditer(r'\*\*(.+?)\*\*', content)}
 
+def _strip_frontmatter(content: str) -> str:
+    return _FRONTMATTER_RE.sub('', content, count=1)
+
 def from_acronyms(content: str) -> set:
     return set(re.findall(r'\b[A-Z]{2,6}\b', content))
 
 def extract_concepts(content: str) -> set:
-    raw = from_headings(content) | from_bold(content) | from_acronyms(content)
+    body = _strip_frontmatter(content)
+    raw = from_headings(body) | from_bold(body) | from_acronyms(body)
     return dedupe({c for c in (normalize(r) for r in raw) if is_concept(c)})
 
 def dedupe(concepts: set) -> set:

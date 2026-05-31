@@ -57,6 +57,39 @@ class SilicaConfig:
     def provider(self, val: str) -> None:
         self._provider = val
 
+    # --- Sub-agent worker model (leashed sub-agents run on a separate, smaller model) ---
+    # The router (agent loop) uses `model`/`provider` above; sub-agents (dedup, refiner)
+    # use these worker_* fields so they can run concurrently on a small local model.
+    worker_model: str = field(
+        default_factory=lambda: os.getenv("SILICA_WORKER_MODEL", "qwen/qwen3.5-9b")
+    )
+    # Worker provider preset name; falls back to "lmstudio" when unset.
+    worker_provider: str = field(
+        default_factory=lambda: os.getenv("SILICA_WORKER_PROVIDER", "lmstudio")
+    )
+    # Explicit endpoint overrides for the worker model (default → local LM Studio).
+    worker_base_url: str = field(
+        default_factory=lambda: os.getenv("SILICA_WORKER_BASE_URL", "http://localhost:1234/v1")
+    )
+    worker_api_key: str = field(
+        default_factory=lambda: os.getenv("SILICA_WORKER_API_KEY", "lm-studio")
+    )
+
+    # Leash caps — bound how far a sub-agent can move before the framework reins it in.
+    subagent_max_turns: int = field(
+        default_factory=lambda: int(os.getenv("SILICA_SUBAGENT_MAX_TURNS", "6"))
+    )
+    subagent_timeout_s: float = field(
+        default_factory=lambda: float(os.getenv("SILICA_SUBAGENT_TIMEOUT_S", "120"))
+    )
+    subagent_max_concurrent: int = field(
+        default_factory=lambda: int(os.getenv("SILICA_SUBAGENT_MAX_CONCURRENT", "3"))
+    )
+    # Master switch: when False, silica_inject runs the legacy single-FSM path.
+    subagents_enabled: bool = field(
+        default_factory=lambda: os.getenv("SILICA_SUBAGENTS_ENABLED", "True").lower() in ("true", "1", "t")
+    )
+
     # Vault path — used by the fs backend and for context.
     vault_path: str = field(
         default_factory=lambda: os.getenv("SILICA_VAULT", "")
@@ -103,8 +136,11 @@ class SilicaConfig:
 
     # Font pyfiglet del banner di avvio
     banner_font: str = field(
-        default_factory=lambda: os.getenv("SILICA_BANNER_FONT", "slant")
+        default_factory=lambda: os.getenv("SILICA_BANNER_FONT", "ansi_shadow")
     )
+
+    # Runtime session state — updated by cli.py after each agent turn
+    context_tokens: int = 0
 
     # Stile del banner di avvio (wordmark, minimal)
     banner_style: Literal["wordmark", "minimal"] = field(
@@ -114,7 +150,7 @@ class SilicaConfig:
     # Embedding model — used by silica/kernel/embed.py (Phase 3)
     # Example: "qwen3-embedding-8b" for LM Studio, "text-embedding-3-small" for OpenAI
     embedding_model: str = field(
-        default_factory=lambda: os.getenv("SILICA_EMBEDDING_MODEL", "qwen3-embedding-8b")
+        default_factory=lambda: os.getenv("SILICA_EMBEDDING_MODEL", "qwen3-embedding-4b")
     )
 
     # Base URL for the embeddings endpoint (defaults to the same LM Studio endpoint)
@@ -138,6 +174,36 @@ class SilicaConfig:
         default_factory=lambda: float(os.getenv("SILICA_SIM_THRESHOLD_LOW", "0.65"))
     )
 
+    # Salience gate (Phase 2.05): concept kept only if cosine(concept, doc_centroid) >= threshold
+    sim_threshold_theme: float = field(
+        default_factory=lambda: float(os.getenv("SILICA_SIM_THRESHOLD_THEME", "0.35"))
+    )
+    salience_gate_enabled: bool = field(
+        default_factory=lambda: os.getenv("SILICA_SALIENCE_GATE", "True").lower() in ("true", "1", "t")
+    )
+
+    # Image handling mode:
+    #   strip (default) — remove image embeds from text before embedding / LLM context
+    #   vlm             — replace embeds with VLM-generated descriptions (requires vlm_model)
+    image_mode: Literal["strip", "vlm"] = field(
+        default_factory=lambda: os.getenv("SILICA_IMAGE_MODE", "strip")  # type: ignore
+    )
+
+    # VLM model used when image_mode="vlm" (litellm model string).
+    # Example: "openai/gpt-4o-mini", "openrouter/google/gemini-flash-1.5"
+    vlm_model: str = field(
+        default_factory=lambda: os.getenv("SILICA_VLM_MODEL", "")
+    )
+
+    # Hard timeout (seconds) for each individual Obsidian CLI subprocess call.
+    # The CDP bridge should respond in < 1 s normally; 8 s gives headroom for
+    # slow machines and large notes without allowing 88-second hangs.
+    # Override via SILICA_OBSIDIAN_CLI_TIMEOUT if you hit false-positive timeouts.
+    obsidian_cli_timeout: float = field(
+        default_factory=lambda: float(os.getenv("SILICA_OBSIDIAN_CLI_TIMEOUT", "8"))
+    )
+
+
     @property
     def verbose(self) -> bool:
         return self.debug_logging
@@ -145,6 +211,7 @@ class SilicaConfig:
     @verbose.setter
     def verbose(self, v: bool) -> None:
         self.debug_logging = v
+
 
 
 CONFIG = SilicaConfig()

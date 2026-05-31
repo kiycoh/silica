@@ -59,26 +59,30 @@ class TestAgentGuardsAndProvider(unittest.TestCase):
         mock_client = MagicMock()
         mock_openai_cls.return_value = mock_client
 
-        mock_choice = MagicMock()
-        mock_choice.finish_reason = "length"
-        mock_choice.message.content = "Truncated structured"
-        mock_choice.message.parsed = None
-        mock_choice.message.tool_calls = None
+        # Non-structured path now streams: return an iterable of one chunk
+        # whose last choice carries finish_reason="length".
+        mock_delta = MagicMock()
+        mock_delta.content = "Truncated structured"
+        mock_delta.tool_calls = None
 
-        mock_response = MagicMock()
-        mock_response.choices = [mock_choice]
-        mock_response.usage = {}
+        mock_chunk_choice = MagicMock()
+        mock_chunk_choice.finish_reason = "length"
+        mock_chunk_choice.delta = mock_delta
 
-        mock_client.chat.completions.create.return_value = mock_response
+        mock_chunk = MagicMock()
+        mock_chunk.choices = [mock_chunk_choice]
+
+        mock_client.chat.completions.create.return_value = [mock_chunk]
 
         # Instantiate provider
         provider = OpenAICompatibleProvider(base_url="http://dummy", api_key="dummy", model="test-model")
         resp = provider.call_llm(messages=[], max_tokens=4000)
 
-        # Check call arguments
+        # Check call arguments (stream=True is now added)
         mock_client.chat.completions.create.assert_called_once()
         kwargs = mock_client.chat.completions.create.call_args[1]
         self.assertEqual(kwargs.get("max_tokens"), 4000)
+        self.assertTrue(kwargs.get("stream"))
         self.assertEqual(resp.finish_reason, "length")
 
     @patch("silica.agent.providers.get_provider")

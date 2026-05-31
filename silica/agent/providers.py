@@ -3,6 +3,7 @@ from __future__ import annotations
 import logging
 import os
 from typing import Any, Protocol, runtime_checkable
+import httpx
 import openai
 import orjson
 from pydantic import BaseModel
@@ -37,8 +38,11 @@ class Provider(Protocol):
 
 class OpenAICompatibleProvider:
     def __init__(self, base_url: str, api_key: str, model: str):
-        # Configure client with 120-second timeout to prevent hanging indefinitely
-        self.client = openai.OpenAI(base_url=base_url, api_key=api_key, timeout=120.0)
+        # Granular timeouts: connect=10s, read=45s per-chunk (streaming inactivity watchdog).
+        # The read timeout applies to each received chunk, so a frozen stream that stops
+        # producing tokens raises APITimeoutError after 45s — triggering the retry loop.
+        _timeout = httpx.Timeout(connect=10.0, read=45.0, write=10.0, pool=5.0)
+        self.client = openai.OpenAI(base_url=base_url, api_key=api_key, timeout=_timeout)
         self.model = model
 
     def call_llm(
@@ -76,7 +80,7 @@ class OpenAICompatibleProvider:
                     if not content_str and parsed_object:
                         content_str = orjson.dumps(parsed_object.model_dump()).decode("utf-8")
                     
-                    assistant_msg = {"role": "assistant"}
+                    assistant_msg: dict[str, Any] = {"role": "assistant"}
                     if message.content:
                         assistant_msg["content"] = message.content
                     if message.tool_calls:
@@ -112,40 +116,62 @@ class OpenAICompatibleProvider:
                 except Exception as e:
                     logger.warning("Constrained decoding failed, falling back to non-structured: %s", e)
 
-            # Non-structured fallback
-            response = self.client.chat.completions.create(**kwargs)
-            choice = response.choices[0]
-            message = choice.message
-            finish_reason = getattr(choice, "finish_reason", None)
-            
-            assistant_msg = {"role": "assistant"}
-            if message.content:
-                assistant_msg["content"] = message.content
-            if message.tool_calls:
-                assistant_msg["tool_calls"] = [
-                    {
-                        "id": tc.id,
-                        "type": "function",
-                        "function": {"name": tc.function.name, "arguments": tc.function.arguments},
-                    }
-                    for tc in message.tool_calls
-                ]
-            
+            # Non-structured path: stream so the httpx read-timeout acts as a
+            # per-chunk inactivity watchdog rather than a total-body deadline.
+            stream = self.client.chat.completions.create(**kwargs, stream=True)
+            content_chunks: list[str] = []
+            tc_acc: dict[int, dict[str, Any]] = {}
+            finish_reason: str | None = None
+
+            for chunk in stream:
+                if not chunk.choices:
+                    continue
+                _choice = chunk.choices[0]
+                finish_reason = _choice.finish_reason or finish_reason
+                delta = _choice.delta
+                if delta.content:
+                    content_chunks.append(delta.content)
+                if delta.tool_calls:
+                    for _tc in delta.tool_calls:
+                        _i = _tc.index
+                        if _i not in tc_acc:
+                            tc_acc[_i] = {
+                                "id": "",
+                                "type": "function",
+                                "function": {"name": "", "arguments": ""},
+                            }
+                        if _tc.id:
+                            tc_acc[_i]["id"] = _tc.id
+                        if _tc.function:
+                            if _tc.function.name:
+                                tc_acc[_i]["function"]["name"] += _tc.function.name
+                            if _tc.function.arguments:
+                                tc_acc[_i]["function"]["arguments"] += _tc.function.arguments
+
+            content = "".join(content_chunks) or None
+            tool_calls_list = [tc_acc[k] for k in sorted(tc_acc)]
+
+            assistant_msg: dict[str, Any] = {"role": "assistant"}
+            if content:
+                assistant_msg["content"] = content
+            if tool_calls_list:
+                assistant_msg["tool_calls"] = tool_calls_list
+
             parsed_calls = []
-            if message.tool_calls:
-                for tc in message.tool_calls:
-                    try:
-                        args = orjson.loads(tc.function.arguments)
-                    except Exception:
-                        args = {}
-                    parsed_calls.append(ToolCall(id=tc.id, name=tc.function.name, args=args))
-            
+            for _tc in tool_calls_list:
+                try:
+                    args = orjson.loads(_tc["function"]["arguments"])
+                except Exception:
+                    args = {}
+                parsed_calls.append(
+                    ToolCall(id=_tc["id"], name=_tc["function"]["name"], args=args)
+                )
+
             return LLMResponse(
-                text=message.content,
+                text=content,
                 tool_calls=parsed_calls,
                 assistant_message=assistant_msg,
-                usage=dict(response.usage) if response.usage else {},
-                reasoning=getattr(message, "reasoning_content", None),
+                usage={},
                 finish_reason=finish_reason,
             )
 
@@ -164,6 +190,7 @@ class OpenAICompatibleProvider:
                     time.sleep(2 ** attempt)
                     continue
                 raise
+        raise RuntimeError("unreachable")
 
 
 class OpenAIEmbedder:
@@ -174,7 +201,16 @@ class OpenAIEmbedder:
     """
 
     def __init__(self, base_url: str, api_key: str, model: str):
-        self.client = openai.OpenAI(base_url=base_url, api_key=api_key, timeout=60.0)
+        # Mirror the LLM provider's hardening: a granular read-timeout turns a
+        # frozen embedding server (e.g. a cold/contended local model) into a
+        # fast failure instead of an indefinite hang, and max_retries=1 stops
+        # the SDK's default 2 silent retries from stacking 60s waits. COLLISION
+        # is best_effort, so a bounded failure degrades to "skip dedup" rather
+        # than freezing the run.
+        _timeout = httpx.Timeout(connect=10.0, read=60.0, write=10.0, pool=5.0)
+        self.client = openai.OpenAI(
+            base_url=base_url, api_key=api_key, timeout=_timeout, max_retries=1
+        )
         self.model = model
 
     def embed(self, texts: list[str]) -> list[list[float]]:
@@ -199,22 +235,41 @@ def get_embedder(config: Any) -> OpenAIEmbedder:
     )
 
 
-def get_provider(config: Any) -> Provider:
-    provider_name = getattr(config, "provider", "lmstudio")
-    model_name = getattr(config, "model", "")
-    
+def get_provider(config: Any, role: str = "router") -> Provider:
+    """Return an LLM provider for the given role.
+
+    role="router" (default) → uses config.provider / config.model (the main model).
+    role="worker"            → uses config.worker_provider / config.worker_model so
+                               leashed sub-agents can run on a separate small model.
+
+    When the worker role specifies explicit endpoint overrides (worker_base_url /
+    worker_api_key) those win over the preset, so a worker can point at a different
+    LM Studio instance/port than the router.
+    """
+    if role == "worker":
+        provider_name = getattr(config, "worker_provider", "lmstudio") or "lmstudio"
+        model_name = getattr(config, "worker_model", "") or ""
+    else:
+        provider_name = getattr(config, "provider", "lmstudio")
+        model_name = getattr(config, "model", "")
+
     preset = PROVIDER_PRESETS.get(provider_name)
     if not preset:
         preset = PROVIDER_PRESETS["lmstudio"]
-        
+
     base_url = preset["base_url"]
     api_key = preset.get("api_key", "lm-studio")
     if "api_key_env" in preset:
         api_key = os.getenv(preset["api_key_env"], "dummy-key")
-        
+
+    # Worker role: explicit endpoint overrides take precedence over the preset.
+    if role == "worker":
+        base_url = getattr(config, "worker_base_url", "") or base_url
+        api_key = getattr(config, "worker_api_key", "") or api_key
+
     if provider_name == "openrouter" and model_name.startswith("openrouter/"):
         model_name = model_name.removeprefix("openrouter/")
     elif provider_name == "lmstudio" and model_name.startswith("lmstudio/"):
         model_name = model_name.removeprefix("lmstudio/")
-        
+
     return OpenAICompatibleProvider(base_url=base_url, api_key=api_key, model=model_name)

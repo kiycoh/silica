@@ -70,12 +70,11 @@ def call_llm(
     kwargs: dict = {
         "model": model,
         "messages": messages,
+        "max_tokens": max_tokens if max_tokens is not None else 8192,
     }
     if tools:
         kwargs["tools"] = tools
         kwargs["tool_choice"] = "auto"
-    if max_tokens is not None:
-        kwargs["max_tokens"] = max_tokens
     if model.startswith("openrouter/") and (CONFIG.show_thinking or CONFIG.verbose):
         kwargs["include_reasoning"] = True
 

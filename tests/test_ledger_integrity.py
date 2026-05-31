@@ -228,8 +228,8 @@ def test_orchestrator_writes_content_hash(tmp_path, monkeypatch):
     try:
         with os.fdopen(fd, "w") as f:
             json.dump(ops_data, f)
-        fsm.context["ops_path"] = ops_path
-        fsm.context["txn_id"] = "t_test"
+        fsm.context.setdefault("chunk", {})["ops_path"] = ops_path
+        fsm.context.setdefault("chunk", {})["txn_id"] = "t_test"
 
         from silica.kernel.ledger import Ledger
         test_ledger = Ledger(tmp_path / "test.db")

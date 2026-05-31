@@ -82,6 +82,8 @@ def extract_windows(content: str, concept: str, window: int, max_occ: int) -> li
 def extract_excerpt_from_content(content: str, concept: str, window: int) -> str:
     if not content:
         return ""
+    from silica.kernel.media import preprocess_text
+    content = preprocess_text(content)
     heading = find_heading(content, concept)
     if heading:
         return safe_truncate(extract_section(content, heading), MAX_EXCERPT_CHARS)

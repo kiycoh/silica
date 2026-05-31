@@ -17,6 +17,7 @@ around this nucleus. Build this first, then ergonomics.
 from __future__ import annotations
 
 from typing import TYPE_CHECKING, Callable, Any
+import concurrent.futures as _cf
 import time
 import logging
 import json
@@ -109,7 +110,16 @@ def run_agent(
 
         _emit(ThinkingStartEvent(iteration=iteration))
         try:
-            resp = call_llm(model, messages, tools=schemas)
+            # Run the (synchronous, potentially slow) LLM call on a daemon thread
+            # so KeyboardInterrupt on the main thread propagates on the first Ctrl+C
+            # instead of being trapped inside a C-level network recv().
+            with _cf.ThreadPoolExecutor(max_workers=1) as _llm_pool:
+                _future = _llm_pool.submit(call_llm, model, messages, tools=schemas)
+                try:
+                    resp = _future.result()
+                except KeyboardInterrupt:
+                    _future.cancel()
+                    raise
         finally:
             _emit(ThinkingEndEvent(iteration=iteration))
         messages.append(resp.assistant_message)

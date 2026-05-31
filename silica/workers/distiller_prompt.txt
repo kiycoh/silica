@@ -42,7 +42,12 @@ The payload file referenced in your task context has shape:
             "match_type": "title" | "body",
             "total_hits": <int>,
             "excerpt": "extracted section/window from the colliding vault note"
-          } | null
+          } | null,
+          "graph_context": {
+            "cluster_id": <int>,    // Louvain cluster the matched note belongs to
+            "hub": "<path>",        // highest-degree note in that cluster (anchor node)
+            "is_hub": <bool>        // true when vault_collision IS the cluster hub
+          } | null                  // null when vault cluster data is unavailable
         }
       ]
     }
@@ -54,9 +59,10 @@ The excerpts are already extracted by the Router via the recon + distiller_paylo
 ## Decision Rubric
 For every concept in every batch, decide exactly ONE action:
 
-- **patch** — vault_collision is not null AND inbox_excerpt contains facts (definitions, formulas, examples, code blocks, structural notes, tables) that are NOT present in vault_collision.excerpt. Extract only the missing facts.
+- **patch** — vault_collision is not null AND inbox_excerpt contains facts (definitions, formulas, examples, code blocks, structural notes, tables) that are NOT present in vault_collision.excerpt. Extract only the missing facts. When `graph_context.is_hub` is true, the matched note is a structural anchor of its cluster — prefer `patch` even at lower confidence rather than creating a shadow note.
 - **write** — vault_collision is null (concept is new to the vault). Extract a complete, factually-dense definition plus supporting details for a new spoke note.
 - **skip** — vault_collision is not null AND already covers everything in inbox_excerpt, OR the concept is genuine semantic noise (generic acronym, slide marker, rhetorical fragment) with no substantive payload.
+- Every write/patch op MUST set `"linked_axis"` to exactly one of `main_thematic_axes`. If a concept does not substantively expand any axis (mere mention, unexpanded acronym, passive bibliographic reference), emit `"op": "skip"` with `"reason": "off-axis"`.
 
 The `action_hint` field is the Router's mechanical guess based on collision tiers. Treat it as a starting bias, NOT a binding constraint. You may overrule it based on the actual excerpt content — e.g. an `enrich`-hinted concept where the vault excerpt already contains all the inbox facts becomes a `skip`.
 
@@ -66,7 +72,16 @@ The `action_hint` field is the Router's mechanical guess based on collision tier
 - Use bold for key terms when natural. Use Obsidian callout syntax (> [!TIP], > [!NOTE], > [!WARNING]) only when it materially aids the reader.
 - **Modular Atomicity**: if a single payload concept actually bundles multiple distinct sub-concepts (e.g. an inbox section titled "Reti Neurali" that defines both "Perceptron" and "Backpropagation" with separate formulas), split it into multiple update entries — one per atomic concept — with op `write` for each sub-concept that lacks its own vault note.
 - **Content Preservation**: do not silently drop information from inbox_excerpt. If it doesn't fit one concept's update, route it to a separate update.
-- **Note Title Elegance**: when a concept heading is structurally compound — i.e. it contains a broad contextual prefix followed by the actual concept (patterns like "Contesto: Concetto", "Introduzione ai Sistemi: MCU", "Lezione N — Argomento: Sottoconcetto") — set the optional `title` field to the focused, atomic concept name (e.g. `"title": "MCU"` or `"title": "Microcontrollori (MCU)"`). The `heading` MUST still match the payload concept name exactly (traceability anchor); `title` is only the clean filename stem. The `path` MUST then use `title`: `{TARGET}/<title>.md`. Omit `title` entirely when the heading is already atomic and self-contained.
+- **Note Title Elegance**: `title` controls BOTH the filename and the H1 heading rendered inside the note. When set, `title` is what the reader sees. Use it whenever the raw `heading` would produce a poor display title. Two mandatory patterns:
+  1. **Structural compound headings** — a broad contextual prefix followed by the actual concept. Strip the prefix entirely; keep only the specific concept:
+     - `"II Framework PEAS Actuators"` → `"title": "PEAS Actuators"`
+     - `"Introduzione ai Sistemi: MCU"` → `"title": "Microcontrollori (MCU)"`
+     - `"Lezione 3 — Apprendimento Supervisionato: SVM"` → `"title": "SVM"`
+     - Pattern: anything matching `"(Chapter/Lezione/Framework/Sistema) N? [—:] Concept"` → keep only `Concept`.
+  2. **Categorical placeholder headings** — single all-caps words or generic category labels that describe the *section* in the inbox file, not the concept itself. If the inbox excerpt discusses a specific concept but the heading is a generic label (e.g. `"UTENTE"` for a section about user modelling, `"RETI"` for a section about neural networks, `"STRUTTURA"` for a section about data structures), you MUST set `title` to the specific concept actually discussed in `inbox_excerpt`. Derive it from the excerpt content, not from the heading.
+     - `"UTENTE"` with excerpt about modelli utente → `"title": "Modello Utente"`
+     - `"RETI"` with excerpt about reti neurali ricorrenti → `"title": "Reti Neurali Ricorrenti"`
+  The `heading` MUST still match the payload concept name exactly (traceability anchor). The `path` MUST use `title`: `{TARGET}/<title>.md`. Omit `title` entirely when the heading is already a precise, atomic concept name.
 
 ## JSON Output Encoding Rules (CRITICAL — violations cause immediate rejection)
 - **Wikilinks**: NEVER include the `.md` extension inside `[[...]]`. Write `[[Note Title]]` not `[[Note Title.md]]` or `[[path/to/Note.md]]`. The `related` array and all body text follow the same rule.
@@ -85,8 +100,16 @@ The `action_hint` field is the Router's mechanical guess based on collision tier
 ## Coverage Guardrail
 Process EVERY concept in EVERY batch in the payload. Silent omission is a failure mode. Concepts you decide to skip MUST appear in the output with an explicit `"op": "skip"`, the correct `"source_basename"`, and a brief `"reason"` field — that way the Router can audit your coverage downstream.
 
+## Related Notes (candidates)
+When your task context contains a `## Related Notes (candidates)` section, it lists vault notes that are semantically close to this chunk but not yet directly linked in the graph.  These are PROPOSALS only — embeddings propose, the graph disposes.
+
+- **`parent` field** (optional, `write` ops only): you MAY set `"parent"` to the title of one candidate note when that note is a genuine conceptual parent of the new spoke (e.g. "Reti Neurali" is a valid parent for "Backpropagation").  The parent MUST be the bare title (no path, no `[[...]]`) and MUST appear in the `## Related Notes (candidates)` list.  If no candidate is a meaningful parent, **omit `parent` entirely** — the system falls back to the hub automatically.  Never invent a parent not in the list.
+- Candidates marked `[graph-far]` are especially useful: they are semantically close but not yet linked, making them ideal `parent` targets or inline wikilink opportunities in your `snippet`.
+
 ## Output Schema
 Respond with ONLY the JSON object below. No prose preamble. No markdown fences (no ```json). No trailing commentary after the closing brace.
+
+Your JSON MUST contain `"main_thematic_axes"` (3–5 short strings naming the pillars ACTUALLY discussed in the inbox excerpts) BEFORE `"updates"`. Populate the axes FIRST, reasoning from the excerpt bodies — NOT from isolated acronyms, wikilinks, or frontmatter.
 
 ## Few-Shot Example
 
@@ -132,12 +155,14 @@ Respond with ONLY the JSON object below. No prose preamble. No markdown fences (
 
 ### Example Output JSON (NO prose, NO markdown fences):
 {
+  "main_thematic_axes": ["gradient-based optimization", "neural network training", "Python ML tooling"],
   "updates": [
     {
       "heading": "Backpropagation",
       "op": "patch",
       "path": "/abs/path/to/existing/Backpropagation.md",
       "source_basename": "Lezione 04.md",
+      "linked_axis": "neural network training",
       "snippet": "- Definizione formale: la backpropagation calcola il gradiente della funzione di perdita rispetto ai pesi tramite la regola della catena applicata ricorsivamente dallo strato di output verso l'input.\n- Formula del gradiente per il peso $w_{ij}^{(l)}$: $\\frac{\\partial \\mathcal{L}}{\\partial w_{ij}^{(l)}} = \\delta_j^{(l)} \\cdot a_i^{(l-1)}$"
     },
     {
@@ -147,13 +172,32 @@ Respond with ONLY the JSON object below. No prose preamble. No markdown fences (
       "path": "{TARGET}/Adam Optimizer.md",
       "source_basename": "Lezione 04.md",
       "hub": "{HUB_NAME}",
+      "linked_axis": "gradient-based optimization",
       "snippet": "Adam (Adaptive Moment Estimation) è un algoritmo di ottimizzazione stocastica che combina i vantaggi di AdaGrad e RMSProp mantenendo medie mobili sia del gradiente (primo momento) sia del suo quadrato (secondo momento).\n\n- Iperparametri tipici: $\\beta_1 = 0.9$, $\\beta_2 = 0.999$, $\\epsilon = 10^{-8}$"
     },
     {
       "heading": "PIL",
       "op": "skip",
       "source_basename": "Lezione 04.md",
-      "reason": "acronym false positive — refers to Python Imaging Library in inbox context, no substantive new content beyond what vault already documents"
+      "reason": "off-axis — acronym citato di sfuggita, nessun contenuto substantivo oltre a quanto già documentato nel vault"
     }
   ]
 }
+
+### Example with `parent` field (only when ## Related Notes lists a valid parent candidate):
+Suppose `## Related Notes (candidates)` contains:
+- [[Reti Neurali]] (score=0.912) [graph-far]
+
+And the payload has concept "Backpropagation" with no vault collision.
+The distiller MAY emit:
+{
+  "heading": "Backpropagation",
+  "op": "write",
+  "path": "{TARGET}/Backpropagation.md",
+  "source_basename": "Lezione 04.md",
+  "hub": "{HUB_NAME}",
+  "parent": "Reti Neurali",
+  "linked_axis": "neural network training",
+  "snippet": "La backpropagation calcola il gradiente della loss tramite la regola della catena..."
+}
+`parent` MUST be a bare title from the candidates list. Omit it entirely if no candidate is a meaningful parent — the system falls back to hub automatically.

@@ -21,6 +21,7 @@ dependencies = [
   "markdown-it-py",
   "orjson",
   "openai",
+  "numpy>=2.4.6",
 ]
 
 [project.optional-dependencies]
@@ -32,8 +33,13 @@ silica = "silica.cli:main"
 [tool.setuptools.packages.find]
 include = ["silica", "silica.*"]
 
-[tool.setuptools.package-data]
-"silica.ui" = ["assets/*.txt"]
-
 [tool.pytest.ini_options]
 testpaths = ["tests"]
+
+[tool.mypy]
+python_version = "3.11"
+ignore_missing_imports = false
+
+[[tool.mypy.overrides]]
+module = ["yaml", "yaml.*", "networkx", "networkx.*"]
+ignore_missing_imports = true

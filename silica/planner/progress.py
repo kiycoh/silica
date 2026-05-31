@@ -96,6 +96,64 @@ class TaskLedger:
 
 
 # ---------------------------------------------------------------------------
+# RunManifest — short-term memory of what was injected in this run
+# ---------------------------------------------------------------------------
+
+@dataclass
+class RunManifestEntry:
+    """One injected note recorded during this run."""
+    title: str
+    path: str               # vault-relative, without .md extension
+    parent: str | None
+    cluster_id: int
+    source_basename: str
+    op: str                 # "write" | "patch"
+
+
+@dataclass
+class RunManifest:
+    """Short-term memory: tracks every note created or patched in a run.
+
+    Serialised to ~/.silica/runs/<run_id>/manifest.json (orjson).
+    """
+    run_id: str
+    entries: list[RunManifestEntry] = field(default_factory=list)
+
+    def record(self, e: RunManifestEntry) -> None:
+        self.entries.append(e)
+
+    def titles(self) -> list[str]:
+        return [e.title for e in self.entries]
+
+    def save(self) -> Path:
+        run_dir = _RUNS_DIR / self.run_id
+        run_dir.mkdir(parents=True, exist_ok=True)
+        path = run_dir / "manifest.json"
+        path.write_bytes(orjson.dumps(dataclasses.asdict(self), option=orjson.OPT_INDENT_2))
+        return path
+
+    @classmethod
+    def load(cls, run_id: str) -> "RunManifest":
+        path = _RUNS_DIR / run_id / "manifest.json"
+        data = orjson.loads(path.read_bytes())
+        entries = [RunManifestEntry(**e) for e in data.get("entries", [])]
+        return cls(run_id=data["run_id"], entries=entries)
+
+    def digest_section(self, max_items: int = 30) -> str:
+        """Compact '## Already injected' section for the LLM context (< 500 tokens)."""
+        if not self.entries:
+            return ""
+        shown = self.entries[-max_items:]
+        lines = ["## Already injected in this run"]
+        for e in shown:
+            if e.parent:
+                lines.append(f"- [[{e.title}]] (parent: [[{e.parent}]]) [{e.source_basename}]")
+            else:
+                lines.append(f"- [[{e.title}]] [{e.source_basename}]")
+        return "\n".join(lines)
+
+
+# ---------------------------------------------------------------------------
 # IssueCard — human-in-the-loop escalation
 # ---------------------------------------------------------------------------
 
@@ -262,10 +320,12 @@ class ProgressLedger:
     # Digest — compact summary for LLM context injection
     # ------------------------------------------------------------------
 
-    def digest(self) -> str:
+    def digest(self, manifest: "RunManifest | None" = None) -> str:
         """Return a compact human-readable run summary, targeting < 500 tokens.
 
         Loads TaskLedger from disk (if present) to include the immutable plan.
+        Pass `manifest` to append the '## Already injected' section so the
+        distiller knows what was created in earlier chunks.
         Safe to call at any point during or after a run.
         """
         # Try to load the immutable plan
@@ -284,7 +344,7 @@ class ProgressLedger:
         except Exception:
             pass
 
-        # Build per-task status lines
+        # Build per-task status lines, grouping f{fi}_c{ci}_{cap} tasks by file
         _sym = {
             "done":     "✓",
             "running":  "→",
@@ -295,7 +355,23 @@ class ProgressLedger:
         }
         counts: dict[str, int] = {}
         task_lines: list[str] = []
+
+        import re as _re
+        _file_pat = _re.compile(r"^f(\d+)_c(\d+)_(.+)$")
+
+        # Group tasks by file index for the f{fi}_c{ci}_{cap} scheme
+        file_groups: dict[int, list[Task]] = {}
+        ungrouped: list[Task] = []
         for t in self.tasks:
+            m = _file_pat.match(t.id)
+            if m:
+                fi = int(m.group(1))
+                file_groups.setdefault(fi, []).append(t)
+            else:
+                ungrouped.append(t)
+
+        # Emit ungrouped tasks first (recon, payload, rollback, …)
+        for t in ungrouped:
             counts[t.status] = counts.get(t.status, 0) + 1
             sym = _sym.get(t.status, "·")
             line = f"  {sym} {t.id}"
@@ -304,6 +380,27 @@ class ProgressLedger:
             elif t.error:
                 line += f"  [{t.error[:60]}]"
             task_lines.append(line)
+
+        # Emit per-file groups with summary header
+        sources = (self.inputs or {}).get("sources", [])
+        for fi in sorted(file_groups.keys()):
+            file_tasks = file_groups[fi]
+            done_n = sum(1 for t in file_tasks if t.status == "done")
+            total_n = len(file_tasks)
+            fname = ""
+            if fi < len(sources):
+                fname = sources[fi].get("inbox_file", "") if isinstance(sources[fi], dict) else ""
+            label = fname.rsplit("/", 1)[-1].removesuffix(".md") if fname else f"file{fi}"
+            task_lines.append(f"  FILE {label} [done={done_n}/{total_n}]")
+            for t in file_tasks:
+                counts[t.status] = counts.get(t.status, 0) + 1
+                sym = _sym.get(t.status, "·")
+                line = f"    {sym} {t.id}"
+                if t.status == "running":
+                    line += f" (attempts={t.attempts})"
+                elif t.error:
+                    line += f"  [{t.error[:60]}]"
+                task_lines.append(line)
 
         counts_str = "  ".join(f"{s}={n}" for s, n in counts.items())
         progress_header = f"PROGRESS  [{counts_str}]"
@@ -324,6 +421,11 @@ class ProgressLedger:
             parts.append(f"CURSOR: {self.cursor}")
         if inputs_str:
             parts.append(f"INPUTS: {inputs_str}")
+        if manifest is not None:
+            section = manifest.digest_section()
+            if section:
+                parts.append(sep)
+                parts.append(section)
 
         return "\n".join(parts)
 

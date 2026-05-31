@@ -12,7 +12,7 @@ from typing import Any
 from pydantic import BaseModel, Field
 
 from silica.driver import DRIVER
-from silica.kernel.ops import OpType
+from silica.kernel.ops import Op, OpType
 from silica.kernel.ops_io import load_ops, dump_ops
 from silica.tools import tool
 
@@ -152,6 +152,18 @@ def silica_sanitize(distiller_output_path: str) -> dict[str, Any]:
     elif isinstance(parsed_obj, dict) and "updates" in parsed_obj:
         parsed_obj["updates"] = normalize_ops(parsed_obj["updates"])
 
+    # Axis enforcement (Layer 2): demote ops whose linked_axis is not in main_thematic_axes.
+    # Only activates when the distiller actually emitted axes — graceful degradation otherwise.
+    if isinstance(parsed_obj, dict):
+        axes = {a.strip().lower() for a in parsed_obj.get("main_thematic_axes", []) if a}
+        if axes:
+            for op in parsed_obj.get("updates", []):
+                if isinstance(op, dict) and op.get("op") in ("write", "patch"):
+                    la = (op.get("linked_axis") or "").strip().lower()
+                    if la and la not in axes:
+                        op["op"] = "skip"
+                        op["reason"] = f"unlinked_axis '{op.get('linked_axis')}' not in main_thematic_axes"
+
     return {
         "success": True,
         "parsed": parsed_obj,
@@ -192,7 +204,10 @@ def silica_validate_ops(ops_json_path: str, payload_paths: list[str] | None = No
         except Exception as e:
             return {"error": f"Failed to load payload {path}: {e}"}
 
-    validated_ops, rejected_ops = validate_operations(ops, payloads, target_dir, hub=hub)
+    cleared_parents: list[dict] = []
+    validated_ops, rejected_ops = validate_operations(
+        ops, payloads, target_dir, hub=hub, cleared_parents_out=cleared_parents
+    )
 
     total = len(ops)
     rejected_count = len(rejected_ops)
@@ -216,6 +231,7 @@ def silica_validate_ops(ops_json_path: str, payload_paths: list[str] | None = No
         "rejection_rate": rejection_rate,
         "validated_ops": [o.model_dump() for o in validated_ops],
         "rejected_ops": [r.model_dump() for r in rejected_ops],
+        "cleared_parents": cleared_parents,
     }
 
 
@@ -226,14 +242,81 @@ class BulkWriteArgs(BaseModel):
 def silica_bulk_write(ops_json_path: str) -> dict[str, Any]:
     """Applies write/patch/overwrite/delete operations in batch in the vault."""
     from silica.kernel.bulk import execute_operations
-    
+
     try:
         ops = load_ops(ops_json_path)
     except Exception as e:
         return {"error": f"Failed to load operations: {e}"}
-        
+
     res = execute_operations(ops)
     return res.model_dump()
+
+
+class PatchNoteArgs(BaseModel):
+    name: str = Field(description="Name or vault-relative path of the note to patch")
+    heading: str = Field(description="Concept/section heading the snippet is filed under")
+    snippet: str = Field(description="Distilled body text to append to the note")
+    source_basename: str = Field(description="Provenance: source filename this snippet derives from")
+    hub: str | None = Field(default=None, description="Optional [[Hub]] to link in frontmatter if missing")
+
+@tool(PatchNoteArgs, cls="composed")
+def silica_patch_note(
+    name: str,
+    heading: str,
+    snippet: str,
+    source_basename: str,
+    hub: str | None = None,
+) -> dict[str, Any]:
+    """Append a distilled snippet to a single existing note — fast path for
+    interactive edits, no temp-file + bulk_write round-trip.
+
+    Reuses the shared single-op executor (silica.kernel.bulk.execute_one), so
+    it stays in lockstep with the batch write path and inherits any future
+    write-layer changes (e.g. atomic file writes).
+
+    Undo: every successful patch is recorded on the per-note checkpoint stack,
+    so it can be reverted later via the REPL ``/undo`` command. This is a
+    lightweight user-facing edit history — it is NOT the FSM's transactional
+    snapshot/rollback (which guards a whole pipeline run). Crash-safety of the
+    write itself relies on atomic writes at the DRIVER level.
+    """
+    from silica.kernel.bulk import execute_one
+    from silica.kernel.checkpoints import get_checkpoint_store
+
+    # Resolve the note and capture its pre-patch content for the undo floor.
+    try:
+        nc = DRIVER.read_note(name)
+    except Exception as e:
+        return {"error": f"Failed to read note '{name}': {e}"}
+
+    path = nc.ref.path or name
+    prior_content = nc.content
+
+    op = Op(
+        op=OpType.patch,
+        heading=heading,
+        source_basename=source_basename,
+        path=path,
+        snippet=snippet,
+        hub=hub,
+    )
+
+    try:
+        result = execute_one(op)
+    except Exception as e:
+        return {"error": f"Failed to patch '{name}': {e}"}
+
+    # Record the resulting on-disk content as a restore point.
+    checkpoint_depth = None
+    try:
+        new_content = DRIVER.read_note(path).content
+        checkpoint_depth = get_checkpoint_store().push(path, prior_content, new_content)
+    except Exception:
+        # A patch that succeeded must not be reported as failed just because
+        # the undo bookkeeping hiccuped; undo is best-effort.
+        pass
+
+    return {**result, "note": name, "path": path, "checkpoint_depth": checkpoint_depth}
 
 
 class LintArgs(BaseModel):
@@ -257,17 +340,46 @@ def silica_lint(note_name: str, op_type: str = "", hub: str = "") -> dict[str, A
 
 
 class RunInjectorArgs(BaseModel):
-    inbox_file: str = Field(description="Path to the inbox file to ingest (e.g. Inbox/meeting_notes.md)")
+    inbox_file: str = Field(default="", description="Path to a single inbox file (legacy; use inbox_files for multiple files)")
+    inbox_files: list[str] = Field(default_factory=list, description="Paths to one or more inbox files to ingest in a single run")
     target_dir: str = Field(description="Destination directory for the extracted concepts")
     hub: str = Field(default="", description="Optional reference hub note")
+    resume_run_id: str = Field(default="", description="Run ID to resume (re-processes only failed chunks, skips done ones)")
 
 @tool(RunInjectorArgs, cls="composed")
-def silica_run_injector(inbox_file: str, target_dir: str, hub: str = "") -> dict[str, Any]:
-    """Single action for the agent: executes the entire Injector pipeline (10 phases) deterministically with acceptance gates and rollback in case of failure."""
-    from silica.router.orchestrator import InjectorFSM
+def silica_run_injector(
+    inbox_file: str = "",
+    inbox_files: list[str] | None = None,
+    target_dir: str = "",
+    hub: str = "",
+    resume_run_id: str = "",
+) -> dict[str, Any]:
+    """Execute the entire Injector pipeline deterministically with acceptance gates and rollback.
 
-    fsm = InjectorFSM(inbox_file=inbox_file, target_dir=target_dir, hub=hub or None)
-    return fsm.run()
+    Accepts one or more inbox files in a single FSM run with per-chunk failure
+    containment: a failed chunk is rolled back and marked 'failed' while the
+    remaining chunks continue.  Pass resume_run_id to re-run only the chunks
+    that failed in a previous partial run (content-addressed idempotency).
+
+    When sub-agents are enabled (CONFIG.subagents_enabled), the run is driven by
+    the Coordinator, which fans borderline-pair dedup work out to leashed
+    sub-agents on the worker model concurrently with the injection batches.
+    """
+    from silica.router.coordinator import Coordinator
+
+    files: list[str] = list(inbox_files or [])
+    if inbox_file and inbox_file not in files:
+        files.insert(0, inbox_file)
+    if not files:
+        return {"error": "No inbox file(s) specified"}
+
+    coordinator = Coordinator(
+        inbox_files=files,
+        target_dir=target_dir,
+        hub=hub or None,
+        resume_run_id=resume_run_id or None,
+    )
+    return coordinator.run()
 
 
 # ---------------------------------------------------------------------------
@@ -364,6 +476,31 @@ def silica_autolink(note_path: str, use_candidates: bool = True) -> dict[str, An
     return {"note": note_path, "added": len(added), "links": added}
 
 
+class BacklinkArgs(BaseModel):
+    new_titles: list[str] = Field(description="Titles of notes just created in this run")
+    neighbourhood: list[str] = Field(description="Vault-relative paths of candidate notes to scan")
+
+@tool(BacklinkArgs, cls="composed")
+def silica_backlink(new_titles: list[str], neighbourhood: list[str]) -> dict[str, Any]:
+    """Inject wikilinks to newly-created notes into pre-existing neighbouring notes.
+
+    For each note in `neighbourhood`, wraps mentions of any title in `new_titles`
+    with a wikilink — the reverse direction of AUTOLINK.  Skips frontmatter, code,
+    math, and already-linked spans.  Returns {path: [titles_added]}.
+    """
+    from silica.kernel.autolink import backlink_pass, build_title_index
+
+    try:
+        all_refs = DRIVER.list_files()
+    except Exception as e:
+        return {"error": f"Failed to list vault files: {e}"}
+
+    title_index = build_title_index(all_refs)
+    added_map = backlink_pass(new_titles, title_index=title_index, neighbourhood=neighbourhood)
+    total = sum(len(v) for v in added_map.values())
+    return {"added": total, "notes_modified": len(added_map), "details": added_map}
+
+
 class SemanticSearchArgs(BaseModel):
     query: str = Field(description="Free-form query text to embed and search against the vault index")
     k: int = Field(default=5, description="Number of results to return")
@@ -445,6 +582,7 @@ def silica_embed_refresh(folder: str = "", force: bool = False) -> dict[str, Any
     except Exception as e:
         return {"error": f"Failed to list vault files: {e}"}
 
+    from silica.kernel.media import preprocess_text
     notes: list[tuple[str, str, str]] = []
     errors: list[str] = []
     for ref in all_refs:
@@ -452,7 +590,7 @@ def silica_embed_refresh(folder: str = "", force: bool = False) -> dict[str, Any
         name = ref.name or path
         try:
             nc = DRIVER.read_note(path)
-            body = nc.content or ""
+            body = preprocess_text(nc.content or "")
         except Exception as exc:
             errors.append(f"{path}: {exc}")
             continue
@@ -514,6 +652,120 @@ def silica_ledger_digest(run_id: str = "") -> dict[str, Any]:
     return {"run_id": resolved_id, "digest": ledger.digest()}
 
 
+# ---------------------------------------------------------------------------
+# silica_vault_report
+# ---------------------------------------------------------------------------
+
+class VaultReportArgs(BaseModel):
+    folder: str = Field(default="", description="Vault-relative folder to scope (empty = whole vault)")
+    top_k: int = Field(default=10, description="How many god-nodes / bridges to surface")
+    with_embeddings: bool = Field(default=False, description="Also propose missing links via the embedding index")
+    seed_ledger: bool = Field(default=True, description="Persist a run (TaskLedger+ProgressLedger) pre-seeded with remediation tasks")
+
+@tool(VaultReportArgs, cls="composed")
+def silica_vault_report(
+    folder: str = "",
+    top_k: int = 10,
+    with_embeddings: bool = False,
+    seed_ledger: bool = True,
+) -> dict[str, Any]:
+    """Deterministic structural audit of the vault.
+
+    Computes god-nodes, surprising cross-cluster connections, orphans, dangling
+    links, and clusters. Writes GRAPH_REPORT.md and (if seed_ledger=True)
+    persists a run whose ProgressLedger is pre-seeded with remediation tasks
+    the agent can advance via silica_ledger_next.
+
+    Tier semantics:
+      auto     — reversible, graph-safe ops the agent executes without confirmation
+      propose  — reversible but borderline; agent asks before executing
+      escalate — IssueCards requiring human judgment (create/rename/delete)
+    """
+    import os
+    import orjson
+    from pathlib import Path
+
+    from silica.config import CONFIG
+    from silica.kernel.graph_report import compute_report, to_digest, to_facts, write_report
+    from silica.planner.analyst_plan import build_task_plan
+    from silica.planner.progress import IssueCard, ProgressLedger, TaskLedger
+
+    # 1. Build report
+    report = compute_report(folder=folder, top_k=top_k, with_embeddings=with_embeddings)
+
+    # 2. Determine output path
+    vault_path = getattr(CONFIG, "vault_path", None) or ""
+    if vault_path:
+        report_path = str(Path(vault_path) / "GRAPH_REPORT.md")
+    else:
+        report_path = "GRAPH_REPORT.md"
+
+    paths = write_report(report, report_path)
+
+    result: dict[str, Any] = {
+        "digest": to_digest(report),
+        "report_md": paths["path_md"],
+    }
+
+    if not seed_ledger:
+        return result
+
+    # 3. Build plan and seed ledger
+    plan = build_task_plan(report)
+
+    progress = ProgressLedger.new(mode="analyst", inputs={"scope": folder or "vault"})
+    run_id = progress.run_id
+    run_dir = Path.home() / ".silica" / "runs" / run_id
+    payloads_dir = run_dir / "payloads"
+    payloads_dir.mkdir(parents=True, exist_ok=True)
+
+    # Persist immutable TaskLedger
+    tl = TaskLedger.new(
+        run_id=run_id,
+        user_request=f"audit {folder or 'vault'}",
+        checkpoints=plan.checkpoints,
+        facts=to_facts(report),
+    )
+    try:
+        tl.save()
+    except Exception:
+        pass
+
+    # Seed tasks from auto + propose (propose carries needs_confirmation flag)
+    for candidate in plan.auto + plan.propose:
+        task = progress.add_task(candidate.capability_name)
+        # Write payload to disk
+        payload = dict(candidate.payload)
+        payload["_reason"] = candidate.reason
+        if candidate.tier == "propose":
+            payload["needs_confirmation"] = True
+        payload_path = str(payloads_dir / f"{task.id}.json")
+        Path(payload_path).write_bytes(orjson.dumps(payload, option=orjson.OPT_INDENT_2))
+        task.input_ref = payload_path
+
+    # Escalate items → IssueCards
+    for i, candidate in enumerate(plan.escalate):
+        card = IssueCard(
+            task_id=f"issue_{i}",
+            question=candidate.reason,
+            options=[
+                {"label": "create_note", "description": "Create a new note with this title"},
+                {"label": "rename_existing", "description": "Rename an existing note to match"},
+                {"label": "ignore", "description": "Leave the broken link as-is"},
+            ],
+        )
+        progress.issues.append(card)
+
+    progress.save()
+
+    result["run_id"] = run_id
+    result["auto"] = len(plan.auto)
+    result["propose"] = len(plan.propose)
+    result["issues"] = len(plan.escalate)
+
+    return result
+
+
 class DeferredRetryArgs(BaseModel):
     content_hash: str = Field(description="Content hash of the deferred bundle to retry (from silica_deferred_list)")
 
@@ -570,11 +822,11 @@ def silica_deferred_retry(content_hash: str) -> dict[str, Any]:
         txn = build_txn(validated)
 
         result = execute_operations(validated)
-        write_ok = not result.errors
-        if not write_ok:
+        if not result.ok:
             from silica.tools.wrapped import silica_restore
             silica_restore(txn_id=txn.id, inverses=[i.model_dump() for i in txn.inverses])
-            return {"error": f"Deferred retry write failed: {result.errors}"}
+            failures = [f.model_dump() for f in result.failed]
+            return {"error": f"Deferred retry write failed: {failures}"}
     except Exception as e:
         return {"error": f"Deferred retry failed: {e}"}
     finally:
@@ -604,5 +856,125 @@ def silica_deferred_retry(content_hash: str) -> dict[str, Any]:
         "still_deferred": len(still_rejected),
         "bundle_cleared": len(still_rejected) == 0,
     }
+
+
+# ---------------------------------------------------------------------------
+# silica_dedup / silica_refine — ad-hoc leashed sub-agent passes (out of pipeline)
+# ---------------------------------------------------------------------------
+
+def _in_folder(path: str, folder: str) -> bool:
+    """True if vault-rel `path` is inside `folder` (empty folder ⇒ whole vault)."""
+    if not folder:
+        return True
+    f = folder.replace("\\", "/").strip("/").lower()
+    p = path.replace("\\", "/").removesuffix(".md").lower()
+    return p == f or p.startswith(f + "/")
+
+
+class DedupFolderArgs(BaseModel):
+    folder: str = Field(default="", description="Vault folder to scan for near-duplicate notes (empty = whole vault)")
+
+
+@tool(DedupFolderArgs, cls="composed")
+def silica_dedup(folder: str = "") -> dict[str, Any]:
+    """Find near-duplicate note pairs and merge the smaller into the larger.
+
+    Uses the embedding index to surface borderline pairs (sim between the low and
+    high thresholds), then runs the leashed dedup sub-agent on each pair: it
+    appends only the smaller note's genuinely-new info into the larger note (a
+    single append-only patch). Never rewrites/deletes/creates. Run /embed first.
+    """
+    from silica.kernel.embed import EmbedStore
+    from silica.planner.workqueue import WorkItem
+    from silica.agent.subagent import run_subagent_batch
+    from silica.config import CONFIG as _C
+
+    store = EmbedStore()
+    if len(store) == 0:
+        return {"error": "Embedding index empty — run /embed first."}
+
+    τ_high = getattr(_C, "sim_threshold_high", 0.85)
+    τ_low = getattr(_C, "sim_threshold_low", 0.65)
+
+    scope = [p for p in store.paths() if _in_folder(p, folder)]
+    seen_pairs: set[tuple[str, str]] = set()
+    items: list[WorkItem] = []
+
+    for p in scope:
+        vec = store.get_vec(p)
+        if not vec:
+            continue
+        top = store.cosine_top_k(vec, k=1, exclude={p})
+        if not top:
+            continue
+        match = top[0]
+        score = match.get("score", 0.0)
+        other = match.get("path", "")
+        if not other or not (τ_low < score < τ_high):
+            continue
+        key = tuple(sorted((p, other)))
+        if key in seen_pairs:
+            continue
+        seen_pairs.add(key)
+
+        try:
+            body_p = DRIVER.read_note(p).content or ""
+            body_o = DRIVER.read_note(other).content or ""
+        except Exception:
+            continue
+
+        # The larger note is the merge target; the smaller is the source of new info.
+        if len(body_o) >= len(body_p):
+            larger, smaller, smaller_body = other, p, body_p
+        else:
+            larger, smaller, smaller_body = p, other, body_o
+
+        items.append(WorkItem(
+            kind="dedup",
+            target_path=larger,
+            context={
+                "concept": smaller.rsplit("/", 1)[-1],
+                "excerpt": smaller_body[:4000],
+                "candidate": larger.rsplit("/", 1)[-1],
+                "score": score,
+                "inbox_file": smaller,
+            },
+            reason=f"folder_dedup score={score:.3f}",
+        ))
+
+    res = run_subagent_batch(items)
+    res["pairs_found"] = len(items)
+    res["folder"] = folder or "(vault)"
+    return res
+
+
+class RefineFolderArgs(BaseModel):
+    folder: str = Field(description="Vault folder whose notes to stylistically refine (required)")
+
+
+@tool(RefineFolderArgs, cls="composed")
+def silica_refine(folder: str = "") -> dict[str, Any]:
+    """Stylistically refine every note in a folder (leashed refiner sub-agent).
+
+    Each note is reformatted for clarity/Obsidian style WITHOUT information loss —
+    the refiner leash rejects any rewrite that drops a wikilink or shrinks the note.
+    A folder is required so this never sweeps the whole vault by accident.
+    """
+    if not folder.strip():
+        return {"error": "/refine requires a folder (refusing to sweep the whole vault)."}
+
+    from silica.planner.workqueue import WorkItem
+    from silica.agent.subagent import run_subagent_batch
+
+    refs = DRIVER.list_files(folder=folder)
+    items = [
+        WorkItem(kind="refine", target_path=ref.path, context={})
+        for ref in refs
+        if _in_folder(ref.path, folder)
+    ]
+    res = run_subagent_batch(items)
+    res["notes"] = len(items)
+    res["folder"] = folder
+    return res
 
 

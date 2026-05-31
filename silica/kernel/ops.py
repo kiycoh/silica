@@ -34,6 +34,8 @@ class Op(BaseModel):
     tags: list[str] | None = None
     related: list[str] | None = None
     reason: str | None = None           # skip reason / rejection note
+    linked_axis: str | None = None      # thematic axis this concept belongs to (Layer 2)
+    parent: str | None = None           # specific parent note (≠ run hub); None → falls back to hub
 
     @model_validator(mode="after")
     def validate_path_required(self) -> Op:
@@ -139,6 +141,7 @@ class BulkResult(BaseModel):
 
 
 class DistillerOutput(BaseModel):
+    main_thematic_axes: list[str] = Field(default_factory=list)
     updates: list[Op]
 
 
