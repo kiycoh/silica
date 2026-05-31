@@ -10,7 +10,11 @@ from prompt_toolkit.formatted_text import HTML
 
 from silica.config import CONFIG
 
-SLASH_COMMANDS = ["/exit", "/model", "/tools", "/clear", "/verbose", "/thinking", "/help"]
+SLASH_COMMANDS = [
+    "/exit", "/model", "/tools", "/clear", "/verbose", "/thinking", "/help",
+    "/report", "/inject",
+    "/status", "/embed", "/graph", "/find", "/undo",
+]
 
 _METER_WIDTH = 10
 

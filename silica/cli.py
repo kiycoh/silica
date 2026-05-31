@@ -86,6 +86,7 @@ def _handle_direct_shortcut(raw_input: str, messages: list[dict]) -> bool:
         /embed [folder] [--force]
         /graph [output.html] [folder]
         /find <query> [--k=N]
+        /undo [note-path]
     """
     from silica.tools import TOOLS
 
@@ -175,6 +176,30 @@ def _handle_direct_shortcut(raw_input: str, messages: list[dict]) -> bool:
                 CONSOLE.print(f"  No results for '{query}'.")
         except Exception:
             CONSOLE.print(result)
+        return True
+
+    if cmd == "/undo":
+        from silica.driver import DRIVER
+        from silica.kernel.checkpoints import get_checkpoint_store
+
+        store = get_checkpoint_store()
+        note_path = parts[1] if len(parts) > 1 else store.most_recent_path()
+        if not note_path:
+            CONSOLE.print("  Nothing to undo — no patches recorded in this session.")
+            return True
+
+        content = store.undo(note_path)
+        if content is None:
+            CONSOLE.print(f"  [yellow]Nothing to undo for[/] {note_path} (already at original).")
+            return True
+
+        try:
+            DRIVER.overwrite(note_path, content)
+            depth = store.depth(note_path)
+            remaining = max(0, depth - 1)
+            CONSOLE.print(f"  Undone: [bold]{note_path}[/]  [dim]({remaining} undo step(s) remaining)[/]")
+        except Exception as exc:
+            CONSOLE.print(f"  [red]Undo failed:[/] {exc}")
         return True
 
     return False
@@ -318,6 +343,9 @@ def _handle_slash_command(cmd: str, messages: list[dict]) -> bool:
         CONSOLE.print("  [bold cyan]/find[/] [dim]<query> [--k=N][/]")
         CONSOLE.print("     Semantic search — find vault notes similar to the query text")
         CONSOLE.print("     Example: [dim]/find Neural Networks --k=10[/]")
+        CONSOLE.print("  [bold cyan]/undo[/] [dim][[note-path]][/]")
+        CONSOLE.print("     Undo the last patch on a note (or the most recently patched note if omitted)")
+        CONSOLE.print("     Example: [dim]/undo Concepts/AI/Transformers.md[/]")
         return True
 
     if cmd == "/thinking":

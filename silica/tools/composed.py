@@ -12,7 +12,7 @@ from typing import Any
 from pydantic import BaseModel, Field
 
 from silica.driver import DRIVER
-from silica.kernel.ops import OpType
+from silica.kernel.ops import Op, OpType
 from silica.kernel.ops_io import load_ops, dump_ops
 from silica.tools import tool
 
@@ -238,14 +238,81 @@ class BulkWriteArgs(BaseModel):
 def silica_bulk_write(ops_json_path: str) -> dict[str, Any]:
     """Applies write/patch/overwrite/delete operations in batch in the vault."""
     from silica.kernel.bulk import execute_operations
-    
+
     try:
         ops = load_ops(ops_json_path)
     except Exception as e:
         return {"error": f"Failed to load operations: {e}"}
-        
+
     res = execute_operations(ops)
     return res.model_dump()
+
+
+class PatchNoteArgs(BaseModel):
+    name: str = Field(description="Name or vault-relative path of the note to patch")
+    heading: str = Field(description="Concept/section heading the snippet is filed under")
+    snippet: str = Field(description="Distilled body text to append to the note")
+    source_basename: str = Field(description="Provenance: source filename this snippet derives from")
+    hub: str | None = Field(default=None, description="Optional [[Hub]] to link in frontmatter if missing")
+
+@tool(PatchNoteArgs, cls="composed")
+def silica_patch_note(
+    name: str,
+    heading: str,
+    snippet: str,
+    source_basename: str,
+    hub: str | None = None,
+) -> dict[str, Any]:
+    """Append a distilled snippet to a single existing note — fast path for
+    interactive edits, no temp-file + bulk_write round-trip.
+
+    Reuses the shared single-op executor (silica.kernel.bulk.execute_one), so
+    it stays in lockstep with the batch write path and inherits any future
+    write-layer changes (e.g. atomic file writes).
+
+    Undo: every successful patch is recorded on the per-note checkpoint stack,
+    so it can be reverted later via the REPL ``/undo`` command. This is a
+    lightweight user-facing edit history — it is NOT the FSM's transactional
+    snapshot/rollback (which guards a whole pipeline run). Crash-safety of the
+    write itself relies on atomic writes at the DRIVER level.
+    """
+    from silica.kernel.bulk import execute_one
+    from silica.kernel.checkpoints import get_checkpoint_store
+
+    # Resolve the note and capture its pre-patch content for the undo floor.
+    try:
+        nc = DRIVER.read_note(name)
+    except Exception as e:
+        return {"error": f"Failed to read note '{name}': {e}"}
+
+    path = nc.ref.path or name
+    prior_content = nc.content
+
+    op = Op(
+        op=OpType.patch,
+        heading=heading,
+        source_basename=source_basename,
+        path=path,
+        snippet=snippet,
+        hub=hub,
+    )
+
+    try:
+        result = execute_one(op)
+    except Exception as e:
+        return {"error": f"Failed to patch '{name}': {e}"}
+
+    # Record the resulting on-disk content as a restore point.
+    checkpoint_depth = None
+    try:
+        new_content = DRIVER.read_note(path).content
+        checkpoint_depth = get_checkpoint_store().push(path, prior_content, new_content)
+    except Exception:
+        # A patch that succeeded must not be reported as failed just because
+        # the undo bookkeeping hiccuped; undo is best-effort.
+        pass
+
+    return {**result, "note": name, "path": path, "checkpoint_depth": checkpoint_depth}
 
 
 class LintArgs(BaseModel):
@@ -721,11 +788,11 @@ def silica_deferred_retry(content_hash: str) -> dict[str, Any]:
         txn = build_txn(validated)
 
         result = execute_operations(validated)
-        write_ok = not result.errors
-        if not write_ok:
+        if not result.ok:
             from silica.tools.wrapped import silica_restore
             silica_restore(txn_id=txn.id, inverses=[i.model_dump() for i in txn.inverses])
-            return {"error": f"Deferred retry write failed: {result.errors}"}
+            failures = [f.model_dump() for f in result.failed]
+            return {"error": f"Deferred retry write failed: {failures}"}
     except Exception as e:
         return {"error": f"Deferred retry failed: {e}"}
     finally:
