@@ -15,6 +15,7 @@ import json
 import logging
 import urllib.request
 from pathlib import Path
+from typing import Any
 
 logger = logging.getLogger(__name__)
 
@@ -77,7 +78,7 @@ def build_graph_data(folder: str = "") -> tuple[list[dict], list[dict]]:
     driver = get_driver()
     driver.graph_snapshot()
 
-    internal_graph: object = getattr(driver, "_graph", None)
+    internal_graph: Any = getattr(driver, "_graph", None)
     internal_notes: dict = getattr(driver, "_notes", {})
     unresolved_links: set[tuple[str, str]] = getattr(driver, "_unresolved_links", set())
 

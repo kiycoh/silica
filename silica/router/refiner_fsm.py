@@ -506,9 +506,9 @@ class RefinerFSM(BaseFSM[RefinerState]):
 
             ops = load_ops(ops_path)
             touched_paths = [
-                op.touched_ref()
+                ref
                 for op in ops
-                if op.touched_ref() and op.op not in (OpType.delete, OpType.skip)
+                if (ref := op.touched_ref()) and op.op not in (OpType.delete, OpType.skip)
             ]
 
             if touched_paths:
@@ -543,9 +543,9 @@ class RefinerFSM(BaseFSM[RefinerState]):
 
             ops = load_ops(ops_path)
             new_titles: list[str] = [
-                os.path.splitext(os.path.basename(op.touched_ref()))[0]
+                os.path.splitext(os.path.basename(ref))[0]
                 for op in ops
-                if op.op == OpType.write and op.touched_ref()
+                if (ref := op.touched_ref()) and op.op == OpType.write
             ]
 
             if not new_titles:
@@ -553,8 +553,9 @@ class RefinerFSM(BaseFSM[RefinerState]):
                 return
 
             touched_paths_abs: set[str] = {
-                os.path.abspath(op.touched_ref())
-                for op in ops if op.touched_ref()
+                os.path.abspath(ref)
+                for op in ops
+                if (ref := op.touched_ref())
             }
             neighbourhood: list[str] = []
             seen_norm: set[str] = set()

@@ -1205,7 +1205,7 @@ class InjectorFSM(BaseFSM[InjectorState]):
                                     error=f"steer {steer_attempts}/{_max_steer}")
                 try:
                     self.progress.set_status(  # type: ignore[union-attr]
-                        self._chunk_task_id("distill"), "in_progress",
+                        self._chunk_task_id("distill"), "running",
                         error=f"steer attempt {steer_attempts}"
                     )
                 except Exception:
@@ -1589,9 +1589,9 @@ class InjectorFSM(BaseFSM[InjectorState]):
 
             ops = load_ops(self._chunk_ctx["ops_path"])
             touched_paths = [
-                op.touched_ref()
+                ref
                 for op in ops
-                if op.touched_ref() and op.op not in (OpType.delete, OpType.skip)
+                if (ref := op.touched_ref()) and op.op not in (OpType.delete, OpType.skip)
             ]
 
             if not touched_paths:

@@ -419,8 +419,8 @@ class ObsidianFSBackend:
         link_counts = {}
         backlink_counts = {}
         for path in neighborhood:
-            ref = self._notes.get(path)
-            if ref:
+            note = self._notes.get(path)
+            if note:
                 resolved_count = self._graph.out_degree(path) if path in self._graph else 0
                 unresolved_count = sum(1 for s, t in self._unresolved_links if s == path)
                 key = path.removesuffix(".md")

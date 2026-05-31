@@ -76,7 +76,7 @@ class OpenAICompatibleProvider:
                     if not content_str and parsed_object:
                         content_str = orjson.dumps(parsed_object.model_dump()).decode("utf-8")
                     
-                    assistant_msg = {"role": "assistant"}
+                    assistant_msg: dict[str, Any] = {"role": "assistant"}
                     if message.content:
                         assistant_msg["content"] = message.content
                     if message.tool_calls:
@@ -118,7 +118,7 @@ class OpenAICompatibleProvider:
             message = choice.message
             finish_reason = getattr(choice, "finish_reason", None)
             
-            assistant_msg = {"role": "assistant"}
+            assistant_msg: dict[str, Any] = {"role": "assistant"}
             if message.content:
                 assistant_msg["content"] = message.content
             if message.tool_calls:
@@ -164,6 +164,7 @@ class OpenAICompatibleProvider:
                     time.sleep(2 ** attempt)
                     continue
                 raise
+        raise RuntimeError("unreachable")
 
 
 class OpenAIEmbedder:

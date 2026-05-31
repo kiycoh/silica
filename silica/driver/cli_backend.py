@@ -412,21 +412,21 @@ class ObsidianCLIBackend:
         """
         if refs is None:
             self._ensure_graph()
-            link_counts = {}
-            for path, ref in self._notes.items():
+            link_counts: dict[str, int] = {}
+            for path, note in self._notes.items():
                 resolved_count = self._graph.out_degree(path) if path in self._graph else 0
                 unresolved_count = sum(1 for s, t in self._unresolved_links if s == path)
                 # Key by canonical path (no .md) — unique even with duplicate basenames.
                 key = path.removesuffix(".md")
                 link_counts[key] = resolved_count + unresolved_count
 
-            backlink_counts = {
+            backlink_counts: dict[str, int] = {
                 path.removesuffix(".md"): d
                 for path, d in self._graph.in_degree()
             }
 
-            orphans = [self._graph.nodes[n]["ref"] for n, d in self._graph.in_degree() if d == 0]
-            unresolved = [
+            orphans: list[NoteRef] = [self._graph.nodes[n]["ref"] for n, d in self._graph.in_degree() if d == 0]
+            unresolved: list[Link] = [
                 Link(source=self._node_ref(s), target=t.removesuffix(".md"))
                 for s, t in self._unresolved_links
             ]
@@ -463,8 +463,8 @@ class ObsidianCLIBackend:
         unresolved: list[Link] = []
 
         for path in neighborhood:
-            ref = self._notes.get(path)
-            if not ref:
+            note = self._notes.get(path)
+            if not note:
                 continue
             # Canonical key: path without .md extension (mirrors full-vault branch)
             key = path.removesuffix(".md")

@@ -44,6 +44,7 @@ def _setup_logging(debug: bool = False) -> None:
     for h in root.handlers[:]:
         root.removeHandler(h)
 
+    handler: logging.Handler
     if debug:
         from rich.logging import RichHandler
         from silica.ui.logging import HumanFriendlyFormatter
