@@ -160,3 +160,6 @@ CLAUDE.md
 
 # DB
 ruvector.db
+
+# Locks
+*.rvf.lock
