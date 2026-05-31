@@ -626,7 +626,10 @@ class RefinerFSM(BaseFSM[RefinerState]):
                 from silica.kernel.graph_diff import check_graph_regression
                 
                 created_paths = self._txn.created_paths if self._txn else []
-                success, errors = check_graph_regression(self._pre_graph, post_graph, created_paths)
+                deferred_stems = frozenset(self.context.get("deferred_stems", []))
+                success, errors = check_graph_regression(
+                    self._pre_graph, post_graph, created_paths, deferred_stems
+                )
                 if not success:
                     orphan_errors = [e for e in errors if e.startswith("Unplanned orphans")]
                     blocking_errors = [e for e in errors if not e.startswith("Unplanned orphans")]
@@ -636,9 +639,9 @@ class RefinerFSM(BaseFSM[RefinerState]):
                             "; ".join(orphan_errors),
                         )
                     if blocking_errors:
-                        self.context["abort_reason"] = (
-                            f"Graph regression gate failed: {'; '.join(blocking_errors)}"
-                        )
+                        reason = f"Graph regression gate failed: {'; '.join(blocking_errors)}"
+                        logger.warning("[Graph Regression Gate]: Blocking errors (triggering rollback): %s", "; ".join(blocking_errors))
+                        self.context["abort_reason"] = reason
                         self.state = RefinerState.ROLLBACK
                         return
             except Exception as e:

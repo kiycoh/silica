@@ -335,7 +335,7 @@ def test_fsm_graph_regression_orphan_is_warning(mock_open, mock_restore, mock_dr
     orphan_error = "Unplanned orphans introduced: done/lezione_1.md"
     with patch("silica.kernel.graph_diff.check_graph_regression", return_value=(False, [orphan_error])) as mock_check:
         fsm.step()
-        mock_check.assert_called_once_with(pre_graph, post_graph, ["notes/NoteA.md"])
+        mock_check.assert_called_once_with(pre_graph, post_graph, ["notes/NoteA.md"], frozenset())
         # Orphan-only: pipeline must NOT roll back
         assert fsm.state != InjectorState.ROLLBACK, "Orphan-only errors must not trigger ROLLBACK"
 
@@ -370,7 +370,7 @@ def test_fsm_graph_regression_gate_rollback(mock_open, mock_restore, mock_driver
     blocking_error = "Broken backlinks detected for 'NoteA': decreased from 2 to 0"
     with patch("silica.kernel.graph_diff.check_graph_regression", return_value=(False, [blocking_error])) as mock_check:
         fsm.step()
-        mock_check.assert_called_once_with(pre_graph, post_graph, ["notes/NoteA.md"])
+        mock_check.assert_called_once_with(pre_graph, post_graph, ["notes/NoteA.md"], frozenset())
         assert fsm.state == InjectorState.ROLLBACK
         assert "Graph regression gate failed: Broken backlinks" in fsm.context["chunk"]["abort_reason"]
 
