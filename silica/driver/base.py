@@ -217,6 +217,16 @@ class ObsidianDriver(Protocol):
         """Query an Obsidian Base (DB on frontmatter)."""
         ...
 
+    # -- graph data (in-process, avoids O(N) subprocess calls) -------------
+
+    def graph_data(self, folder: str = "") -> tuple[dict, set, Any]:
+        """Return (notes, unresolved_links, graph) for in-process consumers.
+
+        Ensures the graph index is populated first. Used by graph_export to
+        avoid O(N) CLI calls while keeping the contract explicit.
+        """
+        ...
+
     # -- transactionality --------------------------------------------------
 
     def snapshot_versions(self, refs: list[NoteRef]) -> Txn:

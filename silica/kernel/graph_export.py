@@ -76,17 +76,7 @@ def build_graph_data(folder: str = "") -> tuple[list[dict], list[dict]]:
     from silica.driver import get_driver
 
     driver = get_driver()
-    driver.graph_snapshot()
-
-    internal_graph: Any = getattr(driver, "_graph", None)
-    internal_notes: dict = getattr(driver, "_notes", {})
-    unresolved_links: set[tuple[str, str]] = getattr(driver, "_unresolved_links", set())
-
-    if internal_graph is None:
-        raise RuntimeError(
-            "graph_export: driver._graph not available after graph_snapshot() — "
-            "driver contract violation."
-        )
+    internal_notes, unresolved_links, internal_graph = driver.graph_data(folder=folder)
 
     def _in_scope(path: str) -> bool:
         if not folder:

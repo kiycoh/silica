@@ -149,6 +149,19 @@ class SilicaConfig:
         default_factory=lambda: os.getenv("SILICA_SALIENCE_GATE", "True").lower() in ("true", "1", "t")
     )
 
+    # Image handling mode:
+    #   strip (default) — remove image embeds from text before embedding / LLM context
+    #   vlm             — replace embeds with VLM-generated descriptions (requires vlm_model)
+    image_mode: Literal["strip", "vlm"] = field(
+        default_factory=lambda: os.getenv("SILICA_IMAGE_MODE", "strip")  # type: ignore
+    )
+
+    # VLM model used when image_mode="vlm" (litellm model string).
+    # Example: "openai/gpt-4o-mini", "openrouter/google/gemini-flash-1.5"
+    vlm_model: str = field(
+        default_factory=lambda: os.getenv("SILICA_VLM_MODEL", "")
+    )
+
     @property
     def verbose(self) -> bool:
         return self.debug_logging

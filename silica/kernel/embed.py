@@ -181,9 +181,15 @@ class EmbedStore:
 # ---------------------------------------------------------------------------
 
 def _note_text(title: str, body: str) -> str:
-    """Combine title and body prefix for embedding."""
-    combined = f"{title}\n\n{body}"
+    """Combine title and body prefix for embedding.
+
+    Images and other media embeds are stripped via kernel.media.preprocess_text
+    before the text is truncated, so they never pollute the embedding space.
+    """
+    from silica.kernel.media import preprocess_text
+    combined = f"{title}\n\n{preprocess_text(body)}"
     return combined[:_MAX_CHARS]
+
 
 
 def build_index(

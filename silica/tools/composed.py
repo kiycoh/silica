@@ -574,6 +574,7 @@ def silica_embed_refresh(folder: str = "", force: bool = False) -> dict[str, Any
     except Exception as e:
         return {"error": f"Failed to list vault files: {e}"}
 
+    from silica.kernel.media import preprocess_text
     notes: list[tuple[str, str, str]] = []
     errors: list[str] = []
     for ref in all_refs:
@@ -581,7 +582,7 @@ def silica_embed_refresh(folder: str = "", force: bool = False) -> dict[str, Any
         name = ref.name or path
         try:
             nc = DRIVER.read_note(path)
-            body = nc.content or ""
+            body = preprocess_text(nc.content or "")
         except Exception as exc:
             errors.append(f"{path}: {exc}")
             continue

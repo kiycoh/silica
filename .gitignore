@@ -143,6 +143,9 @@ venv.bak/
 *.swp
 *.swo
 
+# Graphs
+graph.html
+
 # OS files
 .DS_Store
 Thumbs.db

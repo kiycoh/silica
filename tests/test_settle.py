@@ -57,11 +57,13 @@ def test_cli_create_settle_timeout_links():
                 backend.create("notes/test.md", "new content with [[Target]]")
             assert "links indexing" in str(exc_info.value)
 
-def test_fs_create_settle_mismatch(tmp_path):
+def test_fs_create_patches_index(tmp_path):
+    """FS create() atomically patches the index — no SettleTimeout possible."""
     backend = ObsidianFSBackend(vault_path=str(tmp_path))
-    
-    with patch.object(backend, "_ensure_index"):
-        backend._links["test"] = set()
-        with pytest.raises(SettleTimeout) as exc_info:
-            backend.create("test.md", "some content with [[Missing]]")
-        assert "links indexing" in str(exc_info.value)
+    (tmp_path / "test.md").write_text("", encoding="utf-8")
+    backend._rebuild_index()
+
+    ref = backend.create("test.md", "some content with [[Missing]]")
+    assert ref.path == "test.md"
+    # _patch_index sets _links atomically
+    assert "Missing" in backend._links.get("test.md", set())
