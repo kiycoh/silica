@@ -34,3 +34,11 @@ include = ["silica", "silica.*"]
 
 [tool.pytest.ini_options]
 testpaths = ["tests"]
+
+[tool.mypy]
+python_version = "3.11"
+ignore_missing_imports = false
+
+[[tool.mypy.overrides]]
+module = ["yaml", "yaml.*", "networkx", "networkx.*"]
+ignore_missing_imports = true
