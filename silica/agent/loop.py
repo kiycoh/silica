@@ -26,7 +26,6 @@ if TYPE_CHECKING:
     from silica.planner.progress import ProgressLedger
 
 from silica.agent.events import (
-    ToolProgressEvent,
     ToolStartEvent,
     ToolCompleteEvent,
     ToolErrorEvent,
@@ -34,9 +33,9 @@ from silica.agent.events import (
     RenderEvent,
     ThinkingStartEvent,
     ThinkingEndEvent,
+    LLMStreamEvent,
 )
 from silica.agent.llm import call_llm
-from silica.config import CONFIG
 from silica.tools import TOOLS
 
 logger = logging.getLogger(__name__)

@@ -6,7 +6,6 @@ import time
 from typing import Callable
 from rich.live import Live
 from rich.spinner import Spinner
-from rich.panel import Panel
 from rich.text import Text
 from rich.markup import escape
 from rich.console import Group
@@ -18,6 +17,7 @@ from silica.agent.events import (
     RenderEvent,
     ThinkingStartEvent,
     ThinkingEndEvent,
+    LLMStreamEvent,
 )
 from silica.config import CONFIG
 from silica.ui.console import CONSOLE
@@ -336,6 +336,18 @@ class _ProgressRenderer:
             self._stop_spinner()
             return
 
+        if isinstance(event, LLMStreamEvent):
+            if not CONSOLE.is_terminal:
+                return
+            import sys
+            if event.chunk_type == "reasoning":
+                if CONFIG.show_thinking or mode == "verbose" or CONFIG.verbose:
+                    sys.stdout.write(f"\033[2m{event.content}\033[0m")
+            elif event.chunk_type == "text":
+                sys.stdout.write(event.content)
+            sys.stdout.flush()
+            return
+
         if isinstance(event, ReasoningEvent):
             self._stop_spinner()
             if CONFIG.show_thinking or mode == "verbose" or CONFIG.verbose:
@@ -407,7 +419,7 @@ class _ProgressRenderer:
                             if head:
                                 CONSOLE.print(f"    [dim]{escape(head)}[/]")
                         else:
-                            CONSOLE.print(f"    [dim][result redacted][/]")
+                            CONSOLE.print("    [dim][result redacted][/]")
 
                 self._active_tools.pop(event.call_id, None)
                 self._update_live()

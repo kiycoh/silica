@@ -40,5 +40,11 @@ class ThinkingStartEvent:
 class ThinkingEndEvent:
     iteration: int
 
-RenderEvent = ToolProgressEvent | ReasoningEvent | ThinkingStartEvent | ThinkingEndEvent
+@dataclass(slots=True)
+class LLMStreamEvent:
+    chunk_type: str
+    content: str
+    iteration: int
+
+RenderEvent = ToolProgressEvent | ReasoningEvent | ThinkingStartEvent | ThinkingEndEvent | LLMStreamEvent
 
