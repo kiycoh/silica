@@ -137,9 +137,21 @@ class EmbedStore:
     # Mutation
     # ------------------------------------------------------------------
 
-    def upsert(self, path: str, name: str, vec: list[float]) -> None:
-        """Insert or replace a note's embedding."""
-        self._notes[path] = {"vec": vec, "name": name, "ts": time.time()}
+    def upsert(self, path: str, name: str, vec: list[float],
+                *, title_vec: list[float] | None = None) -> None:
+        """Insert or replace a note's embedding.
+
+        `title_vec` is the secondary title-only vector used for the dedup
+        title-similarity gate. Omitting it preserves any existing title_vec
+        stored for that path (backward-compatible with old index entries).
+        """
+        existing = self._notes.get(path, {})
+        entry: dict[str, Any] = {"vec": vec, "name": name, "ts": time.time()}
+        # Preserve existing title_vec if not explicitly provided
+        resolved_tv = title_vec if title_vec is not None else existing.get("title_vec")
+        if resolved_tv is not None:
+            entry["title_vec"] = resolved_tv
+        self._notes[path] = entry
         self._invalidate_matrix()
 
     def delete(self, path: str) -> None:
@@ -153,6 +165,15 @@ class EmbedStore:
     def get_vec(self, path: str) -> list[float] | None:
         entry = self._notes.get(path)
         return entry["vec"] if entry else None
+
+    def get_title_vec(self, path: str) -> list[float] | None:
+        """Return the title-only embedding vector, or None if not yet indexed.
+
+        Returns None for old index entries that pre-date the title_vec feature;
+        callers must handle the None case (title_score = 0.0 fallback).
+        """
+        entry = self._notes.get(path)
+        return entry.get("title_vec") if entry else None
 
     def has(self, path: str) -> bool:
         return path in self._notes
@@ -232,16 +253,30 @@ class EmbedStore:
 # Index management
 # ---------------------------------------------------------------------------
 
-def _note_text(title: str, body: str) -> str:
+def _note_text(title: str, body: str, *, folder: str = "") -> str:
     """Combine title and body prefix for embedding.
+
+    If `folder` is provided, it is prepended as a bracketed domain hint
+    (e.g. "[Robotica] CAN\n\n...") to anchor domain-ambiguous acronyms
+    in their correct semantic neighbourhood. This never alters vault content.
 
     Images and other media embeds are stripped via kernel.media.preprocess_text
     before the text is truncated, so they never pollute the embedding space.
     """
     from silica.kernel.media import preprocess_text
-    combined = f"{title}\n\n{preprocess_text(body)}"
+    prefix = f"[{folder}] " if folder else ""
+    combined = f"{prefix}{title}\n\n{preprocess_text(body)}"
     return combined[:_MAX_CHARS]
 
+def _note_title_text(title: str, *, folder: str = "") -> str:
+    """Title-only text for the secondary title-similarity embedding vector.
+
+    Used alongside `_note_text` to build a compact, body-free representation
+    that captures title-level semantic relationships (e.g. "ROS" ↔ "JSON in
+    ROS 2") even when the full-note vectors diverge below the dedup threshold.
+    """
+    prefix = f"[{folder}] " if folder else ""
+    return f"{prefix}{title}"
 
 
 def build_index(
@@ -264,6 +299,14 @@ def build_index(
 
     Returns:
         The updated EmbedStore (already saved to disk).
+
+    Embedding strategy — interleaved batch:
+        For each note we embed two texts in one call:
+            [full_0, title_0, full_1, title_1, ...]
+        Full vectors (even indices)  → note's primary `vec`.
+        Title vectors (odd indices)  → note's secondary `title_vec`.
+        This captures title-level relationships for the dedup title-gate
+        with zero extra API round-trips.
     """
     if store is None:
         store = EmbedStore()
@@ -276,13 +319,19 @@ def build_index(
 
     for i in range(0, len(to_embed), batch_size):
         batch = to_embed[i : i + batch_size]
-        texts = [_note_text(name, body) for _, name, body in batch]
+        folders = [path.rsplit("/", 1)[0] if "/" in path else "" for path, _, _ in batch]
+        full_texts  = [_note_text(name, body, folder=f)  for (_, name, body), f in zip(batch, folders)]
+        title_texts = [_note_title_text(name, folder=f)  for (_, name, _),    f in zip(batch, folders)]
+        # Interleave: [full_0, title_0, full_1, title_1, ...]
+        interleaved = [t for pair in zip(full_texts, title_texts) for t in pair]
         try:
-            vecs = embedder.embed(texts)
+            vecs = embedder.embed(interleaved)
         except Exception as exc:
             raise RuntimeError(f"Embedding call failed on batch {i//batch_size}: {exc}") from exc
-        for (path, name, _), vec in zip(batch, vecs):
-            store.upsert(path, name, vec)
+        full_vecs  = vecs[0::2]  # even positions
+        title_vecs = vecs[1::2]  # odd positions
+        for (path, name, _), fv, tv in zip(batch, full_vecs, title_vecs):
+            store.upsert(path, name, fv, title_vec=tv)
 
     store.save()
     return store
@@ -299,11 +348,14 @@ def refresh_note(
     """Re-embed a single note and persist the updated store.
 
     Designed to be called after a note is written to the vault (freshness hook).
+    Embeds both the full note text and the title-only text in a single API call.
     """
     if store is None:
         store = EmbedStore()
-    text = _note_text(name, body)
-    vecs = embedder.embed([text])
-    store.upsert(path, name, vecs[0])
+    _folder = path.rsplit("/", 1)[0] if "/" in path else ""
+    full_text  = _note_text(name, body, folder=_folder)
+    title_text = _note_title_text(name, folder=_folder)
+    vecs = embedder.embed([full_text, title_text])
+    store.upsert(path, name, vecs[0], title_vec=vecs[1])
     store.save()
     return store

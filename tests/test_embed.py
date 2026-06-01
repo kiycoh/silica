@@ -11,6 +11,7 @@ from silica.kernel.embed import (
     EmbedStore,
     _cosine,
     _note_text,
+    _note_title_text,
     build_index,
     refresh_note,
 )
@@ -67,6 +68,21 @@ def test_note_text_truncates_at_1200():
 def test_note_text_includes_title():
     result = _note_text("Neural Networks", "Deep learning intro")
     assert "Neural Networks" in result
+
+
+def test_note_text_with_folder_prefix():
+    result = _note_text("CAN", "Controller Area Network bus", folder="Robotica")
+    assert result.startswith("[Robotica] CAN")
+
+
+def test_note_text_no_folder_is_backward_compatible():
+    result = _note_text("CAN", "Controller Area Network bus")
+    assert result.startswith("CAN"), "No folder → no prefix, backward-compatible"
+
+
+def test_note_text_folder_respects_max_chars():
+    result = _note_text("T", "x" * 2000, folder="Robotica")
+    assert len(result) <= 1200
 
 
 # ---------------------------------------------------------------------------
@@ -218,6 +234,73 @@ def test_build_index_force_reembeds_all(tmp_path):
     notes = [("Concepts/A", "A", "body a")]
     build_index(embedder, notes, store=EmbedStore(idx), force=True)
     assert embedder.embed.call_count == 1
+
+
+# ---------------------------------------------------------------------------
+# title_vec — EmbedStore dual-vector support
+# ---------------------------------------------------------------------------
+
+def test_upsert_stores_title_vec(tmp_path):
+    store = EmbedStore(path=tmp_path / "idx.json")
+    store.upsert("Robotica/ROS", "ROS", [1.0, 0.0], title_vec=[0.9, 0.1])
+    assert store.get_title_vec("Robotica/ROS") == [0.9, 0.1]
+
+
+def test_get_title_vec_missing_returns_none(tmp_path):
+    """Old index entries without title_vec must not raise — they return None."""
+    store = EmbedStore(path=tmp_path / "idx.json")
+    store.upsert("Concepts/A", "A", [1.0, 0.0])  # no title_vec
+    assert store.get_title_vec("Concepts/A") is None
+
+
+def test_upsert_preserves_existing_title_vec_when_omitted(tmp_path):
+    """Re-upserting with only vec (no title_vec) must not wipe an existing title_vec."""
+    store = EmbedStore(path=tmp_path / "idx.json")
+    store.upsert("Concepts/A", "A", [1.0, 0.0], title_vec=[0.5, 0.5])
+    store.upsert("Concepts/A", "A", [0.8, 0.2])  # title_vec omitted
+    assert store.get_title_vec("Concepts/A") == [0.5, 0.5]
+
+
+def test_build_index_stores_title_vecs(tmp_path):
+    """build_index must populate title_vec for every note via interleaved batch."""
+    call_count = [0]
+
+    def interleaved_embedder(texts):
+        # Returns a distinct vector for each text based on call order
+        vecs = []
+        for _ in texts:
+            i = call_count[0]
+            # Even positions → full vec, odd → title vec (simplified: just use index)
+            vecs.append([float(i), 0.0])
+            call_count[0] += 1
+        return vecs
+
+    embedder_mock = MagicMock()
+    embedder_mock.embed.side_effect = interleaved_embedder
+
+    notes = [("Robotica/ROS", "ROS", "Robot Operating System")]
+    store = build_index(embedder_mock, notes, store=EmbedStore(tmp_path / "idx.json"))
+
+    # build_index calls embed once with interleaved [full, title]
+    assert embedder_mock.embed.call_count == 1
+    texts_sent = embedder_mock.embed.call_args.args[0]
+    assert len(texts_sent) == 2  # 1 note × 2 texts
+
+    # Both vec and title_vec must be present
+    assert store.get_vec("Robotica/ROS") is not None
+    assert store.get_title_vec("Robotica/ROS") is not None
+    # They must be distinct (full vec at index 0, title vec at index 1)
+    assert store.get_vec("Robotica/ROS") != store.get_title_vec("Robotica/ROS")
+
+
+def test_note_title_text_with_folder():
+    result = _note_title_text("ROS", folder="Robotica")
+    assert result == "[Robotica] ROS"
+
+
+def test_note_title_text_no_folder():
+    result = _note_title_text("ROS")
+    assert result == "ROS"
 
 
 # ---------------------------------------------------------------------------
