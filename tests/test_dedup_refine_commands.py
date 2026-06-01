@@ -33,7 +33,10 @@ class _FakeStore:
     def get_vec(self, p):
         return [1.0, 0.0]
 
-    def cosine_top_k(self, vec, k=1, exclude=None):
+    def get_title_vec(self, p):
+        return None  # simulates pre-title_vec index entry
+
+    def cosine_top_k(self, vec, k=5, exclude=None):
         exclude = exclude or set()
         cand = next(x for x in ["Concepts/A", "Concepts/B"] if x not in exclude)
         return [{"path": cand, "score": 0.75, "name": cand}]
@@ -71,24 +74,40 @@ def test_silica_dedup_requires_index():
     assert "error" in res
 
 
-# --- silica_refine ---------------------------------------------------------
+# --- silica_refine_batch / silica_enrich_batch --------------------------------
 
-def test_silica_refine_requires_folder():
-    from silica.tools.composed import silica_refine
-    res = silica_refine(folder="")
+def test_silica_refine_batch_requires_paths():
+    from silica.tools.composed import silica_refine_batch
+    res = silica_refine_batch(note_paths=[])
     assert "error" in res
 
 
-def test_silica_refine_enqueues_one_item_per_note():
-    from silica.tools.composed import silica_refine
-    refs = [MagicMock(path="Notes/x.md"), MagicMock(path="Notes/y.md")]
-    with patch("silica.driver.DRIVER.list_files", return_value=refs), \
-         patch("silica.agent.subagent.run_subagent_batch", return_value={"items": 2, "summary": {"committed": 2}, "results": []}) as batch:
-        res = silica_refine(folder="Notes")
+def test_silica_refine_batch_enqueues_items():
+    from silica.tools.composed import silica_refine_batch
+    paths = ["Notes/x.md", "Notes/y.md"]
+    with patch("silica.agent.subagent.run_subagent_batch", return_value={"items": 2, "summary": {"committed": 2}, "results": []}) as batch:
+        res = silica_refine_batch(note_paths=paths)
     items = batch.call_args.args[0]
     assert len(items) == 2
     assert all(it.kind == "refine" for it in items)
     assert res["notes"] == 2
+
+
+def test_silica_enrich_batch_requires_paths():
+    from silica.tools.composed import silica_enrich_batch
+    res = silica_enrich_batch(note_paths=[])
+    assert "error" in res
+
+
+def test_silica_enrich_batch_enqueues_items():
+    from silica.tools.composed import silica_enrich_batch
+    paths = ["Notes/lean.md"]
+    with patch("silica.agent.subagent.run_subagent_batch", return_value={"items": 1, "summary": {"committed": 1}, "results": []}) as batch:
+        res = silica_enrich_batch(note_paths=paths)
+    items = batch.call_args.args[0]
+    assert len(items) == 1
+    assert items[0].kind == "enrich"
+    assert res["notes"] == 1
 
 
 # --- CLI wiring ------------------------------------------------------------
@@ -101,3 +120,132 @@ def test_cli_dedup_shortcut_invokes_tool():
         handled = cli._handle_direct_shortcut("/dedup Concepts/ML", [])
     assert handled is True
     fake_tool.run.assert_called_once_with(folder="Concepts/ML")
+
+
+# --- Regression: k=1 horizon bug -------------------------------------------
+
+class _ThreeNoteStore:
+    """Simulates a vault where:
+      - A→B scores 0.90 (above τ_high=0.85 → must be skipped, NOT stop the loop)
+      - A→C scores 0.75 (borderline [τ_low=0.65, τ_high=0.85] → must be found)
+    With k=1 only B was returned, causing the dedup scan to miss C entirely.
+    With k>=2 both B and C are returned; B is skipped, C is captured.
+    """
+
+    def __len__(self):
+        return 3
+
+    def paths(self):
+        return ["Folder/A", "Folder/B", "Folder/C"]
+
+    def get_vec(self, p):
+        return [1.0, 0.0]
+
+    def get_title_vec(self, p):
+        return None  # simulates pre-title_vec index entry
+
+    def cosine_top_k(self, vec, k=5, exclude=None):
+        exclude = exclude or set()
+        # Return results in descending score order, honouring `k` and `exclude`.
+        all_results = [
+            {"path": "Folder/B", "score": 0.90, "name": "B"},  # above τ_high
+            {"path": "Folder/C", "score": 0.75, "name": "C"},  # borderline
+            {"path": "Folder/A", "score": 0.30, "name": "A"},  # below τ_low
+        ]
+        return [r for r in all_results if r["path"] not in exclude][:k]
+
+
+def _read_three(path):
+    return MagicMock(content="body " * 10)
+
+
+def test_dedup_secondary_borderline_found_with_expanded_k():
+    """Regression for k=1 horizon bug.
+
+    When A's primary match (B, score=0.90) is above τ_high, the old k=1 code
+    would discard B and move on without visiting C (score=0.75, borderline).
+    With the multi-match loop (k=dedup_scan_k=5), C is correctly captured.
+
+    The store also returns B→C as borderline (both excluded from k=1 scan),
+    so the new code legitimately finds 2 pairs: A↔C and B↔C.
+    The key invariant: no pair should have B as a borderline partner of A
+    (A→B is 0.90, above τ_high, and must be suppressed).
+    """
+    from silica.tools.composed import silica_dedup
+
+    with patch("silica.kernel.embed.EmbedStore", _ThreeNoteStore), \
+         patch("silica.driver.DRIVER.read_note", side_effect=_read_three), \
+         patch("silica.agent.subagent.run_subagent_batch",
+               return_value={"items": 1, "summary": {"committed": 1}, "results": []}) as batch:
+        res = silica_dedup(folder="Folder")
+
+    # At least one borderline pair must be found (A↔C or B↔C).
+    assert res["pairs_found"] >= 1
+
+    # No item should represent the A↔B pair (score 0.90, above τ_high).
+    items = batch.call_args.args[0]
+    for item in items:
+        pair = {item.target_path, item.context["inbox_file"]}
+        assert pair != {"Folder/A", "Folder/B"}, "A↔B is above τ_high and must be excluded"
+
+
+# --- Title-similarity gate ---------------------------------------------------
+
+class _TitleGateStore:
+    """Simulates a vault where 'ROS' and 'JSON in ROS 2' have:
+      - full-note score = 0.40 (below τ_low=0.65 → normally excluded)
+      - title_vec cosine  = 0.85 (above sim_title_threshold=0.80 → admitted)
+    """
+
+    def __len__(self):
+        return 2
+
+    def paths(self):
+        return ["Robotica/ROS", "Robotica/JSON in ROS 2"]
+
+    def get_vec(self, p):
+        return [1.0, 0.0]
+
+    def get_title_vec(self, p):
+        # Both notes have nearly identical title vectors
+        return [0.9, 0.1]
+
+    def cosine_top_k(self, vec, k=5, exclude=None):
+        exclude = exclude or set()
+        all_results = [
+            {"path": "Robotica/ROS",           "score": 0.40, "name": "ROS"},
+            {"path": "Robotica/JSON in ROS 2", "score": 0.40, "name": "JSON in ROS 2"},
+        ]
+        return [r for r in all_results if r["path"] not in exclude][:k]
+
+
+def _read_ros(path):
+    return MagicMock(content="body of note about ROS " * 5)
+
+
+def test_dedup_title_gate_promotes_low_fullscore_pair():
+    """Title gate: pair with full_score < τ_low but title_score ≥ sim_title_threshold
+    must be admitted, regardless of the body-level score.
+
+    This is the exact scenario for "ROS" / "JSON in ROS 2": the bodies are
+    topically distinct (ROS overview vs JSON serialization in ROS 2) so the
+    full-note cosine falls below τ_low, but the titles are semantically linked.
+    """
+    from silica.tools.composed import silica_dedup
+
+    with patch("silica.kernel.embed.EmbedStore", _TitleGateStore), \
+         patch("silica.driver.DRIVER.read_note", side_effect=_read_ros), \
+         patch("silica.agent.subagent.run_subagent_batch",
+               return_value={"items": 1, "summary": {"committed": 1}, "results": []}) as batch:
+        res = silica_dedup(folder="Robotica")
+
+    assert res["pairs_found"] >= 1, "Title gate must admit the ROS / JSON in ROS 2 pair"
+
+    items = batch.call_args.args[0]
+    pair_paths = {items[0].target_path, items[0].context["inbox_file"]}
+    assert "Robotica/ROS" in pair_paths
+    assert "Robotica/JSON in ROS 2" in pair_paths
+
+    # effective_score must be the title_score (0.85), not the full score (0.40)
+    assert items[0].context["score"] > 0.80
+    assert items[0].context["title_score"] >= 0.80

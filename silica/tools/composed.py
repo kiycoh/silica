@@ -956,12 +956,18 @@ class DedupFolderArgs(BaseModel):
 def silica_dedup(folder: str = "") -> dict[str, Any]:
     """Find near-duplicate note pairs and merge the smaller into the larger.
 
-    Uses the embedding index to surface borderline pairs (sim between the low and
-    high thresholds), then runs the leashed dedup sub-agent on each pair: it
-    appends only the smaller note's genuinely-new info into the larger note (a
-    single append-only patch). Never rewrites/deletes/creates. Run /embed first.
+    Uses the embedding index to surface borderline pairs, then runs the leashed
+    dedup sub-agent on each pair: it appends only the smaller note's genuinely-new
+    info into the larger note (a single append-only patch). Never rewrites/deletes/
+    creates. Run /embed first.
+
+    Pair admission criteria (either condition is sufficient):
+      • Full-note cosine similarity in (τ_low, τ_high)   ← body-level similarity
+      • Title-only cosine similarity ≥ sim_title_threshold ← title-level similarity
+    The second criterion catches cases like "ROS" / "JSON in ROS 2" where the bodies
+    are topically distinct but the titles share a strong semantic relationship.
     """
-    from silica.kernel.embed import EmbedStore
+    from silica.kernel.embed import EmbedStore, _cosine
     from silica.planner.workqueue import WorkItem
     from silica.agent.subagent import run_subagent_batch
     from silica.config import CONFIG as _C
@@ -972,6 +978,7 @@ def silica_dedup(folder: str = "") -> dict[str, Any]:
 
     τ_high = getattr(_C, "sim_threshold_high", 0.85)
     τ_low = getattr(_C, "sim_threshold_low", 0.65)
+    τ_title = getattr(_C, "sim_title_threshold", 0.80)
 
     scope = [p for p in store.paths() if _in_folder(p, folder)]
     seen_pairs: set[tuple[str, str]] = set()
@@ -981,43 +988,63 @@ def silica_dedup(folder: str = "") -> dict[str, Any]:
         vec = store.get_vec(p)
         if not vec:
             continue
-        top = store.cosine_top_k(vec, k=1, exclude={p})
-        if not top:
-            continue
-        match = top[0]
-        score = match.get("score", 0.0)
-        other = match.get("path", "")
-        if not other or not (τ_low < score < τ_high):
-            continue
-        key = tuple(sorted((p, other)))
-        if key in seen_pairs:
-            continue
-        seen_pairs.add(key)
+        candidates = store.cosine_top_k(vec, k=_C.dedup_scan_k, exclude={p})
+        for match in candidates:
+            score = match.get("score", 0.0)
+            other = match.get("path", "")
+            if not other or not _in_folder(other, folder):
+                continue
 
-        try:
-            body_p = DRIVER.read_note(p).content or ""
-            body_o = DRIVER.read_note(other).content or ""
-        except Exception:
-            continue
+            # Title-level similarity gate: catches pairs whose bodies diverge
+            # but whose titles share a strong semantic relationship.
+            title_vec_p = store.get_title_vec(p)
+            title_vec_o = store.get_title_vec(other)
+            title_score = (
+                _cosine(title_vec_p, title_vec_o)
+                if title_vec_p and title_vec_o
+                else 0.0
+            )
 
-        # The larger note is the merge target; the smaller is the source of new info.
-        if len(body_o) >= len(body_p):
-            larger, smaller, smaller_body = other, p, body_p
-        else:
-            larger, smaller, smaller_body = p, other, body_o
+            in_full_window = τ_low < score < τ_high
+            in_title_gate  = title_score >= τ_title
 
-        items.append(WorkItem(
-            kind="dedup",
-            target_path=larger,
-            context={
-                "concept": smaller.rsplit("/", 1)[-1],
-                "excerpt": smaller_body[:4000],
-                "candidate": larger.rsplit("/", 1)[-1],
-                "score": score,
-                "inbox_file": smaller,
-            },
-            reason=f"folder_dedup score={score:.3f}",
-        ))
+            # continue (not break): list is sorted descending; a match above τ_high
+            # arrives before borderline ones — break would kill the loop too early.
+            if not in_full_window and not in_title_gate:
+                continue
+
+            key = tuple(sorted((p, other)))
+            if key in seen_pairs:
+                continue
+            seen_pairs.add(key)
+
+            try:
+                body_p = DRIVER.read_note(p).content or ""
+                body_o = DRIVER.read_note(other).content or ""
+            except Exception:
+                continue
+
+            # The larger note is the merge target; the smaller is the source of new info.
+            if len(body_o) >= len(body_p):
+                larger, smaller, smaller_body = other, p, body_p
+            else:
+                larger, smaller, smaller_body = p, other, body_o
+
+            effective_score = max(score, title_score)
+            items.append(WorkItem(
+                kind="dedup",
+                target_path=larger,
+                context={
+                    "concept": smaller.removesuffix(".md").rsplit("/", 1)[-1],
+                    "excerpt": smaller_body[:4000],
+                    "candidate": larger.removesuffix(".md").rsplit("/", 1)[-1],
+                    "score": effective_score,
+                    "full_score": score,
+                    "title_score": title_score,
+                    "inbox_file": smaller,
+                },
+                reason=f"folder_dedup score={effective_score:.3f} (full={score:.3f} title={title_score:.3f})",
+            ))
 
     res = run_subagent_batch(items)
     res["pairs_found"] = len(items)
@@ -1025,33 +1052,41 @@ def silica_dedup(folder: str = "") -> dict[str, Any]:
     return res
 
 
-class RefineFolderArgs(BaseModel):
-    folder: str = Field(description="Vault folder whose notes to stylistically refine (required)")
+class RefineBatchArgs(BaseModel):
+    note_paths: list[str] = Field(description="List of vault-relative paths to stylistically refine.")
 
+@tool(RefineBatchArgs, cls="composed")
+def silica_refine_batch(note_paths: list[str]) -> dict[str, Any]:
+    """Stylistically refine a batch of notes (leashed refiner sub-agent).
 
-@tool(RefineFolderArgs, cls="composed")
-def silica_refine(folder: str = "") -> dict[str, Any]:
-    """Stylistically refine every note in a folder (leashed refiner sub-agent).
-
-    Each note is reformatted for clarity/Obsidian style WITHOUT information loss —
-    the refiner leash rejects any rewrite that drops a wikilink or shrinks the note.
-    A folder is required so this never sweeps the whole vault by accident.
+    Each note is reformatted for clarity/Obsidian style WITHOUT information loss.
     """
-    if not folder.strip():
-        return {"error": "/refine requires a folder (refusing to sweep the whole vault)."}
+    if not note_paths:
+        return {"error": "No note paths provided."}
 
     from silica.planner.workqueue import WorkItem
     from silica.agent.subagent import run_subagent_batch
 
-    refs = DRIVER.list_files(folder=folder)
-    items = [
-        WorkItem(kind="refine", target_path=ref.path, context={})
-        for ref in refs
-        if _in_folder(ref.path, folder)
-    ]
+    items = [WorkItem(kind="refine", target_path=p, context={}) for p in note_paths]
     res = run_subagent_batch(items)
     res["notes"] = len(items)
-    res["folder"] = folder
+    return res
+
+class EnrichBatchArgs(BaseModel):
+    note_paths: list[str] = Field(description="List of vault-relative paths to semantically enrich.")
+
+@tool(EnrichBatchArgs, cls="composed")
+def silica_enrich_batch(note_paths: list[str]) -> dict[str, Any]:
+    """Semantically enrich a batch of lean or empty notes (leashed enricher sub-agent)."""
+    if not note_paths:
+        return {"error": "No note paths provided."}
+
+    from silica.planner.workqueue import WorkItem
+    from silica.agent.subagent import run_subagent_batch
+
+    items = [WorkItem(kind="enrich", target_path=p, context={}) for p in note_paths]
+    res = run_subagent_batch(items)
+    res["notes"] = len(items)
     return res
 
 

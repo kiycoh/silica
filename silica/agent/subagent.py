@@ -101,6 +101,8 @@ class LeashedSubAgent:
                 return self._run_dedup(item)
             if item.kind == "refine":
                 return self._run_refine(item)
+            if item.kind == "enrich":
+                return self._run_enrich(item)
             if item.kind == "orphan":
                 return self._run_orphan(item)
             return {"status": "skipped", "reason": f"unknown work kind '{item.kind}'"}
@@ -127,6 +129,9 @@ class LeashedSubAgent:
             excerpt=ctx.get("excerpt", ""),
             candidate_name=ctx.get("candidate", candidate_path),
             candidate_body=candidate_body[:budget],
+            score=ctx.get("score", 0.0),
+            full_score=ctx.get("full_score", ctx.get("score", 0.0)),
+            title_score=ctx.get("title_score", 0.0),
         )
 
         if not decision.is_duplicate or not decision.addition.strip():
@@ -186,6 +191,41 @@ class LeashedSubAgent:
             reason="stylistic refine",
         )
         # refiner_leash enforces anti-info-loss (wikilinks preserved + length floor).
+        leash = refiner_leash(target_path, hub=hub)
+        result = commit_ops(
+            [op],
+            target_dir=os.path.dirname(target_path),
+            hub=hub,
+            leash=leash,
+            read_note=lambda _p: original,
+        )
+        return result
+
+    # --- enrich behaviour -------------------------------------------------
+
+    def _run_enrich(self, item: WorkItem) -> dict[str, Any]:
+        target_path = item.target_path
+        try:
+            from silica.driver import DRIVER
+            original = DRIVER.read_note(target_path).content or ""
+        except Exception as e:
+            return {"status": "skipped", "reason": f"target unreadable: {e}"}
+
+        hub = item.context.get("hub") or os.path.splitext(os.path.basename(target_path))[0]
+        enriched = self._enrich_note(target_path, original, hub)
+        if not enriched.content.strip():
+            return {"status": "no_change", "reason": "enricher produced no content"}
+
+        op = Op(
+            op=OpType.overwrite,
+            heading=os.path.splitext(os.path.basename(target_path))[0],
+            source_basename=os.path.basename(target_path),
+            path=target_path,
+            content=enriched.content,
+            hub=hub,
+            reason="semantic enrichment",
+        )
+        # We can use refiner_leash as it guarantees anti-info-loss (wikilinks preserved + length floor)
         leash = refiner_leash(target_path, hub=hub)
         result = commit_ops(
             [op],
@@ -296,6 +336,46 @@ class LeashedSubAgent:
             logger.debug("refine parse failed: %s", e)
         return RefineResult(content="")
 
+    def _enrich_note(self, target_path: str, original: str, hub: str) -> RefineResult:
+        from silica.agent.providers import get_provider
+        from silica.kernel.sanitize import parse_json
+        from silica.kernel.context_builder import build_context
+
+        system_prompt = (
+            "You are an academic assistant expert in writing and structuring notes in Obsidian Flavored Markdown (OFM) in English.\n"
+            "Your task is to enrich the note specified by the target.\n"
+            "Fundamental rules:\n"
+            "1. Produce a rigorous, complete, and exhaustive academic text in English.\n"
+            "2. Preserve all factual information and concepts already present in the note (anti-deletion policy). Do not remove pre-existing information, but expand upon it.\n"
+            "3. Perform structuring in Obsidian Flavored Markdown: use callouts (> [!tip], > [!note]), LaTeX equation blocks ($$ ... $$) if appropriate, lists, and bold text.\n"
+            f"4. You must include a wikilink [[{hub}]] to the hub/parent note (for example in a final section called '# Relations' or '# Connections').\n"
+            "5. Return the result structured in JSON format containing a single key 'content' with the full body of the note (including normalized and updated YAML frontmatter tags, and the enriched body)."
+        )
+
+        title = os.path.splitext(os.path.basename(target_path))[0]
+        note_payload = f"Title: {title}\nPath: {target_path}\nCurrent content:\n{original}"
+        ctx = build_context(checkpoint_id="enrich", payload=note_payload)
+        user_message = f"Enrich the following note.\n\n{ctx}"
+
+        provider = get_provider(self.config, role="worker")
+        response = provider.call_llm(
+            messages=[
+                {"role": "system", "content": system_prompt},
+                {"role": "user", "content": user_message}
+            ],
+            tools=None,
+            response_schema=RefineResult,
+            max_tokens=8192,
+        )
+        raw = response.text or ""
+        try:
+            parsed, _ = parse_json(raw, strict=False)
+            if isinstance(parsed, dict) and "content" in parsed:
+                return RefineResult(content=str(parsed["content"]))
+        except Exception as e:
+            logger.debug("enrich parse failed: %s", e)
+        return RefineResult(content="")
+
     def _decide_dedup(
         self,
         *,
@@ -303,13 +383,41 @@ class LeashedSubAgent:
         excerpt: str,
         candidate_name: str,
         candidate_body: str,
+        score: float = 0.0,
+        full_score: float = 0.0,
+        title_score: float = 0.0,
     ) -> DedupDecision:
         from silica.agent.providers import get_provider
         from silica.kernel.sanitize import parse_json
 
         prompt = _load_prompt("dedup_prompt.txt")
+
+        # Build the score block shown to the model.
+        # When both metrics are available we surface them separately so the model
+        # can interpret the signal correctly: a high title score with a low body
+        # score means "topically related but distinct" — very different from a
+        # uniformly high score which strongly suggests a true duplicate.
+        if title_score > 0.0 and full_score > 0.0:
+            score_block = (
+                f"SEMANTIC CLOSENESS SCORE: {score:.3f} (effective = max of the two below)\n"
+                f"  • Full-note similarity (body + title):  {full_score:.3f}\n"
+                f"  • Title-only similarity:                {title_score:.3f}\n"
+                f"Interpretation:\n"
+                f"  - High full-note score (>0.80): bodies cover the same topic → likely duplicate.\n"
+                f"  - High title score with low body score: notes are topically related but\n"
+                f"    cover distinct aspects (e.g. 'ROS' vs 'JSON in ROS 2') → prefer linking\n"
+                f"    over merging; set is_duplicate=false unless content genuinely overlaps."
+            )
+        else:
+            score_block = (
+                f"SEMANTIC CLOSENESS SCORE: {score:.3f} (0.0 to 1.0, where 1.0 is identical)\n"
+                f"Use this metric as an indicator. High scores (>0.85) strongly suggest "
+                f"duplicates, while lower scores might represent related but distinct topics."
+            )
+
         user_message = (
             f"{prompt}\n\n"
+            f"---\n{score_block}\n"
             f"---\nCANDIDATE NOTE ({candidate_name}):\n{candidate_body}\n\n"
             f"---\nINCOMING CONCEPT: {concept}\nEXCERPT:\n{excerpt}\n"
         )
