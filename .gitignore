@@ -154,12 +154,14 @@ Thumbs.db
 /docs
 
 # Agents
+/.agents
 CLAUDE.md
 /.claude
 /memory
 
 # DB
 ruvector.db
+agentdb.rvf
 
 # Locks
 *.rvf.lock

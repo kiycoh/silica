@@ -85,7 +85,9 @@ def test_orphan_without_match_goes_propose():
     propose_caps = [c.capability_name for c in plan.propose]
     assert "silica_autolink" in propose_caps
     # Nothing in auto for this case (no matching title)
-    auto_paths = [c.payload.get("note_path") for c in plan.auto]
+    auto_paths = []
+    for c in plan.auto:
+        auto_paths.extend(c.payload.get("note_paths", []))
     assert "Notes/Zeta999" not in auto_paths
 
 
@@ -99,7 +101,9 @@ def test_missing_link_above_threshold_goes_propose():
     plan = build_task_plan(r)
     propose_caps = [c.capability_name for c in plan.propose]
     assert "silica_autolink" in propose_caps
-    sources = [c.payload.get("note_path") for c in plan.propose]
+    sources = []
+    for c in plan.propose:
+        sources.extend(c.payload.get("note_paths", []))
     assert "A" in sources
 
 
@@ -111,7 +115,7 @@ def test_missing_link_deduplicated_by_source():
         MissingLink(source="A", target="C", cosine=0.88),
     ]
     plan = build_task_plan(r)
-    a_tasks = [c for c in plan.propose if c.payload.get("note_path") == "A"]
+    a_tasks = [c for c in plan.propose if "A" in c.payload.get("note_paths", [])]
     assert len(a_tasks) == 1
 
 

@@ -417,27 +417,26 @@ def silica_graph_export(output_path: str = "graph.html", folder: str = "", title
 
 
 class AutolinkArgs(BaseModel):
-    note_path: str = Field(description="Vault-relative path of the note to autolink (e.g. 'Concepts/NeuralNet.md')")
+    note_paths: list[str] | None = Field(default=None, description="List of vault-relative paths to autolink")
+    note_path: str = Field(default="", description="Vault-relative path of the note to autolink (legacy single-file)")
     use_candidates: bool = Field(default=True, description="Use embedding candidates to focus autolinking (requires index)")
 
 @tool(AutolinkArgs, cls="composed")
-def silica_autolink(note_path: str, use_candidates: bool = True) -> dict[str, Any]:
-    """Scan a note for mentions of existing vault titles and wrap them as wikilinks.
+def silica_autolink(note_paths: list[str] | None = None, note_path: str = "", use_candidates: bool = True) -> dict[str, Any]:
+    """Scan notes for mentions of existing vault titles and wrap them as wikilinks.
 
     Skips frontmatter, code blocks, math, headings, and already-linked text.
     Only links titles that exist in the vault graph (graph-safe by construction).
-    Returns the number of links added and the modified note path.
+    Returns the total number of links added.
     """
     from silica.kernel.autolink import autolink, build_title_index
 
-    try:
-        nc = DRIVER.read_note(note_path)
-    except Exception as e:
-        return {"error": f"Failed to read note: {e}"}
+    paths = note_paths or []
+    if note_path and note_path not in paths:
+        paths.append(note_path)
 
-    body = nc.content or ""
-    if not body.strip():
-        return {"note": note_path, "added": 0, "links": []}
+    if not paths:
+        return {"error": "No note paths provided."}
 
     try:
         all_refs = DRIVER.list_files()
@@ -445,8 +444,9 @@ def silica_autolink(note_path: str, use_candidates: bool = True) -> dict[str, An
         return {"error": f"Failed to list vault files: {e}"}
 
     title_index = build_title_index(all_refs)
-
-    candidates: list[str] | None = None
+    
+    store = None
+    embedder = None
     if use_candidates:
         try:
             from silica.agent.providers import get_embedder
@@ -455,25 +455,44 @@ def silica_autolink(note_path: str, use_candidates: bool = True) -> dict[str, An
             store = EmbedStore()
             if len(store) > 0:
                 embedder = get_embedder(CONFIG)
+        except Exception:
+            pass
+
+    total_added = 0
+    processed = 0
+
+    import os as _os
+    for path in paths:
+        try:
+            nc = DRIVER.read_note(path)
+        except Exception:
+            continue
+
+        body = nc.content or ""
+        if not body.strip():
+            continue
+
+        candidates: list[str] | None = None
+        if use_candidates and store and embedder:
+            try:
                 vecs = embedder.embed([body[:800]])
                 results = store.cosine_top_k(vecs[0], k=20)
                 candidates = [r["name"] for r in results]
-        except Exception:
-            pass  # Fall back to full title_index scan
+            except Exception:
+                pass  # Fall back to full title_index scan
 
-    import os as _os
-    note_title = _os.path.splitext(_os.path.basename(note_path))[0]
-    new_body, added = autolink(body, title_index, candidates=candidates, self_title=note_title)
+        note_title = _os.path.splitext(_os.path.basename(path))[0]
+        new_body, added = autolink(body, title_index, candidates=candidates, self_title=note_title)
 
-    if not added:
-        return {"note": note_path, "added": 0, "links": []}
+        if added:
+            try:
+                DRIVER.update_note(path, new_body)
+                total_added += len(added)
+                processed += 1
+            except Exception:
+                pass
 
-    try:
-        DRIVER.update_note(note_path, new_body)
-    except Exception as e:
-        return {"error": f"Failed to write autolinked note: {e}"}
-
-    return {"note": note_path, "added": len(added), "links": added}
+    return {"notes_processed": processed, "total_links_added": total_added}
 
 
 class BacklinkArgs(BaseModel):
@@ -868,6 +887,65 @@ def _in_folder(path: str, folder: str) -> bool:
     f = folder.replace("\\", "/").strip("/").lower()
     p = path.replace("\\", "/").removesuffix(".md").lower()
     return p == f or p.startswith(f + "/")
+
+
+class DedupPairsArgs(BaseModel):
+    pairs: list[dict] = Field(description="List of duplicate pairs to merge. Each dict must have 'source' and 'target' keys.")
+
+@tool(DedupPairsArgs, cls="composed")
+def silica_dedup_pairs(pairs: list[dict]) -> dict[str, Any]:
+    """Merge a provided list of duplicate note pairs.
+    
+    Delegates the provided duplicate pairs to the leashed dedup sub-agent batch processor.
+    The smaller note is appended to the larger note as a single patch.
+    """
+    from silica.planner.workqueue import WorkItem
+    from silica.agent.subagent import run_subagent_batch
+    
+    if not pairs:
+        return {"error": "No pairs provided."}
+        
+    items: list[WorkItem] = []
+    
+    for pair in pairs:
+        source = pair.get("source")
+        target = pair.get("target")
+        score = pair.get("score", 0.0)
+        
+        if not source or not target:
+            continue
+            
+        try:
+            body_src = DRIVER.read_note(source).content or ""
+            body_tgt = DRIVER.read_note(target).content or ""
+        except Exception:
+            continue
+            
+        # The larger note is the merge target; the smaller is the source of new info.
+        if len(body_tgt) >= len(body_src):
+            larger, smaller, smaller_body = target, source, body_src
+        else:
+            larger, smaller, smaller_body = source, target, body_tgt
+            
+        items.append(WorkItem(
+            kind="dedup",
+            target_path=larger,
+            context={
+                "concept": smaller.rsplit("/", 1)[-1],
+                "excerpt": smaller_body[:4000],
+                "candidate": larger.rsplit("/", 1)[-1],
+                "score": score,
+                "inbox_file": smaller,
+            },
+            reason=f"ledger_dedup score={score:.3f}",
+        ))
+        
+    if not items:
+        return {"success": False, "message": "No valid pairs to process"}
+        
+    res = run_subagent_batch(items)
+    res["pairs_found"] = len(items)
+    return res
 
 
 class DedupFolderArgs(BaseModel):

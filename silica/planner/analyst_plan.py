@@ -13,8 +13,11 @@ qualifies today — it is graph-safe by construction and fully reversible.
 """
 from __future__ import annotations
 
+import json
 from dataclasses import dataclass, field
 from typing import Literal
+
+import networkx as nx
 
 from silica.kernel.graph_report import VaultReport
 from silica.planner.progress import CheckpointSpec
@@ -93,37 +96,114 @@ def build_task_plan(report: VaultReport) -> AnalystPlan:
                 return True
         return False
 
+    # Pre-compute cluster assignments for topology-aware chunking
+    node_to_cluster: dict[str, int] = {}
+    for c in report.clusters:
+        for m in c.members:
+            node_to_cluster[m] = c.cluster_id
+
+    def _chunk_groups(group_map: dict[int, list[str]], max_bytes: int = 4096) -> list[list[str]]:
+        chunks = []
+        current_chunk = []
+        current_size = 0
+        for _, nodes in group_map.items():
+            nodes_size = len(json.dumps(nodes))
+            if current_size + nodes_size > max_bytes and current_chunk:
+                chunks.append(current_chunk)
+                current_chunk = list(nodes)
+                current_size = nodes_size
+            else:
+                current_chunk.extend(nodes)
+                current_size += nodes_size
+        if current_chunk:
+            chunks.append(current_chunk)
+        return chunks
+
     # 1. Orphans
+    auto_orphans_by_cluster: dict[int, list[str]] = {}
+    propose_orphans_by_cluster: dict[int, list[str]] = {}
+
     for orphan in report.orphans:
+        cid = node_to_cluster.get(orphan, -1)
         if _has_title_candidate(orphan):
-            auto.append(TaskCandidate(
-                capability_name="silica_autolink",
-                payload={"note_path": orphan, "use_candidates": True},
-                reason=f"Orphan '{orphan}' has linkable title candidates → auto-link",
-                tier="auto",
-                priority=0,
-            ))
+            auto_orphans_by_cluster.setdefault(cid, []).append(orphan)
         else:
-            propose.append(TaskCandidate(
-                capability_name="silica_autolink",
-                payload={"note_path": orphan, "use_candidates": True},
-                reason=f"Orphan '{orphan}' — no clear title match, confirm before autolinking",
-                tier="propose",
-                priority=1,
-            ))
+            propose_orphans_by_cluster.setdefault(cid, []).append(orphan)
+
+    for chunk in _chunk_groups(auto_orphans_by_cluster):
+        auto.append(TaskCandidate(
+            capability_name="silica_autolink",
+            payload={"note_paths": chunk, "use_candidates": True},
+            reason=f"{len(chunk)} orphans have linkable title candidates → auto-link",
+            tier="auto",
+            priority=0,
+        ))
+
+    for chunk in _chunk_groups(propose_orphans_by_cluster):
+        propose.append(TaskCandidate(
+            capability_name="silica_autolink",
+            payload={"note_paths": chunk, "use_candidates": True},
+            reason=f"{len(chunk)} orphans — no clear title match, confirm before autolinking",
+            tier="propose",
+            priority=1,
+        ))
 
     # 2. Missing links (embedding proposals, already filtered ≥ τ in compute_report)
     seen_autolink_propose: set[str] = set()
+    propose_missing_by_cluster: dict[int, list[str]] = {}
     for ml in report.missing_links:
         if ml.source not in seen_autolink_propose:
             seen_autolink_propose.add(ml.source)
+            cid = node_to_cluster.get(ml.source, -1)
+            propose_missing_by_cluster.setdefault(cid, []).append(ml.source)
+
+    for chunk in _chunk_groups(propose_missing_by_cluster):
+        propose.append(TaskCandidate(
+            capability_name="silica_autolink",
+            payload={"note_paths": chunk, "use_candidates": True},
+            reason=f"Embedding proposes links for {len(chunk)} source notes — confirm before writing",
+            tier="propose",
+            priority=2,
+        ))
+
+    # 2.5 Duplicate pairs (dedup suggestions)
+    if hasattr(report, "duplicate_pairs") and report.duplicate_pairs:
+        dup_graph = nx.Graph()
+        for dp in report.duplicate_pairs:
+            dup_graph.add_edge(dp.source, dp.target, score=dp.score)
+
+        dedup_components = list(nx.connected_components(dup_graph))
+        component_pairs = []
+        for comp in dedup_components:
+            comp_pairs = []
+            for dp in report.duplicate_pairs:
+                if dp.source in comp and dp.target in comp:
+                    comp_pairs.append({"source": dp.source, "target": dp.target, "score": dp.score})
+            if comp_pairs:
+                component_pairs.append(comp_pairs)
+
+        def _chunk_components(components: list[list[dict]], max_bytes: int = 4096) -> list[list[dict]]:
+            chunks = []
+            current_chunk = []
+            current_size = 0
+            for comp in components:
+                comp_size = len(json.dumps(comp))
+                if current_size + comp_size > max_bytes and current_chunk:
+                    chunks.append(current_chunk)
+                    current_chunk = list(comp)
+                    current_size = comp_size
+                else:
+                    current_chunk.extend(comp)
+                    current_size += comp_size
+            if current_chunk:
+                chunks.append(current_chunk)
+            return chunks
+
+        for chunk in _chunk_components(component_pairs):
             propose.append(TaskCandidate(
-                capability_name="silica_autolink",
-                payload={"note_path": ml.source, "use_candidates": True},
-                reason=(
-                    f"Embedding proposes link {ml.source} → {ml.target} "
-                    f"(cosine={ml.cosine}) — confirm before writing"
-                ),
+                capability_name="silica_dedup_pairs",
+                payload={"pairs": chunk},
+                reason=f"Embedding proposes {len(chunk)} duplicate pairs for merge — confirm before executing",
                 tier="propose",
                 priority=2,
             ))

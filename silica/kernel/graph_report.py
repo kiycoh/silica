@@ -61,6 +61,13 @@ class MissingLink:          # PROPOSED — not authoritative
 
 
 @dataclass
+class DuplicatePair:        # PROPOSED — borderline duplicates
+    source: str
+    target: str
+    score: float
+
+
+@dataclass
 class VaultReport:
     generated_at: str
     scope: str
@@ -71,6 +78,7 @@ class VaultReport:
     dangling: list[dict]   # [{"target": str, "refs": int}]
     clusters: list[ClusterStat]
     missing_links: list[MissingLink] = field(default_factory=list)
+    duplicate_pairs: list[DuplicatePair] = field(default_factory=list)
     pagerank_map: dict[str, float] = field(default_factory=dict)  # all nodes: vault-relative path (no .md) → pagerank
 
 
@@ -264,6 +272,7 @@ def compute_report(
     # ------------------------------------------------------------------
     if with_embeddings:
         report.missing_links = _compute_missing_links(report, G_und, tau=0.82, k=top_k)
+        report.duplicate_pairs = _compute_duplicate_pairs(report)
 
     return report
 
@@ -278,6 +287,8 @@ def _empty_report(scope: str = "") -> VaultReport:
         orphans=[],
         dangling=[],
         clusters=[],
+        missing_links=[],
+        duplicate_pairs=[],
     )
 
 
@@ -340,6 +351,60 @@ def _compute_missing_links(
 
     results.sort(key=lambda m: (-m.cosine, m.source, m.target))
     return results[:k]
+
+
+def _compute_duplicate_pairs(report: VaultReport) -> list[DuplicatePair]:
+    """Find near-duplicate note pairs using embedding index (PROPOSED — not authoritative)."""
+    try:
+        from silica.config import CONFIG
+        from silica.kernel.embed import EmbedStore
+
+        store = EmbedStore()
+        if len(store) == 0:
+            return []
+    except Exception as exc:
+        logger.debug("graph_report: embeddings unavailable for dedup (%s)", exc)
+        return []
+
+    tau_high = getattr(CONFIG, "sim_threshold_high", 0.85)
+    tau_low = getattr(CONFIG, "sim_threshold_low", 0.65)
+
+    results: list[DuplicatePair] = []
+    seen: set[tuple[str, str]] = set()
+
+    def _in_folder(path: str, folder: str) -> bool:
+        if not folder:
+            return True
+        f = folder.replace("\\", "/").strip("/").lower()
+        p = path.replace("\\", "/").removesuffix(".md").lower()
+        return p == f or p.startswith(f + "/")
+
+    scope = [p for p in store.paths() if _in_folder(p, report.scope)]
+
+    for p in scope:
+        vec = store.get_vec(p)
+        if not vec:
+            continue
+        try:
+            candidates = store.cosine_top_k(vec, k=1, exclude={p})
+        except Exception:
+            continue
+
+        if not candidates:
+            continue
+
+        cand = candidates[0]
+        tgt = cand["path"]
+        score = cand.get("score", 0.0)
+
+        if tau_low < score < tau_high:
+            key = (min(p, tgt), max(p, tgt))
+            if key not in seen:
+                seen.add(key)
+                results.append(DuplicatePair(source=p, target=tgt, score=round(score, 4)))
+
+    results.sort(key=lambda d: (-d.score, d.source, d.target))
+    return results
 
 
 # ---------------------------------------------------------------------------
@@ -441,6 +506,17 @@ def to_markdown(report: VaultReport, title: str = "Silica Vault Report") -> str:
             lines.append(f"| [[{src_label}]] | [[{tgt_label}]] | {ml.cosine} |")
         lines.append("")
 
+    # Duplicate pairs (proposed)
+    if report.duplicate_pairs:
+        lines.append("## Proposed Deduplication Pairs _(borderline similarity)_")
+        lines.append("| Source | Target | Cosine |")
+        lines.append("|---|---|---|")
+        for dp in report.duplicate_pairs:
+            src_label = dp.source.rsplit("/", 1)[-1].removesuffix(".md")
+            tgt_label = dp.target.rsplit("/", 1)[-1].removesuffix(".md")
+            lines.append(f"| [[{src_label}]] | [[{tgt_label}]] | {dp.score} |")
+        lines.append("")
+
     return "\n".join(lines)
 
 
@@ -511,6 +587,13 @@ def to_digest(report: VaultReport, *, max_items: int = 8) -> str:
             for m in report.missing_links[:max_items]
         )
         lines.append(f"PROPOSED  {ml}")
+
+    if report.duplicate_pairs:
+        dp_list = ", ".join(
+            f"{dp.source.rsplit('/',1)[-1].removesuffix('.md')}↔{dp.target.rsplit('/',1)[-1].removesuffix('.md')}(cos={dp.score})"
+            for dp in report.duplicate_pairs[:max_items]
+        )
+        lines.append(f"DEDUP  {dp_list}")
 
     return "\n".join(lines)
 
