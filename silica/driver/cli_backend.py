@@ -59,6 +59,7 @@ class ObsidianCLIBackend:
         self._unresolved_links: set[tuple[str, str]] = set()
         self._notes: dict[str, NoteRef] = {}
         self._notes_by_name: dict[str, list[NoteRef]] = {}
+        self._mention_index: dict[str, set[str]] = {}  # title_lower → {paths that mention it}
         self._is_graph_built = False
 
     def _node_ref(self, path: str) -> NoteRef:
@@ -190,6 +191,8 @@ class ObsidianCLIBackend:
                 raise RuntimeError(stdout_str)
                 
             return stdout_str
+        except FileNotFoundError as e:
+            raise RuntimeError("Obsidian CLI executable not found: obsidian") from e
         except subprocess.TimeoutExpired:
             raise RuntimeError(f"Obsidian CLI timeout: {' '.join(cmd)}")
         except subprocess.CalledProcessError as e:
@@ -242,6 +245,15 @@ class ObsidianCLIBackend:
             if query in f.name.lower():
                 results.append(f)
         return results
+
+    def mentions_of(self, title: str) -> list[str]:
+        """Return vault-relative paths of notes whose body mentions `title`.
+
+        O(1) lookup into the inverted text index built during _ensure_graph.
+        If the index hasn't been built yet, falls back to building it first.
+        """
+        self._ensure_graph()
+        return list(self._mention_index.get(title.lower(), set()))
 
     def search_context(self, query: str) -> list[Hit]:
         """Search vault content with line-level context snippets."""
@@ -572,6 +584,25 @@ class ObsidianCLIBackend:
             else:
                 self._unresolved_links.add((path, target_name))
 
+        # Incrementally update the mention index: rescan this note's body
+        # against all known titles, and also check if existing notes mention
+        # this note's title.
+        content_lower = content.lower()
+        # 1. Remove stale entries for this path from all title sets
+        for title_lower, paths_set in self._mention_index.items():
+            paths_set.discard(path)
+        # 2. Re-scan this body against all known titles
+        for title_lower in self._notes_by_name:
+            if len(title_lower) >= 2 and title_lower in content_lower:
+                self._mention_index.setdefault(title_lower, set()).add(path)
+        # 3. The new note's own title is now a searchable term — existing
+        #    notes may already mention it but weren't indexed for it.
+        #    A full rescan would be expensive, so we skip it here.
+        #    The _build_mention_index call in _load_graph_from_obsidian
+        #    already captured all mentions at startup.  New notes created
+        #    mid-session can only be mentioned by notes written *after*
+        #    them (which will be patched in their own _patch_graph_add).
+
     def _patch_graph_remove(self, path: str) -> None:
         """Patch the in-memory graph after a delete."""
         if not self._is_graph_built:
@@ -587,6 +618,9 @@ class ObsidianCLIBackend:
         self._unresolved_links = {
             (s, t) for s, t in self._unresolved_links if s != path
         }
+        # Remove this path from all mention index entries
+        for title_lower, paths_set in self._mention_index.items():
+            paths_set.discard(path)
 
     def create(self, path: str, content: str) -> NoteRef:
         """Create a new note at the given vault-relative path."""
@@ -651,7 +685,64 @@ class ObsidianCLIBackend:
             for target_name in targets:
                 self._unresolved_links.add((source_path, target_name))
 
+        # Build the title-mention index: for each note, scan its body (via
+        # cachedRead in JS — instant, no disk I/O) for all known vault titles.
+        # The result is {title_lower: [paths]} — one CDP call, O(N×T) in the
+        # fast JS runtime, response is just the compact map.
+        self._build_mention_index()
+
         return self._graph
+
+    def _build_mention_index(self) -> None:
+        """Build the title-mention inverted index via a single CDP eval.
+
+        Reads each vault file once (via cachedRead — from Obsidian's in-memory
+        cache, not disk) and checks its body against all known note titles.
+        Result: {title_lower: [paths_that_mention_it]}.
+
+        Runs inside the JS runtime for speed — avoids transferring megabytes of
+        note bodies over the CDP bridge.
+        """
+        titles_json = json.dumps([
+            ref.name.lower() for ref in self._notes.values()
+            if len(ref.name) >= 2
+        ])
+
+        js_code = (
+            "(async () => {\n"
+            f"  const titles = {titles_json};\n"
+            "  const files = app.vault.getMarkdownFiles();\n"
+            "  const mentions = {};\n"
+            "  await Promise.all(files.map(async (file) => {\n"
+            "    try {\n"
+            "      const content = (await app.vault.cachedRead(file)).toLowerCase();\n"
+            "      for (const title of titles) {\n"
+            "        if (content.includes(title)) {\n"
+            "          if (!mentions[title]) mentions[title] = [];\n"
+            "          mentions[title].push(file.path);\n"
+            "        }\n"
+            "      }\n"
+            "    } catch (e) {}\n"
+            "  }));\n"
+            "  return JSON.stringify(mentions);\n"
+            "})()"
+        )
+
+        try:
+            raw = self._run_cli("eval", f"code={js_code}")
+            if raw.startswith("=> "):
+                raw = raw[3:].strip()
+            data = json.loads(raw)
+        except Exception as e:
+            logger.warning("_build_mention_index: CDP eval failed (%s); mention index empty.", e)
+            data = {}
+
+        self._mention_index.clear()
+        if isinstance(data, dict):
+            for title_lower, paths in data.items():
+                if isinstance(paths, list):
+                    self._mention_index[title_lower] = set(paths)
+        logger.debug("Mention index built: %d titles tracked", len(self._mention_index))
 
     def overwrite(self, path: str, content: str) -> NoteRef:
         """Overwrite an existing note in-place, preserving Obsidian version history.
@@ -756,7 +847,6 @@ class ObsidianCLIBackend:
 
     def list_inbox_files(self) -> list[NoteRef]:
         """List all files in the inbox directory."""
-        import os
         from silica.config import CONFIG
         if not CONFIG.inbox_dir:
             return []

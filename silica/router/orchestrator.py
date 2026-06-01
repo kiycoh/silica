@@ -373,7 +373,6 @@ class InjectorFSM(BaseFSM[InjectorState]):
     ) -> None:
         """Shadow: record FSM progress in ProgressLedger; never affects FSM control flow."""
         try:
-            from silica.planner.progress import TaskStatus
             if not any(t.id == task_id for t in self.progress.tasks):
                 self.progress.add_task(capability_name, task_id=task_id)
             if status == "done":
@@ -1892,16 +1891,30 @@ class InjectorFSM(BaseFSM[InjectorState]):
 
             neighbourhood: list[str] = []
             seen_norm: set[str] = set()
-            for title in new_titles:
-                try:
-                    for hit in DRIVER.search_context(title):
-                        p = hit.ref.path or hit.ref.name
-                        norm = os.path.abspath(p)
-                        if norm not in seen_norm and norm not in touched_paths_abs:
-                            seen_norm.add(norm)
-                            neighbourhood.append(p)
-                except Exception as _se:
-                    logger.debug("BACKLINK: search_context for '%s': %s", title, _se)
+
+            # Use the O(1) inverted text index if available; fall back to search_context.
+            if hasattr(DRIVER, "mentions_of"):
+                for title in new_titles:
+                    try:
+                        for path in DRIVER.mentions_of(title):
+                            norm = os.path.abspath(path)
+                            if norm not in seen_norm and norm not in touched_paths_abs:
+                                seen_norm.add(norm)
+                                neighbourhood.append(path)
+                    except Exception as _me:
+                        logger.debug("BACKLINK: mentions_of for '%s' failed: %s", title, _me)
+            else:
+                for title in new_titles:
+                    try:
+                        for hit in DRIVER.search_context(title):
+                            p = hit.ref.path or hit.ref.name
+                            norm = os.path.abspath(p)
+                            if norm not in seen_norm and norm not in touched_paths_abs:
+                                seen_norm.add(norm)
+                                neighbourhood.append(p)
+                    except Exception as _se:
+                        logger.debug("BACKLINK: search_context for '%s': %s", title, _se)
+
 
             if not neighbourhood:
                 self._progress_note(self._chunk_task_id("backlink"), "backlink", "done")
@@ -1921,7 +1934,6 @@ class InjectorFSM(BaseFSM[InjectorState]):
             added_map = backlink_pass(new_titles, title_index=title_index, neighbourhood=neighbourhood)
 
             if added_map and self._txn is not None:
-                from silica.driver.base import NoteRef
                 from silica.kernel.ops import InverseOp, InverseOpKind
                 existing_snapshot_paths = {d["path"] for d in self._chunk_ctx.get("snapshot_domain", [])}
                 for path_modified in added_map:

@@ -246,6 +246,7 @@ def test_cli_graph_reads_resolved_links(tmp_path):
         "Concepts/Beta.md": ref_b,
     }
     backend._unresolved_links = set()
+    backend._mention_index = {}
 
     # Mock the CLI eval to return metadataCache-shaped JSON
     fake_metadata = {

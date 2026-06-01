@@ -559,16 +559,39 @@ class RefinerFSM(BaseFSM[RefinerState]):
             }
             neighbourhood: list[str] = []
             seen_norm: set[str] = set()
-            for title in new_titles:
+
+            if hasattr(DRIVER, "mentions_of"):
                 try:
-                    for hit in DRIVER.search_context(title):
-                        p = hit.ref.path or hit.ref.name
-                        norm = os.path.abspath(p)
-                        if norm not in seen_norm and norm not in touched_paths_abs:
-                            seen_norm.add(norm)
-                            neighbourhood.append(p)
-                except Exception as _se:
-                    logger.debug("BACKLINK: search_context for '%s': %s", title, _se)
+                    for title in new_titles:
+                        for path in DRIVER.mentions_of(title):
+                            norm = os.path.abspath(path)
+                            if norm not in seen_norm and norm not in touched_paths_abs:
+                                seen_norm.add(norm)
+                                neighbourhood.append(path)
+                except Exception as _me:
+                    logger.debug("BACKLINK: mentions_of failed, falling back to search_context: %s", _me)
+                    for title in new_titles:
+                        try:
+                            for hit in DRIVER.search_context(title):
+                                p = hit.ref.path or hit.ref.name
+                                norm = os.path.abspath(p)
+                                if norm not in seen_norm and norm not in touched_paths_abs:
+                                    seen_norm.add(norm)
+                                    neighbourhood.append(p)
+                        except Exception as _se:
+                            logger.debug("BACKLINK: search_context for '%s': %s", title, _se)
+            else:
+                for title in new_titles:
+                    try:
+                        for hit in DRIVER.search_context(title):
+                            p = hit.ref.path or hit.ref.name
+                            norm = os.path.abspath(p)
+                            if norm not in seen_norm and norm not in touched_paths_abs:
+                                seen_norm.add(norm)
+                                neighbourhood.append(p)
+                    except Exception as _se:
+                        logger.debug("BACKLINK: search_context for '%s': %s", title, _se)
+
 
             if neighbourhood:
                 all_refs = DRIVER.list_files()

@@ -26,7 +26,6 @@ from silica.driver.base import (
     Link,
     NoteContent,
     NoteRef,
-    SettleTimeout,
     Txn,
 )
 from silica.kernel import frontmatter as fm
@@ -47,6 +46,7 @@ class ObsidianFSBackend:
         self._links: dict[str, set[str]] = {}         # source_path -> set(target_name)
         self._graph = nx.DiGraph()
         self._unresolved_links: set[tuple[str, str]] = set() # (source_path, raw_target)
+        self._mention_index: dict[str, set[str]] = {}        # title_lower -> set(path)
         self._needs_reindex: bool = True
         self._dirty_paths: set[str] = set()           # paths patched since last full rebuild
 
@@ -146,6 +146,7 @@ class ObsidianFSBackend:
         self._links.clear()
         self._graph.clear()
         self._unresolved_links.clear()
+        self._mention_index.clear()
 
         from silica.config import CONFIG
         inbox_norm = os.path.normcase(CONFIG.inbox_dir.replace("\\", "/").strip("/")) if CONFIG.inbox_dir else None
@@ -196,7 +197,7 @@ class ObsidianFSBackend:
                 
                 files_to_process.append((rel_path_file, path))
 
-        # Pass 2: Parse and resolve links
+        # Pass 2: Parse and resolve links + build mention index
         for rel_path_file, path in files_to_process:
             try:
                 content = path.read_text(encoding="utf-8")
@@ -208,6 +209,12 @@ class ObsidianFSBackend:
                         self._graph.add_edge(rel_path_file, ref.path)
                     else:
                         self._unresolved_links.add((rel_path_file, target))
+                
+                # Mention index
+                content_lower = content.lower()
+                for title_lower in self._notes_by_name:
+                    if len(title_lower) >= 2 and title_lower in content_lower:
+                        self._mention_index.setdefault(title_lower, set()).add(rel_path_file)
             except Exception as e:
                 logger.warning("Failed to index %s: %s", rel_path_file, e)
 
@@ -225,6 +232,8 @@ class ObsidianFSBackend:
         if rel_path in self._graph:
             self._graph.remove_edges_from(list(self._graph.out_edges(rel_path)))
         self._unresolved_links = {(s, t) for s, t in self._unresolved_links if s != rel_path}
+        for paths_set in self._mention_index.values():
+            paths_set.discard(rel_path)
 
         if content is None:
             # deletion path
@@ -260,6 +269,12 @@ class ObsidianFSBackend:
                 self._graph.add_edge(rel_path, target_ref.path)
             else:
                 self._unresolved_links.add((rel_path, target))
+
+        # --- rebuild mention index for this path ---
+        content_lower = content.lower()
+        for title_lower in self._notes_by_name:
+            if len(title_lower) >= 2 and title_lower in content_lower:
+                self._mention_index.setdefault(title_lower, set()).add(rel_path)
 
         self._dirty_paths.add(rel_path)
 
@@ -308,6 +323,14 @@ class ObsidianFSBackend:
             if query in ref.name.lower():
                 results.append(ref)
         return results
+
+    def mentions_of(self, title: str) -> list[str]:
+        """Return vault-relative paths of notes whose body mentions `title`.
+        
+        O(1) lookup into the inverted text index built during indexing.
+        """
+        self._ensure_index()
+        return list(self._mention_index.get(title.lower(), set()))
 
     def search_context(self, query: str) -> list[Hit]:
         """Search vault content with line-level context snippets."""
