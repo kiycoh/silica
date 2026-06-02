@@ -576,3 +576,44 @@ class TestT8Help:
         assert "/embed" in combined
         assert "/graph" in combined
         assert "/find" in combined
+
+
+def test_next_uncommitted_chunk_idx_skips_committed_files():
+    """_next_uncommitted_chunk_idx must skip chunks from committed files."""
+    from silica.router.orchestrator import InjectorFSM
+
+    fsm = InjectorFSM(inbox_files=["Inbox/committed.md", "Inbox/new.md"], target_dir="Concepts")
+    fsm._chunks = [
+        {"source_file": "Inbox/committed.md", "batches": []},
+        {"source_file": "Inbox/new.md", "batches": [{"concepts": [{"title": "T"}]}]},
+    ]
+    fsm._chunk_flat_to_fi_ci = {0: (0, 0), 1: (1, 0)}
+    fsm._committed_file_indices = {0}  # file 0 is committed
+
+    # From start=1, should return 1 (fi=1, not committed)
+    assert fsm._next_uncommitted_chunk_idx(1) == 1
+
+    # From start=0, chunk 0 is fi=0 (committed) → skip to chunk 1 (fi=1) → returns 1
+    assert fsm._next_uncommitted_chunk_idx(0) == 1
+
+    # With both committed, should return len(chunks) = 2 (exhausted)
+    fsm._committed_file_indices = {0, 1}
+    assert fsm._next_uncommitted_chunk_idx(0) == 2
+
+
+def test_current_source_file_returns_per_chunk_file():
+    """_current_source_file must return the file for the currently-processed chunk."""
+    from silica.router.orchestrator import InjectorFSM
+
+    fsm = InjectorFSM(inbox_files=["Inbox/a.md", "Inbox/b.md"], target_dir="Concepts")
+    fsm._file_chunks = [
+        {"source_file": "Inbox/a.md", "chunks": [{}]},
+        {"source_file": "Inbox/b.md", "chunks": [{}]},
+    ]
+    fsm._chunk_flat_to_fi_ci = {0: (0, 0), 1: (1, 0)}
+
+    fsm._current_chunk_idx = 0
+    assert fsm._current_source_file == "Inbox/a.md"
+
+    fsm._current_chunk_idx = 1
+    assert fsm._current_source_file == "Inbox/b.md"

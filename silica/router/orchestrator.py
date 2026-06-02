@@ -184,6 +184,7 @@ class InjectorFSM(BaseFSM[InjectorState]):
         # Per-file content info — populated by run() before _run_loop starts
         self._file_canonicals: list[str] = []
         self._file_content_hashes: list[str] = []
+        self._committed_file_indices: set[int] = set()  # indices of already-committed files
 
         # Iterative chunk processing state fields
         self._chunks: list[dict] = []
@@ -431,6 +432,12 @@ class InjectorFSM(BaseFSM[InjectorState]):
             if not ledger.is_committed(canonical, content_hash=content_hash):
                 all_committed = False
 
+        # Build set of already-committed file indices so chunk-advance logic can skip them
+        self._committed_file_indices = {
+            i for i, (canonical, h) in enumerate(zip(self._file_canonicals, self._file_content_hashes))
+            if ledger.is_committed(canonical, content_hash=h)
+        }
+
         # Compat keys for first file (used by single-file code paths and RECON)
         self.context["source_canonical"] = self._file_canonicals[0] if self._file_canonicals else ""
         self.context["source_content_hash"] = self._file_content_hashes[0] if self._file_content_hashes else ""
@@ -475,8 +482,9 @@ class InjectorFSM(BaseFSM[InjectorState]):
         self._txn = None
         self._pre_graph = None
         self._get_chunks_from_context_if_empty()
-        if self._current_chunk_idx + 1 < len(self._chunks):
-            self._current_chunk_idx += 1
+        next_idx = self._next_uncommitted_chunk_idx(self._current_chunk_idx + 1)
+        if next_idx < len(self._chunks):
+            self._current_chunk_idx = next_idx
             logger.info(f"✔ Batch completed successfully. Advancing to batch {self._current_chunk_idx + 1}")
             # Restart per-chunk loop from COLLISION (Phase 5) if present, else DELEGATE
             has_collision = any(
@@ -1020,7 +1028,7 @@ class InjectorFSM(BaseFSM[InjectorState]):
                     ]
                     get_deferred_store().put(
                         content_hash=content_hash,
-                        source_path=self.inbox_file,
+                        source_path=self._current_source_file,
                         target_dir=self.target_dir,
                         hub=self.hub,
                         rejected_ops=deferred_op_dicts,
@@ -1280,7 +1288,7 @@ class InjectorFSM(BaseFSM[InjectorState]):
                 }
                 get_deferred_store().put(
                     content_hash=content_hash,
-                    source_path=self.inbox_file,
+                    source_path=self._current_source_file,
                     target_dir=self.target_dir,
                     hub=self.hub,
                     rejected_ops=deferred_ops,
@@ -1515,7 +1523,7 @@ class InjectorFSM(BaseFSM[InjectorState]):
                         _existing = _dstore.get(content_hash)
                         _dstore.put(
                             content_hash=content_hash,
-                            source_path=self.inbox_file,
+                            source_path=self._current_source_file,
                             target_dir=self.target_dir,
                             hub=self.hub,
                             rejected_ops=list((_existing or {}).get("rejected_ops", [])) + _deferred,
@@ -2200,10 +2208,11 @@ class InjectorFSM(BaseFSM[InjectorState]):
         # Record that at least one chunk failed (used by cleanup to set "partial")
         self.context["has_partial_failure"] = True
 
-        # Advance to next chunk, or conclude the run as partial
+        # Advance to next uncommitted chunk, or conclude the run as partial
         self._get_chunks_from_context_if_empty()
-        if self._current_chunk_idx + 1 < len(self._chunks):
-            self._current_chunk_idx += 1
+        next_idx = self._next_uncommitted_chunk_idx(self._current_chunk_idx + 1)
+        if next_idx < len(self._chunks):
+            self._current_chunk_idx = next_idx
             logger.info(
                 "Chunk f%d_c%d failed — advancing to chunk %d of %d.",
                 fi, ci, self._current_chunk_idx + 1, len(self._chunks),
@@ -2215,10 +2224,30 @@ class InjectorFSM(BaseFSM[InjectorState]):
             self.state = InjectorState.COLLISION if has_collision else InjectorState.DELEGATE
         else:
             logger.info(
-                "Chunk f%d_c%d failed (last chunk). Run concludes with partial success.", fi, ci
+                "Chunk f%d_c%d failed (last uncommitted chunk). Run concludes with partial success.", fi, ci
             )
             self.context["final_status"] = "partial"
             self.state = InjectorState.DONE
+
+    def _next_uncommitted_chunk_idx(self, start: int) -> int:
+        """Return the first chunk index >= start whose file is not already committed."""
+        idx = start
+        committed = getattr(self, "_committed_file_indices", set())
+        while idx < len(self._chunks):
+            fi, _ = self._chunk_flat_to_fi_ci.get(idx, (0, 0))
+            if fi not in committed:
+                return idx
+            logger.info("Skipping already-committed file %d chunk %d", fi, idx)
+            idx += 1
+        return idx
+
+    @property
+    def _current_source_file(self) -> str:
+        """Vault-relative path of the inbox file for the current chunk."""
+        fi, _ = self._chunk_flat_to_fi_ci.get(self._current_chunk_idx, (0, 0))
+        if self._file_chunks and fi < len(self._file_chunks):
+            return self._file_chunks[fi]["source_file"]
+        return self.inbox_file
 
     # ------------------------------------------------------------------
     # Ledger helpers (C5)
