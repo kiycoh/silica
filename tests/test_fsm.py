@@ -1019,3 +1019,21 @@ def test_hub_inverse_appears_in_chunk_ctx_snapshot(tmp_path):
     assert "snapshot" not in fsm.context or "inverses" not in fsm.context.get("snapshot", {}), \
         "Hub inverse was written to stale context['snapshot'] instead of _chunk_ctx['snapshot']"
 
+
+def test_refiner_default_recipe_includes_backlink():
+    """RefinerFSM default recipe must include a 'backlink' phase after 'write' and before 'lint'."""
+    from silica.router.refiner_fsm import RefinerFSM
+    from unittest.mock import patch
+
+    with patch("silica.router.refiner_fsm.DRIVER"):
+        fsm = RefinerFSM(folder="Concepts")
+
+    phase_ids = [p["id"] for p in fsm._recipe.get("phases", [])]
+    assert "backlink" in phase_ids, (
+        f"'backlink' phase missing from RefinerFSM default recipe. Got: {phase_ids}"
+    )
+    assert phase_ids.index("backlink") > phase_ids.index("write"), \
+        "'backlink' must appear after 'write'"
+    assert phase_ids.index("backlink") < phase_ids.index("lint"), \
+        "'backlink' must appear before 'lint'"
+

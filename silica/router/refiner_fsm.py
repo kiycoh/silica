@@ -82,6 +82,7 @@ class RefinerFSM(BaseFSM[RefinerState]):
                     { "id": "validate",   "kind": "gate",       "tool": "silica_validate_ops", "abort_code": 2 },
                     { "id": "snapshot",   "kind": "txn",        "tool": "silica_snapshot" },
                     { "id": "write",      "kind": "mechanical", "tool": "silica_bulk_write" },
+                    { "id": "backlink",   "kind": "mechanical", "best_effort": True },
                     { "id": "lint",       "kind": "gate",       "tool": "silica_lint" },
                     { "id": "cleanup",    "kind": "mechanical", "tool": "silica_cleanup", "on_success_only": True },
                     { "id": "rollback",   "kind": "txn",        "tool": "silica_restore", "on_gate_fail": True }
