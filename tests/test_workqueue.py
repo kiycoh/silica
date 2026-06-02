@@ -1,4 +1,5 @@
 """Tests for the WorkQueue + per-path lease (silica/planner/workqueue.py)."""
+import json
 import threading
 import time
 
@@ -103,7 +104,6 @@ def test_lease_key_normalises_md_and_case():
 
 def test_persist_is_atomic_under_concurrent_enqueue(tmp_path):
     """Two threads racing on enqueue must not produce a stale workqueue.json."""
-    import json
     wq = WorkQueue(run_dir=tmp_path)
     barrier = threading.Barrier(2)
 

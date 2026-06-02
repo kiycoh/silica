@@ -1,4 +1,7 @@
 """Tests for the WarningLedger (silica/planner/warnings.py)."""
+import json
+import threading
+
 from silica.planner.warnings import WarningLedger
 
 
@@ -33,8 +36,6 @@ def test_persistence(tmp_path):
 
 def test_persist_is_atomic_under_concurrent_add(tmp_path):
     """Concurrent add() calls must not lose entries from warnings.json."""
-    import json
-    import threading
     ledger = WarningLedger(run_dir=tmp_path)
     barrier = threading.Barrier(2)
 
