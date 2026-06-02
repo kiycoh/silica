@@ -9,6 +9,8 @@ from rich.spinner import Spinner
 from rich.text import Text
 from rich.markup import escape
 from rich.console import Group
+from rich.panel import Panel
+from rich.progress import Progress, SpinnerColumn, BarColumn, MofNCompleteColumn, TimeElapsedColumn
 from silica.agent.events import (
     ToolStartEvent,
     ToolCompleteEvent,
@@ -18,6 +20,7 @@ from silica.agent.events import (
     ThinkingStartEvent,
     ThinkingEndEvent,
     LLMStreamEvent,
+    BatchRunStartEvent,
 )
 from silica.config import CONFIG
 from silica.ui.console import CONSOLE
@@ -41,6 +44,19 @@ def emit_pipeline_phase(phase: str, status: str, elapsed: float | None = None) -
             _pipeline_phase_hook(phase, status, elapsed)
         except Exception:
             pass
+
+
+_batch_run_hook: Callable[[RenderEvent], None] | None = None
+
+
+def emit_batch_event(event: RenderEvent) -> None:
+    """Called from cli.py to signal a batch run start. No-op if renderer not registered."""
+    if _batch_run_hook is not None:
+        try:
+            _batch_run_hook(event)
+        except Exception:
+            pass
+
 
 _MAX_RESULT_CHARS = 600
 _MAX_RESULT_LINES = 12
@@ -223,6 +239,15 @@ class _ProgressRenderer:
         self._injector_desc: str = ""
         self._pipeline_phases: list[dict] = []   # ordered: {phase, status, elapsed}
         self._phase_start_times: dict[str, float] = {}
+        # Inject progress bar
+        self._inject_inbox_label: str = ""
+        self._inject_progress: Progress | None = None
+        self._inject_task_id = None
+        # Batch run progress (refine/enrich)
+        self._batch: dict | None = None
+        # Register as batch hook so emit_batch_event reaches this renderer
+        global _batch_run_hook
+        _batch_run_hook = self.__call__
 
     def _start_spinner(self) -> None:
         if self._live is not None:
@@ -239,6 +264,8 @@ class _ProgressRenderer:
         self._live.start()
 
     def _stop_spinner(self) -> None:
+        if self._batch is not None:
+            return  # Batch Live is managed by _update_batch_panel / _finalize_batch
         if self._live is not None:
             self._live.stop()
             self._live = None
@@ -265,9 +292,13 @@ class _ProgressRenderer:
                     break
             else:
                 self._pipeline_phases.append({"phase": label, "status": status, "elapsed": dur})
+            if self._inject_progress is not None and self._inject_task_id is not None:
+                self._inject_progress.update(self._inject_task_id, advance=1)
         self._update_live()
 
     def _update_live(self) -> None:
+        if self._batch is not None:
+            return  # Batch panel managed by _update_batch_panel
         mode = CONFIG.tool_progress
         if mode == "off" or not CONSOLE.is_terminal:
             return
@@ -283,8 +314,8 @@ class _ProgressRenderer:
             args = tinfo["args"]
             desc = _synthetic_tool_desc(name, args)
 
-            if name == "silica_run_injector" and self._pipeline_phases:
-                # Injector: show a nested subprocess panel
+            if name == "silica_run_injector" and (self._pipeline_phases or self._inject_progress is not None):
+                # Injector: panel with progress bar and phase list
                 phase_lines: list[str] = []
                 for entry in self._pipeline_phases:
                     p_label = entry["phase"]
@@ -293,16 +324,21 @@ class _ProgressRenderer:
                     if p_status == "running":
                         phase_lines.append(f"    [dim]⠿[/] [cyan]{p_label}[/]…")
                     elif p_status == "done":
-                        dur_str = f"[dim]{p_elapsed:.2f}s[/]" if p_elapsed is not None else ""
-                        phase_lines.append(f"    [tool.ok]✓[/] [dim]{p_label}[/] {dur_str}")
+                        dur_str = f"  [dim]{p_elapsed:.1f}s[/]" if p_elapsed is not None else ""
+                        phase_lines.append(f"    [tool.ok]✓[/] [dim]{p_label}[/]{dur_str}")
                     elif p_status == "failed":
                         phase_lines.append(f"    [tool.err]✗[/] [dim red]{p_label}[/]")
-                header = Spinner("dots", text=f"  [cyan]Running[/] {desc}…", style="cyan")
-                phases_text = Text.from_markup("\n".join(phase_lines)) if phase_lines else None
-                if phases_text:
-                    renderables.append(Group(header, phases_text))
-                else:
-                    renderables.append(header)
+                running = next((e for e in self._pipeline_phases if e["status"] == "running"), None)
+                phase_name = running["phase"] if running else "…"
+                spinner_line = Spinner("dots", text=f"  [dim]⠿[/] [cyan]{escape(phase_name)}[/]…", style="dim")
+                title = f"[bold]injector[/] [dim]·[/] {escape(self._inject_inbox_label)}"
+                parts: list = [spinner_line]
+                if self._inject_progress is not None:
+                    parts.append(self._inject_progress)
+                if phase_lines:
+                    parts.append(Text(""))
+                    parts.append(Text.from_markup("\n".join(phase_lines)))
+                renderables.append(Panel(Group(*parts), title=title, border_style="dim cyan"))
             else:
                 tool_spinner = Spinner("dots", text=f"  [cyan]Running[/] {desc}…", style="cyan")
                 renderables.append(tool_spinner)
@@ -317,6 +353,56 @@ class _ProgressRenderer:
                 transient=True,
             )
             self._live.start()
+
+    def _update_batch_panel(self) -> None:
+        if self._batch is None or not CONSOLE.is_terminal:
+            return
+        batch = self._batch
+        batch["progress_obj"].update(batch["task_id"], completed=batch["done"])
+        cur = batch["current_label"]
+        cur_str = f"  [dim]({escape(cur)})[/]" if cur else ""
+        spinner_line = Spinner(
+            "dots",
+            text=f"  [dim]⠿[/] Batch {batch['done']}/{batch['total']}{cur_str}",
+            style="dim",
+        )
+        title = f"[bold]{escape(batch['kind'])}[/] [dim]·[/] {escape(batch['label'])}"
+        panel = Panel(
+            Group(spinner_line, batch["progress_obj"]),
+            title=title,
+            border_style="dim cyan",
+        )
+        if self._live is None:
+            self._live = Live(panel, console=CONSOLE, refresh_per_second=12, transient=True)
+            self._live.start()
+        else:
+            self._live.update(panel)
+
+    def _finalize_batch(self) -> None:
+        batch = self._batch
+        if batch is None:
+            return
+        self._batch = None
+        batch["progress_obj"].stop()
+        if self._live is not None:
+            self._live.stop()
+            self._live = None
+        kind = escape(batch["kind"])
+        label = escape(batch["label"])
+        done = batch["done"]
+        total = batch["total"]
+        failed = batch["failed"]
+        elapsed = f"{time.monotonic() - batch['start_time']:.1f}s"
+        if failed > 0:
+            CONSOLE.print(
+                f"  [tool.err]✗[/] [bold]{kind}[/] [dim]·[/] {label}"
+                f"   {done}/{total} batches [dim]·[/] {failed} failed [dim]·[/] {elapsed}"
+            )
+        else:
+            CONSOLE.print(
+                f"  [tool.ok]✓[/] [bold]{kind}[/] [dim]·[/] {label}"
+                f"   {done}/{total} batches [dim]·[/] {elapsed}"
+            )
 
     def __call__(self, event: RenderEvent) -> None:
         try:
@@ -357,6 +443,11 @@ class _ProgressRenderer:
             return
 
         if isinstance(event, ToolErrorEvent):
+            if self._batch is not None:
+                if event.name in ("silica_refine_batch", "silica_enrich_batch"):
+                    self._batch["failed"] += 1
+                CONSOLE.print(f"  [tool.err]✗[/] {escape(event.name)}  {escape(event.error[:80])}")
+                return
             self._stop_spinner()
             CONSOLE.print(f"  [tool.err]✗[/] [bold]{escape(event.name)}[/]: [tool.err]{escape(event.error)}[/]")
             self._active_tools.pop(event.call_id, None)
@@ -366,15 +457,59 @@ class _ProgressRenderer:
         if mode == "off":
             return
 
+        if isinstance(event, BatchRunStartEvent):
+            if not CONSOLE.is_terminal:
+                return
+            self._stop_spinner()
+            progress_obj = Progress(
+                SpinnerColumn(),
+                BarColumn(),
+                MofNCompleteColumn(),
+                TimeElapsedColumn(),
+                auto_refresh=False,
+            )
+            task_id = progress_obj.add_task("", total=event.total)
+            progress_obj.start()
+            self._batch = {
+                "run_id": event.run_id,
+                "kind": event.kind,
+                "label": event.label,
+                "total": event.total,
+                "done": 0,
+                "failed": 0,
+                "start_time": time.monotonic(),
+                "progress_obj": progress_obj,
+                "task_id": task_id,
+                "current_label": "",
+            }
+            self._update_batch_panel()
+            return
+
         if isinstance(event, ToolStartEvent):
+            if self._batch is not None:
+                return  # All tool spinners suppressed during batch run
             if CONSOLE.is_terminal:
                 self._active_tools[event.call_id] = {"name": event.name, "args": event.args}
                 if event.name == "silica_run_injector":
                     self._injector_call_id = event.call_id
+                    inbox_file = event.args.get("inbox_file", "")
+                    if not inbox_file:
+                        files = event.args.get("inbox_files", [])
+                        inbox_file = files[0] if isinstance(files, list) and files else "?"
+                    self._inject_inbox_label = str(inbox_file)
                     self._injector_desc = _synthetic_tool_desc(event.name, event.args)
                     self._pipeline_phases = []
                     self._phase_start_times = {}
                     _set_pipeline_hook(self._on_pipeline_phase)
+                    self._inject_progress = Progress(
+                        SpinnerColumn(),
+                        BarColumn(),
+                        MofNCompleteColumn(),
+                        TimeElapsedColumn(),
+                        auto_refresh=False,
+                    )
+                    self._inject_task_id = self._inject_progress.add_task("", total=len(_PHASE_LABELS))
+                    self._inject_progress.start()
                 self._update_live()
             else:
                 # Non-interactive fallback: print immediately
@@ -390,26 +525,59 @@ class _ProgressRenderer:
                     CONSOLE.print(f"  [cyan]→[/] {desc}")
 
         elif isinstance(event, ToolCompleteEvent):
+            # Batch: track ledger_next completions to advance progress
+            if self._batch is not None and event.name == "silica_ledger_next":
+                try:
+                    result_data = json.loads(event.result)
+                except Exception:
+                    result_data = {}
+                if result_data.get("done"):
+                    self._finalize_batch()
+                else:
+                    payload = result_data.get("payload", {})
+                    note_paths = payload.get("note_paths", [])
+                    if isinstance(note_paths, list) and note_paths:
+                        name0 = note_paths[0].rsplit("/", 1)[-1]
+                        extra = f" +{len(note_paths) - 1}" if len(note_paths) > 1 else ""
+                        self._batch["current_label"] = f"{name0}{extra}"
+                    self._batch["done"] = min(self._batch["done"] + 1, self._batch["total"])
+                    self._update_batch_panel()
+                return
+            # Suppress all other tool completions during batch
+            if self._batch is not None:
+                return
+
             dur = f"{event.duration_s:.3f}s"
             if CONSOLE.is_terminal:
                 self._stop_spinner()
                 desc = _synthetic_tool_desc(event.name, event.args)
 
                 if event.name == "silica_run_injector" and self._injector_call_id == event.call_id:
-                    # Deregister pipeline hook and print a compact subprocess summary
+                    # Deregister pipeline hook; print compact single-line summary
                     _set_pipeline_hook(None)
                     self._injector_call_id = None
-                    CONSOLE.print(f"  [tool.ok]✓[/] {desc} [dim]({dur})[/]")
-                    for entry in self._pipeline_phases:
-                        p_label = entry["phase"]
-                        p_elapsed = entry["elapsed"]
-                        p_status = entry["status"]
-                        if p_status == "done":
-                            dur_str = f"[dim]{p_elapsed:.2f}s[/]" if p_elapsed is not None else ""
-                            CONSOLE.print(f"    [tool.ok]✓[/] [dim]{p_label}[/] {dur_str}")
-                        elif p_status == "failed":
-                            CONSOLE.print(f"    [tool.err]✗[/] [dim red]{p_label}[/]")
+                    if self._inject_progress is not None:
+                        self._inject_progress.stop()
+                        self._inject_progress = None
+                        self._inject_task_id = None
+                    done_phases = [e for e in self._pipeline_phases if e["status"] == "done"]
+                    failed_phases = [e for e in self._pipeline_phases if e["status"] == "failed"]
+                    total_count = len(self._pipeline_phases)
+                    lbl = escape(self._inject_inbox_label)
+                    inject_dur = f"{event.duration_s:.1f}s"
+                    if failed_phases:
+                        last_phase = self._pipeline_phases[-1]["phase"] if self._pipeline_phases else "?"
+                        CONSOLE.print(
+                            f"  [tool.err]✗[/] [bold]injector[/] [dim]·[/] {lbl}"
+                            f"   {last_phase} [dim]·[/] {inject_dur}"
+                        )
+                    else:
+                        CONSOLE.print(
+                            f"  [tool.ok]✓[/] [bold]injector[/] [dim]·[/] {lbl}"
+                            f"   {len(done_phases)}/{total_count} phases [dim]·[/] {inject_dur}"
+                        )
                     self._pipeline_phases = []
+                    self._inject_inbox_label = ""
                 else:
                     CONSOLE.print(f"  [tool.ok]✓[/] {desc} [dim]({dur})[/]")
                     if mode == "verbose":
@@ -440,12 +608,29 @@ class _ProgressRenderer:
 
 
     def close(self) -> None:
-        """Unconditionally stop the live display and deregister the pipeline hook.
+        """Unconditionally stop the live display and deregister all hooks.
 
         Called on KeyboardInterrupt / uncaught exceptions so the terminal is
         always restored before the next prompt is printed.
         """
+        global _batch_run_hook
+        _batch_run_hook = None
         _set_pipeline_hook(None)
+        if self._batch is not None:
+            batch = self._batch
+            self._batch = None
+            batch["progress_obj"].stop()
+            if self._live is not None:
+                self._live.stop()
+                self._live = None
+            CONSOLE.print(
+                f"  [bold yellow]⚠[/]  {escape(batch['kind'])} [dim]·[/] {escape(batch['label'])}"
+                f"   interrupted at {batch['done']}/{batch['total']}"
+            )
+        if self._inject_progress is not None:
+            self._inject_progress.stop()
+            self._inject_progress = None
+            self._inject_task_id = None
         self._stop_spinner()
 
 

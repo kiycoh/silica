@@ -371,6 +371,10 @@ def _expand_workflow_shortcut(user_input: str) -> str | None:
 
         progress.save()
 
+        from silica.agent.progress import emit_batch_event
+        from silica.agent.events import BatchRunStartEvent
+        emit_batch_event(BatchRunStartEvent(run_id=run_id, kind=cmd.strip("/"), label=folder or "vault", total=len(chunks)))
+
         tl = TaskLedger.new(
             run_id=run_id,
             user_request=f"{cmd.strip('/')} {folder or 'vault'}",

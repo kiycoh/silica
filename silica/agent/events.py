@@ -46,7 +46,14 @@ class LLMStreamEvent:
     content: str
     iteration: int
 
-RenderEvent = ToolProgressEvent | ReasoningEvent | ThinkingStartEvent | ThinkingEndEvent | LLMStreamEvent
+@dataclass(slots=True)
+class BatchRunStartEvent:
+    run_id: str
+    kind: str    # "refine" | "enrich"
+    label: str   # display label, e.g. "Concepts/ML"
+    total: int   # total number of batches
+
+RenderEvent = ToolProgressEvent | ReasoningEvent | ThinkingStartEvent | ThinkingEndEvent | LLMStreamEvent | BatchRunStartEvent
 
 
 # --- work-queue events (published on silica.agent.bus.BUS) -------------------
