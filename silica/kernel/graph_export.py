@@ -13,8 +13,9 @@ from __future__ import annotations
 
 import json
 import logging
-import urllib.request
 from pathlib import Path
+
+import httpx
 
 logger = logging.getLogger(__name__)
 
@@ -23,8 +24,7 @@ _VIS_CSS_URL = "https://cdn.jsdelivr.net/npm/vis-network@9.1.6/styles/vis-networ
 
 
 def _fetch(url: str) -> str:
-    with urllib.request.urlopen(url, timeout=30) as resp:  # noqa: S310
-        return resp.read().decode("utf-8")
+    return httpx.get(url, timeout=30).raise_for_status().text
 
 
 def _fetch_vis_assets() -> tuple[str, str]:
