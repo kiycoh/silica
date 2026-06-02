@@ -18,6 +18,7 @@ proposes; the leash disposes.
 """
 from __future__ import annotations
 
+import os
 import re
 from dataclasses import dataclass, field
 from typing import Callable
@@ -101,10 +102,14 @@ class Leash:
     context_budget_chars: int = 8000
 
     def allows_path(self, path: str | None) -> bool:
-        key = _norm_path(path)
-        if not key:
+        norm = _norm_path(path)
+        if not norm:
             return False
-        if key in {_norm_path(p) for p in self.forbidden_paths}:
+        # forbidden_paths may be bare names or full vault-relative paths;
+        # match on full norm OR basename so bare names work correctly.
+        norm_base = _norm_path(os.path.basename(path or ""))
+        forbidden_norms = {_norm_path(p) for p in self.forbidden_paths}
+        if norm in forbidden_norms or norm_base in forbidden_norms:
             return False
         return bool(self.target_predicate(path or ""))
 

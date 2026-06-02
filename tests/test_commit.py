@@ -52,3 +52,28 @@ def test_commit_no_ops_when_all_skip():
     skip = Op(op=OpType.skip, heading="C", source_basename="i.md", reason="noop")
     res = commit_ops([skip], target_dir="X")
     assert res["status"] == "no_ops"
+
+
+def test_delete_op_path_is_leased():
+    """A delete op must acquire a path lease so concurrent writes are serialized."""
+    from contextlib import contextmanager
+
+    leased_paths = []
+
+    @contextmanager
+    def fake_path_lease(path):
+        leased_paths.append(path)
+        yield
+
+    with patch("silica.planner.workqueue.path_lease", side_effect=fake_path_lease), \
+         patch("silica.tools.composed.silica_validate_ops",
+               return_value={"validated_count": 1, "status": "ok", "rejected_ops": []}), \
+         patch("silica.tools.wrapped.silica_snapshot", return_value={"txn_id": "t1", "inverses": []}), \
+         patch("silica.tools.composed.silica_bulk_write", return_value={"successful": 1, "total": 1, "failed": []}), \
+         patch("silica.tools.composed.silica_lint", return_value={"success": True}):
+        delete_op = Op(op=OpType.delete, heading="Foo", source_basename="inbox.md", path="notes/Foo.md")
+        commit_ops([delete_op], target_dir="notes")
+
+    assert any("Foo" in p for p in leased_paths), (
+        f"Delete op path 'notes/Foo.md' was not leased; leased paths: {leased_paths}"
+    )

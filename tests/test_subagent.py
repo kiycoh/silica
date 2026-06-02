@@ -152,3 +152,31 @@ def test_orphan_no_candidates():
     agent = LeashedSubAgent()
     res = agent.handle(WorkItem(kind="orphan", target_path="X.md", context={"candidates": []}))
     assert res["status"] == "no_candidates"
+
+
+def test_orphan_hub_is_none_when_context_has_no_hub():
+    """When context has no hub key, hub must be None (not basename of target_path)."""
+    import silica.agent.subagent as subagent_module
+    from silica.agent.leash import orphan_leash as real_orphan_leash
+
+    item = WorkItem(
+        kind="orphan",
+        target_path="notes/MyNote.md",
+        context={"candidates": [{"name": "Other", "path": "notes/Other.md"}]},
+        reason="test",
+    )
+
+    captured_hubs = []
+
+    def capture_orphan_leash(target, *, hub):
+        captured_hubs.append(hub)
+        return real_orphan_leash(target, hub=hub)
+
+    agent = LeashedSubAgent()
+    with patch.object(subagent_module, "orphan_leash", side_effect=capture_orphan_leash), \
+         patch("silica.agent.subagent.commit_ops", return_value={"status": "no_ops"}), \
+         patch.object(agent, "_decide_links", return_value=OrphanLinkDecision(links=["Other"], rationale="test")), \
+         patch("silica.driver.DRIVER.read_note", return_value=MagicMock(content="# MyNote\n")):
+        agent.handle(item)
+
+    assert captured_hubs == [None], f"Expected hub=None when context has no 'hub' key, got {captured_hubs}"

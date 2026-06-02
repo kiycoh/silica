@@ -142,3 +142,27 @@ def test_no_info_loss_guard_direct():
             path="N.md", content="[[A]] kept content here")
     assert guard(op, "[[A]] kept content here") is None
     assert "dropped wikilink" in guard(op, "[[A]] [[B]] original longer text here")
+
+
+def test_orphan_leash_blocks_hub_by_bare_name():
+    """Hub protection must work even when hub is a bare name without folder prefix.
+
+    This tests dedup_leash because its target_predicate matches the hub path
+    (both resolve to the same note), so only forbidden_paths can block it.
+    The bare hub name 'Concepts' must match the vault-relative 'notes/Concepts.md'.
+    """
+    # dedup_leash: target IS notes/Concepts.md, hub is bare name 'Concepts'
+    leash = dedup_leash("notes/Concepts.md", hub="Concepts")
+    hub_op = _op(OpType.patch, "notes/Concepts.md", snippet="some addition")
+    kept, rejected = leash.enforce([hub_op], read_note=lambda p: "# Concepts\n")
+    assert len(kept) == 0, "Op targeting hub must be rejected even when hub is a bare name"
+    assert len(rejected) == 1
+
+
+def test_orphan_leash_allows_repair_when_no_hub():
+    """When hub=None, orphan repair must not be blocked."""
+    leash = orphan_leash("notes/Orphan.md", hub=None)
+    patch_op = _op(OpType.patch, "notes/Orphan.md", snippet="[[SomeLink]]")
+    kept, rejected = leash.enforce([patch_op], read_note=lambda p: "# Orphan\n")
+    assert len(kept) == 1
+    assert len(rejected) == 0

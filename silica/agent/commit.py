@@ -73,7 +73,7 @@ def commit_ops(
     touched = [
         (p, op.op.value if op.op else "", op.hub or "")
         for op in load_ops(ops_path)
-        if (p := op.touched_ref()) and op.op not in (OpType.delete, OpType.skip)
+        if (p := op.touched_ref()) and op.op is not OpType.skip
     ]
     lease_paths = sorted({p for p, _, _ in touched})
 
