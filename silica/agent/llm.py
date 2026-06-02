@@ -8,6 +8,7 @@ from __future__ import annotations
 
 import json
 import logging
+import os
 from dataclasses import dataclass, field
 
 # Quiet down Bedrock/SageMaker missing botocore warnings during import
@@ -70,7 +71,7 @@ def call_llm(
     kwargs: dict = {
         "model": model,
         "messages": messages,
-        "max_tokens": max_tokens if max_tokens is not None else 8192,
+        "max_tokens": max_tokens if max_tokens is not None else int(os.getenv("MAX_TOKENS", "8192")),
     }
     if tools:
         kwargs["tools"] = tools
