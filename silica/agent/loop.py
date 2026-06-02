@@ -18,6 +18,7 @@ from __future__ import annotations
 
 from typing import TYPE_CHECKING, Callable, Any
 import concurrent.futures as _cf
+import threading
 import time
 import logging
 import json
@@ -25,6 +26,7 @@ import json
 if TYPE_CHECKING:
     from silica.planner.progress import ProgressLedger
 
+import silica.agent.bus as _bus_mod
 from silica.agent.events import (
     ToolStartEvent,
     ToolCompleteEvent,
@@ -39,6 +41,22 @@ from silica.agent.llm import call_llm
 from silica.tools import TOOLS
 
 logger = logging.getLogger(__name__)
+
+
+def _topic_for(event: RenderEvent) -> str | None:
+    if isinstance(event, ToolStartEvent):
+        return "agent/tool_start"
+    if isinstance(event, ToolCompleteEvent):
+        return "agent/tool_complete"
+    if isinstance(event, ToolErrorEvent):
+        return "agent/tool_error"
+    if isinstance(event, (ThinkingStartEvent, ThinkingEndEvent)):
+        return "agent/thinking"
+    if isinstance(event, ReasoningEvent):
+        return "agent/reasoning"
+    if isinstance(event, LLMStreamEvent):
+        return "agent/stream"
+    return None
 
 
 def _is_tool_failure(result: Any) -> bool:
@@ -69,6 +87,7 @@ def run_agent(
     model: str,
     tool_progress_callback: ToolProgressCallback = None,
     progress: "ProgressLedger | None" = None,
+    cancel_token: "threading.Event | None" = None,
 ) -> str:
     """Execute the agentic loop until the model produces a text response.
 
@@ -95,15 +114,20 @@ def run_agent(
     consecutive_failures: dict[tuple[str, str], int] = {}
 
     def _emit(event: RenderEvent) -> None:
-        """Best-effort event emission — swallows all consumer exceptions."""
-        if tool_progress_callback is None:
-            return
-        try:
-            tool_progress_callback(event)
-        except Exception as exc:
-            logger.debug("tool_progress_callback error (swallowed): %s", exc)
+        """Best-effort event emission to callback and bus."""
+        if tool_progress_callback is not None:
+            try:
+                tool_progress_callback(event)
+            except Exception as exc:
+                logger.debug("tool_progress_callback error (swallowed): %s", exc)
+        topic = _topic_for(event)
+        if topic is not None:
+            _bus_mod.BUS.publish(topic, event)
 
     while iteration < max_iterations:
+        if cancel_token is not None and cancel_token.is_set():
+            logger.info("Agent loop cancelled at iteration %d", iteration)
+            return "(silica: cancelled)"
         iteration += 1
         logger.debug("Agent loop iteration %d", iteration)
 
