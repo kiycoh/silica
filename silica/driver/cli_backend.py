@@ -219,7 +219,11 @@ class ObsidianCLIBackend:
     def _ref_arg(self, ref: NoteRef | str) -> str:
         """Convert a NoteRef or string to a file= CLI argument."""
         if isinstance(ref, str):
-            return f"path={ref}" if ("/" in ref or ref.endswith(".md")) else f"file={ref}"
+            if "/" in ref or ref.endswith(".md"):
+                if not ref.endswith(".md"):
+                    ref = f"{ref}.md"
+                return f"path={ref}"
+            return f"file={ref}"
         if ref.path:
             return f"path={ref.path}"
         return f"file={ref.name}"
