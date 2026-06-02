@@ -66,8 +66,8 @@ class WarningLedger:
             self._run_dir.mkdir(parents=True, exist_ok=True)
             with self._lock:
                 payload = [asdict(e) for e in self._entries.values()]
-            (self._run_dir / "warnings.json").write_bytes(
-                orjson.dumps(payload, option=orjson.OPT_INDENT_2)
-            )
+                (self._run_dir / "warnings.json").write_bytes(
+                    orjson.dumps(payload, option=orjson.OPT_INDENT_2)
+                )
         except Exception:
             pass

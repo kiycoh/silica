@@ -165,9 +165,9 @@ class WorkQueue:
             self._run_dir.mkdir(parents=True, exist_ok=True)
             with self._lock:
                 payload = [it.to_dict() for it in self._items]
-            (self._run_dir / "workqueue.json").write_bytes(
-                orjson.dumps(payload, option=orjson.OPT_INDENT_2)
-            )
+                (self._run_dir / "workqueue.json").write_bytes(
+                    orjson.dumps(payload, option=orjson.OPT_INDENT_2)
+                )
         except Exception:
             # Persistence is best-effort; never break the pipeline over it.
             pass

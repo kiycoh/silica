@@ -99,3 +99,23 @@ def test_lease_key_normalises_md_and_case():
     t.join()
     # Acquiring "a" had to wait for "A.md" to release.
     assert waited >= 0.1
+
+
+def test_persist_is_atomic_under_concurrent_enqueue(tmp_path):
+    """Two threads racing on enqueue must not produce a stale workqueue.json."""
+    import json
+    wq = WorkQueue(run_dir=tmp_path)
+    barrier = threading.Barrier(2)
+
+    def enqueue_many(items):
+        barrier.wait()
+        for item in items:
+            wq.enqueue(WorkItem(kind="dedup", target_path=item, context={}, reason="test"))
+
+    t1 = threading.Thread(target=enqueue_many, args=(["a.md", "b.md", "c.md"],))
+    t2 = threading.Thread(target=enqueue_many, args=(["d.md", "e.md", "f.md"],))
+    t1.start(); t2.start()
+    t1.join(); t2.join()
+
+    saved = json.loads((tmp_path / "workqueue.json").read_bytes())
+    assert len(saved) == 6, f"Expected 6 items, got {len(saved)}: {[s['target_path'] for s in saved]}"
