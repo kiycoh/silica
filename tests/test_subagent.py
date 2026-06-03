@@ -1,12 +1,64 @@
-"""Tests for the LeashedSubAgent dedup behaviour (silica/agent/subagent.py)."""
+"""Tests for capability dispatch (silica/agent/subagent.py) and the per-capability
+behaviours (silica/capabilities/*).
+
+Dispatch is a keyed lookup: ``LeashedSubAgent.handle()`` selects the capability
+registered under ``item.kind`` and runs it. Each behaviour is a plain
+``run(item, config) -> dict`` function in its own module, and its LLM-decision
+seam is a module-level function the tests patch directly.
+"""
 from unittest.mock import patch, MagicMock
 
-from silica.agent.subagent import (
-    LeashedSubAgent, DedupDecision, RefineResult, OrphanLinkDecision,
-)
+from silica.agent.subagent import LeashedSubAgent
+from silica.capabilities.dedup import run_dedup, DedupDecision
+from silica.capabilities.refine import run_refine
+from silica.capabilities.enrich import run_enrich
+from silica.capabilities.orphan import run_orphan, OrphanLinkDecision
+from silica.capabilities._base import NoteContent
+from silica.config import SilicaConfig
 from silica.kernel.ops import OpType
 from silica.planner.workqueue import WorkItem
 
+CONFIG = SilicaConfig()
+
+
+# --- dispatch --------------------------------------------------------------
+
+def test_handle_dispatches_to_capability_by_kind():
+    """handle() routes to the capability registered under item.kind."""
+    seen = {}
+
+    def fake_run(item, config):
+        seen["called"] = item.kind
+        return {"status": "ok"}
+
+    agent = LeashedSubAgent(CONFIG, capabilities={"mystery": fake_run})
+    res = agent.handle(WorkItem(kind="mystery", target_path="X.md"))
+    assert res == {"status": "ok"}
+    assert seen["called"] == "mystery"
+
+
+def test_handle_skips_unknown_kind():
+    agent = LeashedSubAgent(CONFIG, capabilities={})
+    res = agent.handle(WorkItem(kind="nope", target_path="X.md"))
+    assert res["status"] == "skipped"
+
+
+def test_handle_catches_capability_errors():
+    def boom(item, config):
+        raise RuntimeError("kaboom")
+
+    agent = LeashedSubAgent(CONFIG, capabilities={"boom": boom})
+    res = agent.handle(WorkItem(kind="boom", target_path="X.md"))
+    assert res["status"] == "error"
+    assert "kaboom" in res["error"]
+
+
+def test_default_registry_covers_builtin_kinds():
+    from silica.capabilities import CAPABILITIES
+    assert set(CAPABILITIES) == {"dedup", "refine", "enrich", "orphan"}
+
+
+# --- dedup behaviour -------------------------------------------------------
 
 def _item():
     return WorkItem(
@@ -24,13 +76,12 @@ def _item():
 
 
 def test_dedup_merge_builds_single_patch_under_leash():
-    agent = LeashedSubAgent()
     decision = DedupDecision(is_duplicate=True, rationale="same concept", addition="### Momentum\nNew info.")
 
     with patch("silica.driver.DRIVER.read_note", return_value=MagicMock(content="existing body")), \
-         patch.object(agent, "_decide_dedup", return_value=decision), \
-         patch("silica.agent.subagent.commit_ops", return_value={"status": "committed", "committed": 1}) as commit:
-        res = agent.handle(_item())
+         patch("silica.capabilities.dedup._decide_dedup", return_value=decision), \
+         patch("silica.capabilities.dedup.commit_ops", return_value={"status": "committed", "committed": 1}) as commit:
+        res = run_dedup(_item(), CONFIG)
 
     assert res["status"] == "committed"
     # commit_ops called with exactly one patch op + a dedup leash on the candidate.
@@ -44,37 +95,28 @@ def test_dedup_merge_builds_single_patch_under_leash():
 
 
 def test_dedup_no_merge_when_not_duplicate():
-    agent = LeashedSubAgent()
     decision = DedupDecision(is_duplicate=False, rationale="different topics")
     with patch("silica.driver.DRIVER.read_note", return_value=MagicMock(content="body")), \
-         patch.object(agent, "_decide_dedup", return_value=decision), \
-         patch("silica.agent.subagent.commit_ops") as commit:
-        res = agent.handle(_item())
+         patch("silica.capabilities.dedup._decide_dedup", return_value=decision), \
+         patch("silica.capabilities.dedup.commit_ops") as commit:
+        res = run_dedup(_item(), CONFIG)
     assert res["status"] == "no_merge"
     commit.assert_not_called()
 
 
 def test_dedup_no_merge_when_addition_empty():
-    agent = LeashedSubAgent()
     decision = DedupDecision(is_duplicate=True, rationale="dup but nothing new", addition="   ")
     with patch("silica.driver.DRIVER.read_note", return_value=MagicMock(content="body")), \
-         patch.object(agent, "_decide_dedup", return_value=decision), \
-         patch("silica.agent.subagent.commit_ops") as commit:
-        res = agent.handle(_item())
+         patch("silica.capabilities.dedup._decide_dedup", return_value=decision), \
+         patch("silica.capabilities.dedup.commit_ops") as commit:
+        res = run_dedup(_item(), CONFIG)
     assert res["status"] == "no_merge"
     commit.assert_not_called()
 
 
-def test_unknown_kind_is_skipped():
-    agent = LeashedSubAgent()
-    res = agent.handle(WorkItem(kind="mystery", target_path="X.md"))
-    assert res["status"] == "skipped"
-
-
 def test_unreadable_candidate_is_skipped():
-    agent = LeashedSubAgent()
     with patch("silica.driver.DRIVER.read_note", side_effect=RuntimeError("missing")):
-        res = agent.handle(_item())
+        res = run_dedup(_item(), CONFIG)
     assert res["status"] == "skipped"
 
 
@@ -85,12 +127,11 @@ def _refine_item():
 
 
 def test_refine_builds_overwrite_under_refiner_leash():
-    agent = LeashedSubAgent()
-    refined = RefineResult(content="# Target\n\n> [!note]\nBody with [[Link]].")
+    refined = NoteContent(content="# Target\n\n> [!note]\nBody with [[Link]].")
     with patch("silica.driver.DRIVER.read_note", return_value=MagicMock(content="old body [[Link]]")), \
-         patch.object(agent, "_refine_note", return_value=refined), \
-         patch("silica.agent.subagent.commit_ops", return_value={"status": "committed", "committed": 1}) as commit:
-        res = agent.handle(_refine_item())
+         patch("silica.capabilities.refine._refine_note", return_value=refined), \
+         patch("silica.capabilities.refine.commit_ops", return_value={"status": "committed", "committed": 1}) as commit:
+        res = run_refine(_refine_item(), CONFIG)
     assert res["status"] == "committed"
     ops_arg = commit.call_args.args[0]
     assert ops_arg[0].op == OpType.overwrite
@@ -100,9 +141,8 @@ def test_refine_builds_overwrite_under_refiner_leash():
 
 
 def test_refine_skips_empty_note():
-    agent = LeashedSubAgent()
     with patch("silica.driver.DRIVER.read_note", return_value=MagicMock(content="   ")):
-        res = agent.handle(_refine_item())
+        res = run_refine(_refine_item(), CONFIG)
     assert res["status"] == "skipped"
 
 
@@ -121,13 +161,12 @@ def _orphan_item():
 
 
 def test_orphan_links_only_to_offered_candidates():
-    agent = LeashedSubAgent()
     # Model returns one valid candidate + one hallucinated name.
     decision = OrphanLinkDecision(links=["Gradient Descent", "Made Up Note"], rationale="related")
     with patch("silica.driver.DRIVER.read_note", return_value=MagicMock(content="orphan body")), \
-         patch.object(agent, "_decide_links", return_value=decision), \
-         patch("silica.agent.subagent.commit_ops", return_value={"status": "committed", "committed": 1}) as commit:
-        res = agent.handle(_orphan_item())
+         patch("silica.capabilities.orphan._decide_links", return_value=decision), \
+         patch("silica.capabilities.orphan.commit_ops", return_value={"status": "committed", "committed": 1}) as commit:
+        res = run_orphan(_orphan_item(), CONFIG)
     assert res["status"] == "committed"
     op = commit.call_args.args[0][0]
     assert op.op == OpType.patch and op.path == "Notes/Lonely.md"
@@ -138,25 +177,23 @@ def test_orphan_links_only_to_offered_candidates():
 
 
 def test_orphan_no_link_when_model_picks_nothing_valid():
-    agent = LeashedSubAgent()
     decision = OrphanLinkDecision(links=["Nonexistent"], rationale="nothing fits")
     with patch("silica.driver.DRIVER.read_note", return_value=MagicMock(content="body")), \
-         patch.object(agent, "_decide_links", return_value=decision), \
-         patch("silica.agent.subagent.commit_ops") as commit:
-        res = agent.handle(_orphan_item())
+         patch("silica.capabilities.orphan._decide_links", return_value=decision), \
+         patch("silica.capabilities.orphan.commit_ops") as commit:
+        res = run_orphan(_orphan_item(), CONFIG)
     assert res["status"] == "no_link"
     commit.assert_not_called()
 
 
 def test_orphan_no_candidates():
-    agent = LeashedSubAgent()
-    res = agent.handle(WorkItem(kind="orphan", target_path="X.md", context={"candidates": []}))
+    res = run_orphan(WorkItem(kind="orphan", target_path="X.md", context={"candidates": []}), CONFIG)
     assert res["status"] == "no_candidates"
 
 
 def test_orphan_hub_is_none_when_context_has_no_hub():
     """When context has no hub key, hub must be None (not basename of target_path)."""
-    import silica.agent.subagent as subagent_module
+    import silica.capabilities.orphan as orphan_module
     from silica.agent.leash import orphan_leash as real_orphan_leash
 
     item = WorkItem(
@@ -172,11 +209,10 @@ def test_orphan_hub_is_none_when_context_has_no_hub():
         captured_hubs.append(hub)
         return real_orphan_leash(target, hub=hub)
 
-    agent = LeashedSubAgent()
-    with patch.object(subagent_module, "orphan_leash", side_effect=capture_orphan_leash), \
-         patch("silica.agent.subagent.commit_ops", return_value={"status": "no_ops"}), \
-         patch.object(agent, "_decide_links", return_value=OrphanLinkDecision(links=["Other"], rationale="test")), \
+    with patch.object(orphan_module, "orphan_leash", side_effect=capture_orphan_leash), \
+         patch("silica.capabilities.orphan.commit_ops", return_value={"status": "no_ops"}), \
+         patch("silica.capabilities.orphan._decide_links", return_value=OrphanLinkDecision(links=["Other"], rationale="test")), \
          patch("silica.driver.DRIVER.read_note", return_value=MagicMock(content="# MyNote\n")):
-        agent.handle(item)
+        run_orphan(item, CONFIG)
 
     assert captured_hubs == [None], f"Expected hub=None when context has no 'hub' key, got {captured_hubs}"
