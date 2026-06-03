@@ -39,7 +39,7 @@ logger = logging.getLogger(__name__)
 
 # Settle polling config
 _SETTLE_POLL_INTERVAL = 0.1   # seconds
-_SETTLE_TIMEOUT = 2.0         # seconds — outer deadline for cache convergence polls
+_SETTLE_TIMEOUT = 20.0        # seconds — outer deadline for cache convergence polls
 
 # Hard limit per individual subprocess call to the Obsidian CDP bridge.
 # Configurable via SILICA_OBSIDIAN_CLI_TIMEOUT (default 8 s).
