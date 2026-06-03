@@ -86,6 +86,12 @@ class SilicaConfig:
     subagent_max_concurrent: int = field(
         default_factory=lambda: int(os.getenv("SILICA_SUBAGENT_MAX_CONCURRENT", "3"))
     )
+    # Global ceiling on concurrent worker-model LLM calls (the one true
+    # concurrency budget; see ADR-0004). Sized to the worker backend
+    # (API rate limit or local GPU slots).
+    worker_max_concurrent: int = field(
+        default_factory=lambda: int(os.getenv("SILICA_WORKER_MAX_CONCURRENT", "4"))
+    )
     # Master switch: when False, silica_inject runs the legacy single-FSM path.
     subagents_enabled: bool = field(
         default_factory=lambda: os.getenv("SILICA_SUBAGENTS_ENABLED", "True").lower() in ("true", "1", "t")
