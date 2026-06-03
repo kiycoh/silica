@@ -137,7 +137,7 @@ class SilicaConfig:
 
     # Font pyfiglet del banner di avvio
     banner_font: str = field(
-        default_factory=lambda: os.getenv("SILICA_BANNER_FONT", "ansi_shadow")
+        default_factory=lambda: os.getenv("SILICA_BANNER_FONT", "ansi-shadow")
     )
 
     # Runtime session state — updated by cli.py after each agent turn

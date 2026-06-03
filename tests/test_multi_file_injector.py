@@ -557,25 +557,16 @@ class TestT7InjectShortcut:
 
 class TestT8Help:
     def test_help_lists_inject(self):
-        from silica.cli import _handle_slash_command
-        output_lines = []
-        with patch("silica.cli.CONSOLE") as mock_console:
-            mock_console.print.side_effect = lambda *a, **kw: output_lines.append(str(a))
-            _handle_slash_command("/help", [])
-        combined = " ".join(output_lines)
-        assert "/inject" in combined
+        from silica.ui.commands import command_names
+        assert "/inject" in command_names()
 
     def test_help_lists_direct_commands(self):
-        from silica.cli import _handle_slash_command
-        output_lines = []
-        with patch("silica.cli.CONSOLE") as mock_console:
-            mock_console.print.side_effect = lambda *a, **kw: output_lines.append(str(a))
-            _handle_slash_command("/help", [])
-        combined = " ".join(output_lines)
-        assert "/status" in combined
-        assert "/embed" in combined
-        assert "/graph" in combined
-        assert "/find" in combined
+        from silica.ui.commands import COMMANDS
+        names = {c.name for c in COMMANDS}
+        assert "/status" in names
+        assert "/embed" in names
+        assert "/graph" in names
+        assert "/find" in names
 
 
 def test_next_uncommitted_chunk_idx_skips_committed_files():

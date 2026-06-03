@@ -22,14 +22,14 @@ def test_cli_clear_command():
     # Mock CONFIG.model and CONFIG.vault_name for deterministic output testing
     with patch("silica.cli.build_session", mock_build_session), \
          patch("silica.cli.CONSOLE") as mock_console, \
-         patch("silica.cli.print_banner") as mock_banner, \
+         patch("silica.cli.print_home") as mock_home, \
          patch("silica.cli._setup_logging"), \
          patch("sys.argv", ["silica"]):
-         
+
         main()
-        
-        # Verify initial banner and setup calls
-        assert mock_banner.call_count == 2  # Initial + after clear
+
+        # Verify initial home screen and setup calls
+        assert mock_home.call_count == 2  # Initial + after clear
         assert mock_console.clear.call_count == 1
         assert mock_build_session.call_count == 2
         mock_session_1.prompt.assert_called_once()

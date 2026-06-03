@@ -16,7 +16,7 @@ dependencies = [
   "pyyaml>=6.0",
   "python-dotenv>=1.0",
   "rich",
-  "pyfiglet",
+  "art",
   "networkx",
   "markdown-it-py",
   "orjson",

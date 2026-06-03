@@ -1,6 +1,7 @@
 from __future__ import annotations
 
-import pyfiglet
+from art import text2art
+from rich.console import Group as RichGroup
 from rich.text import Text
 
 from silica.config import CONFIG
@@ -22,29 +23,29 @@ def _gradient(n: int, c0: tuple[int, int, int] = BRAND_CYAN, c1: tuple[int, int,
     return out  # cyan → indigo
 
 
-def _print_wordmark() -> bool:
+def banner_group() -> RichGroup | None:
+    """Banner art + caption as a renderable Group, or None if font unavailable or terminal too narrow."""
+    if CONFIG.banner_style != "wordmark":
+        return None
     try:
-        raw = pyfiglet.figlet_format("silica", font=CONFIG.banner_font)
+        raw = text2art("SILICA", font=CONFIG.banner_font)
         art = [ln for ln in raw.rstrip("\n").split("\n")]
-        # Drop trailing blank lines
         while art and not art[-1].strip():
             art.pop()
     except Exception:
-        return False
-
-    min_width = max((len(ln) for ln in art), default=0) + 2
-    if CONSOLE.width < min_width:
-        return False
-
-    for line, color in zip(art, _gradient(len(art))):
-        CONSOLE.print(Text(line, style=f"bold {color}"))
-    CONSOLE.print(_CAPTION)
-    return True
+        return None
+    if not art:
+        return None
+    if CONSOLE.width < max(len(ln) for ln in art) + 2:
+        return None
+    items: list = [Text(line, style=f"bold {color}") for line, color in zip(art, _gradient(len(art)))]
+    items.append(Text.from_markup(_CAPTION))
+    return RichGroup(*items)
 
 
 def print_banner() -> None:
-    style = CONFIG.banner_style
-    if style == "wordmark" and _print_wordmark():
+    bg = banner_group()
+    if bg is not None:
+        CONSOLE.print(bg)
         return
-    # minimal or fallback from failed guard
     CONSOLE.print(f"  [bold cyan]silica[/] [dim]v{_VERSION} · Your personal note curator agent[/]")
