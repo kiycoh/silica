@@ -206,7 +206,7 @@ def run_agent(
                 )
                 start_time = time.perf_counter()
                 try:
-                    result = allowed[tc.name].run(**tc.args)
+                    result = allowed[tc.name].run(_cancel_token=cancel_token, **tc.args)
                     duration = time.perf_counter() - start_time
                     _emit(
                         ToolCompleteEvent(
