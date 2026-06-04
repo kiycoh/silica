@@ -230,4 +230,4 @@ We maintain a set of structural patterns and trade-offs documented as Architectu
 
 ## License
 
-Distributed under the MIT License. See [LICENSE](LICENSE) for more information.
+Distributed under the APACHE 2.0 License. See [LICENSE](LICENSE) for more information.
