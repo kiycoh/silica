@@ -431,7 +431,7 @@ def silica_autolink(note_paths: list[str] | None = None, note_path: str = "", us
     Only links titles that exist in the vault graph (graph-safe by construction).
     Returns the total number of links added.
     """
-    from silica.kernel.autolink import autolink, build_title_index
+    from silica.kernel.autolink import build_title_index
 
     paths = note_paths or []
     if note_path and note_path not in paths:
@@ -475,7 +475,6 @@ def silica_autolink(note_paths: list[str] | None = None, note_path: str = "", us
     processed = 0
     write_errors: list[str] = []
 
-    import os as _os
     for path in paths:
         try:
             nc = DRIVER.read_note(path)
@@ -511,16 +510,15 @@ def silica_autolink(note_paths: list[str] | None = None, note_path: str = "", us
             except Exception:
                 pass  # fall back to full title_index scan
 
-        note_title = _os.path.splitext(_os.path.basename(path))[0]
-        new_body, added = autolink(body, title_index, candidates=candidates, self_title=note_title)
-
-        if added:
-            try:
-                DRIVER.overwrite(path, new_body)
+        try:
+            added = DRIVER.autolink_note(
+                path, candidates=candidates if candidates is not None else title_index
+            )
+            if added:
                 total_added += len(added)
                 processed += 1
-            except Exception as e:
-                write_errors.append(f"{path}: {e}")
+        except Exception as e:
+            write_errors.append(f"{path}: {e}")
 
     result = {"notes_processed": processed, "total_links_added": total_added}
     if write_errors:
@@ -659,6 +657,17 @@ def silica_embed_refresh(folder: str = "", force: bool = False) -> dict[str, Any
     except Exception as e:
         return {"error": f"Index build failed: {e}", "read_errors": errors}
 
+    # Garbage collection: remove stale paths from the store
+    current_paths = {idx_path for idx_path, _, _ in notes}
+    stale_paths = [
+        p for p in store.paths()
+        if _in_folder(p, folder) and p not in current_paths
+    ]
+    for p in stale_paths:
+        store.delete(p)
+    if stale_paths:
+        store.save()
+
     return {
         "indexed": len(store),
         "total_notes": len(notes),
@@ -710,6 +719,17 @@ def silica_cooccurrence_refresh(folder: str = "", force: bool = False) -> dict[s
         store = build_index(notes, lang=CONFIG.cooccurrence_lang, force=force)
     except Exception as e:
         return {"error": f"Index build failed: {e}", "read_errors": errors}
+
+    # Garbage collection: remove stale paths from the store
+    current_paths = {idx_path for idx_path, _, _ in notes}
+    stale_paths = [
+        p for p in store.paths()
+        if _in_folder(p, folder) and p not in current_paths
+    ]
+    for p in stale_paths:
+        store.delete_note(p)
+    if stale_paths:
+        store.save()
 
     return {
         "indexed": len(store),
