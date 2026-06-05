@@ -1,0 +1,6 @@
+# silica/domains/legal.yaml — sample Domain Pack (overlay over injector.yaml).
+# Overrides recipe KEYS only (gates + per-phase params). See ADR-0005.
+gates:
+  rejection_rate_max: 0.05        # legal: be stricter about dropping content
+phases:
+  - { id: payload, partition_if_over: 4 }   # smaller batches for dense clauses

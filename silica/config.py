@@ -226,6 +226,9 @@ class SilicaConfig:
         default_factory=lambda: float(os.getenv("SILICA_OBSIDIAN_CLI_TIMEOUT", "8"))
     )
 
+    domain: str | None = field(
+        default_factory=lambda: os.getenv("SILICA_DOMAIN") or None
+    )
 
     @property
     def verbose(self) -> bool:
