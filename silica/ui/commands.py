@@ -49,6 +49,12 @@ COMMANDS: tuple[Command, ...] = (
         summary="costruisci/aggiorna indice embedding",
     ),
     Command(
+        name="/cooccur",
+        group="direct",
+        usage="[folder] [--force]",
+        summary="costruisci/aggiorna indice co-occorrenza (senza embedder)",
+    ),
+    Command(
         name="/graph",
         group="direct",
         usage="[out.html] [folder]",

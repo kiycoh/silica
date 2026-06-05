@@ -449,6 +449,7 @@ def silica_autolink(note_paths: list[str] | None = None, note_path: str = "", us
     
     store = None
     embedder = None
+    cooccur_store = None
     if use_candidates:
         try:
             from silica.agent.providers import get_embedder
@@ -459,6 +460,16 @@ def silica_autolink(note_paths: list[str] | None = None, note_path: str = "", us
                 embedder = get_embedder(CONFIG)
         except Exception:
             pass
+        # The co-occurrence leg is embedder-free: load it independently so
+        # candidates survive (focused) even when the embedder is down.
+        try:
+            from silica.config import CONFIG
+            from silica.kernel.cooccurrence import CooccurStore
+            cooccur_store = CooccurStore(lang=CONFIG.cooccurrence_lang)
+            if len(cooccur_store) == 0:
+                cooccur_store = None
+        except Exception:
+            cooccur_store = None
 
     total_added = 0
     processed = 0
@@ -476,13 +487,29 @@ def silica_autolink(note_paths: list[str] | None = None, note_path: str = "", us
             continue
 
         candidates: list[str] | None = None
-        if use_candidates and store and embedder:
+        if use_candidates and (cooccur_store is not None or (store is not None and embedder is not None)):
+            query_vec = None
+            if store is not None and embedder is not None:
+                try:
+                    query_vec = embedder.embed([body[:800]])[0]
+                except Exception:
+                    query_vec = None
             try:
-                vecs = embedder.embed([body[:800]])
-                results = store.cosine_top_k(vecs[0], k=20)
-                candidates = [r["name"] for r in results]
+                from silica.kernel.relatedness import related_notes_for_query
+                related = related_notes_for_query(
+                    query_vec=query_vec,
+                    query_text=body,
+                    embed_store=store,
+                    cooccur_store=cooccur_store,
+                    k=20,
+                )
+                # Only narrow to candidates when the facade actually proposed
+                # some; an empty list would suppress linking, so leave it None
+                # to fall back to the full title_index scan.
+                if related:
+                    candidates = [r.name for r in related]
             except Exception:
-                pass  # Fall back to full title_index scan
+                pass  # fall back to full title_index scan
 
         note_title = _os.path.splitext(_os.path.basename(path))[0]
         new_body, added = autolink(body, title_index, candidates=candidates, self_title=note_title)
@@ -640,6 +667,58 @@ def silica_embed_refresh(folder: str = "", force: bool = False) -> dict[str, Any
     }
 
 
+class CooccurrenceRefreshArgs(BaseModel):
+    folder: str = Field(default="", description="Vault-relative folder to restrict indexing (empty = entire vault)")
+    force: bool = Field(default=False, description="Re-process all notes, even if already indexed")
+
+@tool(CooccurrenceRefreshArgs, cls="composed")
+def silica_cooccurrence_refresh(folder: str = "", force: bool = False) -> dict[str, Any]:
+    """Build or refresh the vault co-occurrence index at ~/.silica/index/cooccurrence.json.
+
+    The embedder-free twin of silica_embed_refresh: a deterministic concept
+    co-occurrence graph derived purely from note text — no LM Studio, no network.
+    Incrementally skips notes already indexed (unless force=True). Run this once
+    to seed an existing vault; the post-write hook then keeps it fresh.
+    Powers the relatedness facade's co-occurrence leg and the graph delta report.
+    """
+    from silica.config import CONFIG
+    from silica.kernel.cooccurrence import build_index
+
+    try:
+        all_refs = DRIVER.list_files(folder or None)
+    except Exception as e:
+        return {"error": f"Failed to list vault files: {e}"}
+
+    notes: list[tuple[str, str, str]] = []
+    errors: list[str] = []
+    for ref in all_refs:
+        path = ref.path or ref.name
+        name = ref.name or path
+        try:
+            # Pass RAW content: build_contribution strips frontmatter + media itself.
+            body = DRIVER.read_note(path).content or ""
+        except Exception as exc:
+            errors.append(f"{path}: {exc}")
+            continue
+        idx_path = path.removesuffix(".md")
+        notes.append((idx_path, name, body))
+
+    if not notes:
+        return {"error": "No notes found to index", "read_errors": errors}
+
+    try:
+        store = build_index(notes, lang=CONFIG.cooccurrence_lang, force=force)
+    except Exception as e:
+        return {"error": f"Index build failed: {e}", "read_errors": errors}
+
+    return {
+        "indexed": len(store),
+        "total_notes": len(notes),
+        "read_errors": len(errors),
+        "index_path": str(store._path),
+    }
+
+
 class LedgerDigestArgs(BaseModel):
     run_id: str = Field(default="", description="Run ID to inspect (latest saved run if empty)")
 
@@ -685,6 +764,7 @@ class VaultReportArgs(BaseModel):
     folder: str = Field(default="", description="Vault-relative folder to scope (empty = whole vault)")
     top_k: int = Field(default=10, description="How many god-nodes / bridges to surface")
     with_embeddings: bool = Field(default=False, description="Also propose missing links via the embedding index")
+    with_cooccurrence: bool = Field(default=False, description="Also compute the co-occurrence vs wikilink delta (autolink candidates, stale links, missing hubs) — embedder-free")
     seed_ledger: bool = Field(default=True, description="Persist a run (TaskLedger+ProgressLedger) pre-seeded with remediation tasks")
 
 @tool(VaultReportArgs, cls="composed")
@@ -692,6 +772,7 @@ def silica_vault_report(
     folder: str = "",
     top_k: int = 10,
     with_embeddings: bool = False,
+    with_cooccurrence: bool = False,
     seed_ledger: bool = True,
 ) -> dict[str, Any]:
     """Deterministic structural audit of the vault.
@@ -715,7 +796,10 @@ def silica_vault_report(
     from silica.planner.progress import IssueCard, ProgressLedger, TaskLedger
 
     # 1. Build report
-    report = compute_report(folder=folder, top_k=top_k, with_embeddings=with_embeddings)
+    report = compute_report(
+        folder=folder, top_k=top_k,
+        with_embeddings=with_embeddings, with_cooccurrence=with_cooccurrence,
+    )
 
     # 2. Determine output path
     vault_path = getattr(CONFIG, "vault_path", None) or ""

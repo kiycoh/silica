@@ -101,6 +101,7 @@ def _handle_direct_shortcut(raw_input: str, messages: list[dict]) -> bool:
     Handled commands (immediate, synchronous):
         /status [run_id]
         /embed [folder] [--force]
+        /cooccur [folder] [--force]
         /graph [output.html] [folder]
         /find <query> [--k=N]
         /undo [note-path]
@@ -140,6 +141,29 @@ def _handle_direct_shortcut(raw_input: str, messages: list[dict]) -> bool:
                 CONSOLE.print(f"  [red]Error:[/] {parsed['error']}")
             else:
                 CONSOLE.print(f"  Indexed: [bold]{parsed.get('indexed', '?')}[/] / {parsed.get('total_notes', '?')} notes")
+            if parsed.get("read_errors"):
+                CONSOLE.print(f"  [yellow]Read errors:[/] {parsed['read_errors']}")
+        except Exception:
+            CONSOLE.print(result)
+        return True
+
+    if cmd == "/cooccur":
+        folder = ""
+        force = False
+        for part in parts[1:]:
+            if part == "--force":
+                force = True
+            elif part.startswith("--folder="):
+                folder = part[len("--folder="):]
+            elif not part.startswith("-"):
+                folder = part
+        result = TOOLS["silica_cooccurrence_refresh"].run(folder=folder, force=force)
+        try:
+            parsed = json.loads(result)
+            if "error" in parsed:
+                CONSOLE.print(f"  [red]Error:[/] {parsed['error']}")
+            else:
+                CONSOLE.print(f"  Indexed: [bold]{parsed.get('indexed', '?')}[/] / {parsed.get('total_notes', '?')} notes (co-occurrence)")
             if parsed.get("read_errors"):
                 CONSOLE.print(f"  [yellow]Read errors:[/] {parsed['read_errors']}")
         except Exception:
