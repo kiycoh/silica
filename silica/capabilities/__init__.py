@@ -2,7 +2,7 @@
 
 A *capability* is a self-contained background behaviour: a plain
 ``run(item, config) -> dict`` function that claims a WorkItem of one ``kind`` and
-executes it under that behaviour's leash. Today one ``kind`` is owned by exactly
+executes it under that behaviour's bounds. Today one ``kind`` is owned by exactly
 one capability, so dispatch is a keyed lookup — the same shape as Claude Code's
 ``TOOLS`` table — not a scan. Adding a behaviour is: drop one module here and add
 one line to ``CAPABILITIES``.

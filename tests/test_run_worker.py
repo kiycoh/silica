@@ -33,7 +33,7 @@ def _profile(**over):
     base = dict(
         name="reader",
         tools=("probe_tool",),
-        leash_factory=None,
+        bounds_factory=None,
         max_iterations=4,
         system_prompt="be brief",
         result_parser=lambda text, trace: WorkerResult(

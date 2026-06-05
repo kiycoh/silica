@@ -76,7 +76,7 @@ class SilicaConfig:
     )
 
 
-    # Leash caps — bound how far a sub-agent can move before the framework reins it in.
+    # Execution caps — bound how far a sub-agent can move before the framework stops it.
     subagent_max_turns: int = field(
         default_factory=lambda: int(os.getenv("SILICA_SUBAGENT_MAX_TURNS", "6"))
     )

@@ -1,10 +1,10 @@
-"""Coordinator — runs the Injector and a pool of leashed sub-agents concurrently.
+"""Coordinator — runs the Injector and a pool of bounded sub-agents concurrently.
 
 Producer/consumer model:
   * the InjectorFSM (router model) runs on the calling thread and *produces*
     WorkItems as it commits batches — it never blocks on a sub-agent;
-  * a ThreadPoolExecutor of LeashedSubAgents (worker model) *consumes* the queue
-    in parallel, writing only through their Leash + the commit_ops micro-gate;
+  * a ThreadPoolExecutor of BoundedSubAgents (worker model) *consumes* the queue
+    in parallel, writing only through their CapabilityBounds + the commit_ops micro-gate;
   * after the Injector finishes, the Coordinator closes the queue and joins the
     pool (drains remaining items) before returning an aggregated status.
 
@@ -36,13 +36,14 @@ class Coordinator:
         *,
         resume_run_id: str | None = None,
         config: Any = CONFIG,
+        cancel_token: "threading.Event | None" = None,
     ):
         # Lazy import keeps construction patchable at the orchestrator boundary
         # and avoids import-time coupling.
         from silica.router.orchestrator import InjectorFSM
 
         self.config = config
-        self._stop = threading.Event()
+        self._stop = cancel_token if cancel_token is not None else threading.Event()
         self.fsm = InjectorFSM(
             inbox_files=inbox_files,
             target_dir=target_dir,
@@ -105,7 +106,7 @@ class Coordinator:
 
     def _current_orphans(self) -> set[str]:
         """Normalized set of notes currently orphaned in the target folder."""
-        from silica.agent.leash import _norm_path
+        from silica.agent.bounds import _norm_path
         try:
             from silica.kernel.graph_report import compute_report
             report = compute_report(folder=getattr(self.fsm, "target_dir", "") or "")
@@ -116,7 +117,7 @@ class Coordinator:
 
     def _orphan_candidates(self, path: str, k: int = 3) -> list[dict]:
         """Nearest semantic neighbours of an orphan note (existing notes only)."""
-        from silica.agent.leash import _norm_path
+        from silica.agent.bounds import _norm_path
         try:
             from silica.kernel.embed import EmbedStore
             store = EmbedStore()
@@ -133,7 +134,7 @@ class Coordinator:
             return []
 
     def _enqueue_orphan_repairs(self, wq: Any, result: dict) -> None:
-        from silica.agent.leash import _norm_path
+        from silica.agent.bounds import _norm_path
         from silica.planner.workqueue import WorkItem
 
         ledger = getattr(self.fsm, "warning_ledger", None)
@@ -172,7 +173,7 @@ class Coordinator:
         ledger = getattr(self.fsm, "warning_ledger", None)
         if ledger is None:
             return
-        from silica.agent.leash import _norm_path
+        from silica.agent.bounds import _norm_path
         warned_keys = {_norm_path(p) for p in ledger.paths("orphan")}
         still = self._current_orphans() & warned_keys
         ow["residual_after"] = len(still)
@@ -190,11 +191,11 @@ class Coordinator:
         a producer crash causes pending items to be marked cancelled rather
         than dispatched to the sub-agent.
         """
-        from silica.agent.subagent import LeashedSubAgent
+        from silica.agent.subagent import BoundedSubAgent
         from silica.agent.bus import BUS
         from silica.agent.events import WorkCancelledEvent
 
-        agent = LeashedSubAgent(self.config)
+        agent = BoundedSubAgent(self.config)
         while True:
             item = wq.claim()           # blocks; no timeout, no polling
             if item is None:

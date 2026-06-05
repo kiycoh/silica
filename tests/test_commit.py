@@ -2,7 +2,7 @@
 from unittest.mock import patch
 
 from silica.agent.commit import commit_ops
-from silica.agent.leash import dedup_leash
+from silica.agent.bounds import dedup_bounds
 from silica.kernel.ops import Op, OpType
 
 
@@ -35,17 +35,17 @@ def test_commit_rolls_back_on_lint_failure():
     restore.assert_called_once()
 
 
-def test_commit_leash_drops_forbidden_op_before_write():
-    # An overwrite is outside the dedup leash → dropped before any tool runs.
-    leash = dedup_leash("Concepts/Big.md")
+def test_commit_bounds_drops_forbidden_op_before_write():
+    # An overwrite is outside the dedup bounds → dropped before any tool runs.
+    bounds = dedup_bounds("Concepts/Big.md")
     overwrite = Op(op=OpType.overwrite, heading="C", source_basename="i.md",
                    path="Concepts/Big.md", content="x")
     with patch("silica.tools.composed.silica_validate_ops") as validate:
-        res = commit_ops([overwrite], target_dir="Concepts", leash=leash)
-    # No actionable ops survived the leash → validate never called.
+        res = commit_ops([overwrite], target_dir="Concepts", bounds=bounds)
+    # No actionable ops survived the bounds → validate never called.
     validate.assert_not_called()
     assert res["status"] == "no_ops"
-    assert len(res["rejected_leash"]) == 1
+    assert len(res["rejected_by_bounds"]) == 1
 
 
 def test_commit_no_ops_when_all_skip():

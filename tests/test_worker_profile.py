@@ -20,7 +20,7 @@ def test_profile_is_frozen_and_registry_is_a_dict():
     p = WorkerProfile(
         name="t",
         tools=("silica_read_note",),
-        leash_factory=None,
+        bounds_factory=None,
         max_iterations=4,
         system_prompt="be brief",
         result_parser=lambda text, trace: WorkerResult(status="ok", output=text),

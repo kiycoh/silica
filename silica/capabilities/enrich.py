@@ -1,4 +1,4 @@
-"""Enrich capability — semantic expansion of a note under the anti-info-loss leash."""
+"""Enrich capability — semantic expansion of a note under the anti-info-loss bounds."""
 from __future__ import annotations
 
 import logging
@@ -6,7 +6,7 @@ import os
 from typing import Any
 
 from silica.agent.commit import commit_ops
-from silica.agent.leash import refiner_leash
+from silica.agent.bounds import refiner_bounds
 from silica.kernel.ops import Op, OpType
 from silica.planner.workqueue import WorkItem
 from silica.capabilities._base import NoteContent, emit_feedback, read_or_skip
@@ -44,13 +44,13 @@ def run_enrich(item: WorkItem, config: Any) -> dict[str, Any]:
         hub=hub,
         reason="semantic enrichment",
     )
-    # refiner_leash guarantees anti-info-loss (wikilinks preserved + length floor).
-    leash = refiner_leash(target_path, hub=hub)
+    # refiner_bounds guarantees anti-info-loss (wikilinks preserved + length floor).
+    bounds = refiner_bounds(target_path, hub=hub)
     result = commit_ops(
         [op],
         target_dir=os.path.dirname(target_path),
         hub=hub,
-        leash=leash,
+        bounds=bounds,
         read_note=lambda _p: original,
     )
     return result

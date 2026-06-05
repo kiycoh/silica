@@ -353,6 +353,7 @@ def silica_run_injector(
     target_dir: str = "",
     hub: str = "",
     resume_run_id: str = "",
+    cancel_token: Any = None,
 ) -> dict[str, Any]:
     """Execute the entire Injector pipeline deterministically with acceptance gates and rollback.
 
@@ -378,6 +379,7 @@ def silica_run_injector(
         target_dir=target_dir,
         hub=hub or None,
         resume_run_id=resume_run_id or None,
+        cancel_token=cancel_token,
     )
     return coordinator.run()
 
@@ -957,7 +959,7 @@ class DedupFolderArgs(BaseModel):
 
 
 @tool(DedupFolderArgs, cls="composed")
-def silica_dedup(folder: str = "") -> dict[str, Any]:
+def silica_dedup(folder: str = "", cancel_token: Any = None) -> dict[str, Any]:
     """Find near-duplicate note pairs and merge the smaller into the larger.
 
     Uses the embedding index to surface borderline pairs, then runs the leashed
@@ -1050,7 +1052,7 @@ def silica_dedup(folder: str = "") -> dict[str, Any]:
                 reason=f"folder_dedup score={effective_score:.3f} (full={score:.3f} title={title_score:.3f})",
             ))
 
-    res = run_subagent_batch(items)
+    res = run_subagent_batch(items, cancel_token=cancel_token)
     res["pairs_found"] = len(items)
     res["folder"] = folder or "(vault)"
     return res
@@ -1060,7 +1062,7 @@ class RefineBatchArgs(BaseModel):
     note_paths: list[str] = Field(description="List of vault-relative paths to stylistically refine.")
 
 @tool(RefineBatchArgs, cls="composed")
-def silica_refine_batch(note_paths: list[str]) -> dict[str, Any]:
+def silica_refine_batch(note_paths: list[str], cancel_token: Any = None) -> dict[str, Any]:
     """Stylistically refine a batch of notes (leashed refiner sub-agent).
 
     Each note is reformatted for clarity/Obsidian style WITHOUT information loss.
@@ -1072,7 +1074,7 @@ def silica_refine_batch(note_paths: list[str]) -> dict[str, Any]:
     from silica.agent.subagent import run_subagent_batch
 
     items = [WorkItem(kind="refine", target_path=p, context={}) for p in note_paths]
-    res = run_subagent_batch(items)
+    res = run_subagent_batch(items, cancel_token=cancel_token)
     res["notes"] = len(items)
     return res
 
@@ -1080,7 +1082,7 @@ class EnrichBatchArgs(BaseModel):
     note_paths: list[str] = Field(description="List of vault-relative paths to semantically enrich.")
 
 @tool(EnrichBatchArgs, cls="composed")
-def silica_enrich_batch(note_paths: list[str]) -> dict[str, Any]:
+def silica_enrich_batch(note_paths: list[str], cancel_token: Any = None) -> dict[str, Any]:
     """Semantically enrich a batch of lean or empty notes (leashed enricher sub-agent)."""
     if not note_paths:
         return {"error": "No note paths provided."}
@@ -1089,7 +1091,7 @@ def silica_enrich_batch(note_paths: list[str]) -> dict[str, Any]:
     from silica.agent.subagent import run_subagent_batch
 
     items = [WorkItem(kind="enrich", target_path=p, context={}) for p in note_paths]
-    res = run_subagent_batch(items)
+    res = run_subagent_batch(items, cancel_token=cancel_token)
     res["notes"] = len(items)
     return res
 

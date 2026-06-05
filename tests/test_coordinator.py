@@ -55,7 +55,7 @@ def test_coordinator_drains_all_items():
     cfg.subagent_max_concurrent = 3
     coord = _coordinator_with(_FakeFSM(8, per_item_delay=0.005), cfg)
 
-    with patch("silica.agent.subagent.LeashedSubAgent", _FakeAgent):
+    with patch("silica.agent.subagent.BoundedSubAgent", _FakeAgent):
         result = coord.run()
 
     # Every produced item was consumed and committed — none lost on join.
@@ -69,7 +69,7 @@ def test_coordinator_legacy_path_when_disabled():
     fake = _FakeFSM(5)
     coord = _coordinator_with(fake, cfg)
 
-    with patch("silica.agent.subagent.LeashedSubAgent", _FakeAgent):
+    with patch("silica.agent.subagent.BoundedSubAgent", _FakeAgent):
         result = coord.run()
 
     # Legacy path: FSM.run() called directly, no sub-agent summary, no queue wired.
@@ -81,7 +81,7 @@ def test_coordinator_handles_empty_production():
     cfg = SilicaConfig()
     cfg.subagents_enabled = True
     coord = _coordinator_with(_FakeFSM(0), cfg)
-    with patch("silica.agent.subagent.LeashedSubAgent", _FakeAgent):
+    with patch("silica.agent.subagent.BoundedSubAgent", _FakeAgent):
         result = coord.run()
     assert result["subagents"] == {}
 
@@ -120,7 +120,7 @@ def test_coordinator_enqueues_only_residual_orphans_and_reverifies():
     def fake_current():
         return current_calls.pop(0) if current_calls else set()
 
-    with patch("silica.agent.subagent.LeashedSubAgent", _FakeAgent), \
+    with patch("silica.agent.subagent.BoundedSubAgent", _FakeAgent), \
          patch.object(type(coord), "_current_orphans", side_effect=fake_current), \
          patch.object(type(coord), "_orphan_candidates", return_value=[{"name": "X", "path": "Concepts/X"}]):
         result = coord.run()
@@ -194,7 +194,7 @@ def test_interrupt_mid_drain_stops_workers_and_renderer():
         original_executor_init(self, *args, **kwargs)
         captured_pool.append(self)
 
-    with patch("silica.agent.subagent.LeashedSubAgent", _SlowAgent), \
+    with patch("silica.agent.subagent.BoundedSubAgent", _SlowAgent), \
          patch.object(concurrent.futures.ThreadPoolExecutor, "__init__", patched_init):
         try:
             coord.run()

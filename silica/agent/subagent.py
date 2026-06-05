@@ -1,13 +1,13 @@
-"""LeashedSubAgent — a small, tightly-bounded worker that runs on the worker model.
+"""BoundedSubAgent — a small, tightly-bounded worker that runs on the worker model.
 
-A leashed sub-agent consumes one WorkItem at a time and dispatches it to the
+A bounded sub-agent consumes one WorkItem at a time and dispatches it to the
 capability registered under ``item.kind``. Each capability (see
 ``silica/capabilities/``) is a self-contained ``run(item, config) -> dict``
-function that writes only through its Leash + the commit_ops micro-gate. The
-sub-agent runs on the *worker* model (role="worker"), concurrently with the
+function that writes only through its CapabilityBounds + the commit_ops micro-gate.
+The sub-agent runs on the *worker* model (role="worker"), concurrently with the
 Injector.
 
-``LeashedSubAgent`` itself is just the dispatch seam: it owns the worker config,
+``BoundedSubAgent`` itself is just the dispatch seam: it owns the worker config,
 catches capability errors so a single item never crashes the pool, and returns a
 status dict. Adding a behaviour means adding a capability module + one registry
 line — never editing this file.
@@ -29,11 +29,12 @@ def run_subagent_batch(
     config: Any = CONFIG,
     *,
     max_workers: int | None = None,
+    cancel_token: Any = None,
 ) -> dict[str, Any]:
     """Run a batch of WorkItems through leashed sub-agents in parallel.
 
     Used by the ad-hoc /dedup and /refine commands (out of the inject pipeline).
-    LeashedSubAgent is stateless beyond its config, so one instance is safely
+    BoundedSubAgent is stateless beyond its config, so one instance is safely
     shared across threads; commit_ops serialises same-note writes via path_lease.
     """
     from concurrent.futures import ThreadPoolExecutor
@@ -41,11 +42,20 @@ def run_subagent_batch(
     if not items:
         return {"items": 0, "summary": {}, "results": []}
 
+    if cancel_token is not None:
+        for it in items:
+            it.cancel_token = cancel_token
+
     mw = max(1, int(max_workers or getattr(config, "subagent_max_concurrent", 3)))
-    agent = LeashedSubAgent(config)
+    agent = BoundedSubAgent(config)
+
+    def _handle(it: WorkItem) -> tuple[WorkItem, dict]:
+        if cancel_token is not None and cancel_token.is_set():
+            return it, {"status": "cancelled", "reason": "cancel_token"}
+        return it, agent.handle(it)
 
     with ThreadPoolExecutor(max_workers=mw, thread_name_prefix="subagent") as ex:
-        paired = list(ex.map(lambda it: (it, agent.handle(it)), items))
+        paired = list(ex.map(_handle, items))
 
     summary: dict[str, int] = {}
     for _it, res in paired:
@@ -58,7 +68,7 @@ def run_subagent_batch(
     }
 
 
-class LeashedSubAgent:
+class BoundedSubAgent:
     """Dispatches a WorkItem to the capability registered under its kind."""
 
     def __init__(

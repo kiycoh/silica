@@ -2,7 +2,7 @@
 
 Given an incoming concept vs. an existing larger note, decide whether they are
 the same concept and, if so, append only the genuinely-new information into the
-existing note as a single ``patch`` under the dedup leash.
+existing note as a single ``patch`` under the dedup bounds.
 """
 from __future__ import annotations
 
@@ -13,7 +13,7 @@ from typing import Any
 from pydantic import BaseModel
 
 from silica.agent.commit import commit_ops
-from silica.agent.leash import dedup_leash
+from silica.agent.bounds import dedup_bounds
 from silica.kernel.ops import Op, OpType
 from silica.planner.workqueue import WorkItem
 from silica.capabilities._base import emit_feedback, load_prompt, read_or_skip
@@ -74,12 +74,12 @@ def run_dedup(item: WorkItem, config: Any) -> dict[str, Any]:
         hub=hub,
         reason=f"dedup merge: {decision.rationale[:120]}",
     )
-    leash = dedup_leash(candidate_path, hub=hub)
+    bounds = dedup_bounds(candidate_path, hub=hub)
     result = commit_ops(
         [op],
         target_dir=os.path.dirname(candidate_path),
         hub=hub,
-        leash=leash,
+        bounds=bounds,
     )
     result.setdefault("rationale", decision.rationale)
     return result

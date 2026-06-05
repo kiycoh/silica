@@ -2,7 +2,7 @@
 import json
 from unittest.mock import patch, MagicMock
 
-from silica.agent.subagent import run_subagent_batch, LeashedSubAgent
+from silica.agent.subagent import run_subagent_batch, BoundedSubAgent
 from silica.planner.workqueue import WorkItem
 
 
@@ -10,7 +10,7 @@ from silica.planner.workqueue import WorkItem
 
 def test_run_subagent_batch_aggregates_outcomes():
     items = [WorkItem(kind="dedup", target_path=f"N{i}.md") for i in range(4)]
-    with patch.object(LeashedSubAgent, "handle", lambda self, it: {"status": "committed"}):
+    with patch.object(BoundedSubAgent, "handle", lambda self, it: {"status": "committed"}):
         res = run_subagent_batch(items, max_workers=2)
     assert res["items"] == 4
     assert res["summary"] == {"committed": 4}

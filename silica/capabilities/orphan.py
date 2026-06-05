@@ -12,7 +12,7 @@ from typing import Any
 from pydantic import BaseModel
 
 from silica.agent.commit import commit_ops
-from silica.agent.leash import orphan_leash
+from silica.agent.bounds import orphan_bounds
 from silica.kernel.ops import Op, OpType
 from silica.planner.workqueue import WorkItem
 from silica.capabilities._base import emit_feedback, load_prompt, read_or_skip
@@ -63,8 +63,8 @@ def run_orphan(item: WorkItem, config: Any) -> dict[str, Any]:
         hub=hub,
         reason=f"orphan connect: {decision.rationale[:120]}",
     )
-    leash = orphan_leash(target, hub=hub)
-    result = commit_ops([op], target_dir=os.path.dirname(target), hub=hub, leash=leash)
+    bounds = orphan_bounds(target, hub=hub)
+    result = commit_ops([op], target_dir=os.path.dirname(target), hub=hub, bounds=bounds)
     result.setdefault("linked", valid)
     return result
 

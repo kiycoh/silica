@@ -1,12 +1,12 @@
 """commit_ops — the reusable validate→snapshot→write→lint micro-gate.
 
-Extracted from the RefinerFSM gate (refiner_fsm.py) so leashed sub-agents can
+Extracted from the RefinerFSM gate (refiner_fsm.py) so bounded sub-agents can
 commit their proposed ops through the *same* deterministic safety machinery the
 main pipeline uses: structural validation, an inverse-op snapshot, the bulk
 write, a lint gate, and automatic rollback on failure.
 
 Two guarantees layered on top for sub-agents:
-  * the Leash filters ops to the permitted envelope *before* anything is written;
+  * CapabilityBounds filters ops to the permitted envelope *before* anything is written;
   * every touched note is held under `path_lease` for the whole snapshot→write→lint
     window, so a concurrent writer (another sub-agent, or a lease-aware Injector
     write) cannot interleave on the same note.
@@ -40,35 +40,35 @@ def commit_ops(
     *,
     target_dir: str = "",
     hub: str | None = None,
-    leash: Any | None = None,
+    bounds: Any | None = None,
     read_note: Callable[[str], str] | None = None,
 ) -> dict[str, Any]:
     """Commit `ops` through leash → validate → snapshot → write → lint (+rollback).
 
     Returns a result dict with a `status` of:
       committed | rolled_back | no_ops | error
-    plus `committed` (count), `txn_id`, and `rejected_leash` (ops the leash dropped).
+    plus `committed` (count), `txn_id`, and `rejected_by_bounds` (ops the bounds dropped).
     """
     from silica.tools.composed import silica_validate_ops, silica_bulk_write, silica_lint
     from silica.tools.wrapped import silica_snapshot, silica_restore
     from silica.planner.workqueue import path_lease
 
-    rejected_leash: list[dict] = []
-    if leash is not None:
-        ops, rejected_leash = leash.enforce(ops, read_note=read_note)
+    rejected_by_bounds: list[dict] = []
+    if bounds is not None:
+        ops, rejected_by_bounds = bounds.enforce(ops, read_note=read_note)
 
     actionable = [o for o in ops if o.op != OpType.skip]
     if not actionable:
-        return {"status": "no_ops", "committed": 0, "rejected_leash": rejected_leash}
+        return {"status": "no_ops", "committed": 0, "rejected_by_bounds": rejected_by_bounds}
 
     ops_path = _write_ops_tmp(ops)
 
     # Validate (C4: overwrites ops_path with the validated, coerced ops).
     vres = silica_validate_ops(ops_path, payload_paths=[], target_dir=target_dir, hub=hub or "")
     if "error" in vres:
-        return {"status": "error", "error": vres["error"], "rejected_leash": rejected_leash}
+        return {"status": "error", "error": vres["error"], "rejected_by_bounds": rejected_by_bounds}
     if vres.get("validated_count", 0) == 0:
-        return {"status": "no_ops", "committed": 0, "rejected_leash": rejected_leash, "validate": vres}
+        return {"status": "no_ops", "committed": 0, "rejected_by_bounds": rejected_by_bounds, "validate": vres}
 
     touched = [
         (p, op.op.value if op.op else "", op.hub or "")
@@ -84,7 +84,7 @@ def commit_ops(
 
         sres = silica_snapshot(ops_path)
         if "error" in sres:
-            return {"status": "error", "error": sres["error"], "rejected_leash": rejected_leash}
+            return {"status": "error", "error": sres["error"], "rejected_by_bounds": rejected_by_bounds}
         txn_id = sres["txn_id"]
         inverses = sres.get("inverses", [])
 
@@ -95,7 +95,7 @@ def commit_ops(
                 logger.error("commit_ops rollback failed: %s", e)
                 reason["rollback_error"] = str(e)
             reason.update({"status": "rolled_back", "committed": 0, "txn_id": txn_id,
-                           "rejected_leash": rejected_leash})
+                           "rejected_by_bounds": rejected_by_bounds})
             return reason
 
         wres = silica_bulk_write(ops_path)
@@ -116,5 +116,5 @@ def commit_ops(
         "status": "committed",
         "committed": wres.get("successful", len(lease_paths)),
         "txn_id": txn_id,
-        "rejected_leash": rejected_leash,
+        "rejected_by_bounds": rejected_by_bounds,
     }

@@ -1,14 +1,14 @@
 """Tests for capability dispatch (silica/agent/subagent.py) and the per-capability
 behaviours (silica/capabilities/*).
 
-Dispatch is a keyed lookup: ``LeashedSubAgent.handle()`` selects the capability
+Dispatch is a keyed lookup: ``BoundedSubAgent.handle()`` selects the capability
 registered under ``item.kind`` and runs it. Each behaviour is a plain
 ``run(item, config) -> dict`` function in its own module, and its LLM-decision
 seam is a module-level function the tests patch directly.
 """
 from unittest.mock import patch, MagicMock
 
-from silica.agent.subagent import LeashedSubAgent
+from silica.agent.subagent import BoundedSubAgent
 from silica.capabilities.dedup import run_dedup, DedupDecision
 from silica.capabilities.refine import run_refine
 from silica.capabilities.enrich import run_enrich
@@ -31,14 +31,14 @@ def test_handle_dispatches_to_capability_by_kind():
         seen["called"] = item.kind
         return {"status": "ok"}
 
-    agent = LeashedSubAgent(CONFIG, capabilities={"mystery": fake_run})
+    agent = BoundedSubAgent(CONFIG, capabilities={"mystery": fake_run})
     res = agent.handle(WorkItem(kind="mystery", target_path="X.md"))
     assert res == {"status": "ok"}
     assert seen["called"] == "mystery"
 
 
 def test_handle_skips_unknown_kind():
-    agent = LeashedSubAgent(CONFIG, capabilities={})
+    agent = BoundedSubAgent(CONFIG, capabilities={})
     res = agent.handle(WorkItem(kind="nope", target_path="X.md"))
     assert res["status"] == "skipped"
 
@@ -47,7 +47,7 @@ def test_handle_catches_capability_errors():
     def boom(item, config):
         raise RuntimeError("kaboom")
 
-    agent = LeashedSubAgent(CONFIG, capabilities={"boom": boom})
+    agent = BoundedSubAgent(CONFIG, capabilities={"boom": boom})
     res = agent.handle(WorkItem(kind="boom", target_path="X.md"))
     assert res["status"] == "error"
     assert "kaboom" in res["error"]
@@ -89,9 +89,9 @@ def test_dedup_merge_builds_single_patch_under_leash():
     assert len(ops_arg) == 1
     assert ops_arg[0].op == OpType.patch
     assert ops_arg[0].path == "Concepts/Gradient Descent.md"
-    leash = commit.call_args.kwargs["leash"]
-    assert leash.name == "dedup"
-    assert OpType.patch in leash.allowed_ops and OpType.overwrite not in leash.allowed_ops
+    bounds = commit.call_args.kwargs["bounds"]
+    assert bounds.name == "dedup"
+    assert OpType.patch in bounds.allowed_ops and OpType.overwrite not in bounds.allowed_ops
 
 
 def test_dedup_no_merge_when_not_duplicate():
@@ -126,7 +126,7 @@ def _refine_item():
     return WorkItem(kind="refine", target_path="Notes/Target.md", context={"hub": "Concepts"})
 
 
-def test_refine_builds_overwrite_under_refiner_leash():
+def test_refine_builds_overwrite_under_refiner_bounds():
     refined = NoteContent(content="# Target\n\n> [!note]\nBody with [[Link]].")
     with patch("silica.driver.DRIVER.read_note", return_value=MagicMock(content="old body [[Link]]")), \
          patch("silica.capabilities.refine._refine_note", return_value=refined), \
@@ -135,9 +135,9 @@ def test_refine_builds_overwrite_under_refiner_leash():
     assert res["status"] == "committed"
     ops_arg = commit.call_args.args[0]
     assert ops_arg[0].op == OpType.overwrite
-    leash = commit.call_args.kwargs["leash"]
-    assert leash.name == "refiner"
-    assert leash.content_guard is not None  # anti-info-loss enforced
+    bounds = commit.call_args.kwargs["bounds"]
+    assert bounds.name == "refiner"
+    assert bounds.content_guard is not None  # anti-info-loss enforced
 
 
 def test_refine_skips_empty_note():
@@ -173,7 +173,7 @@ def test_orphan_links_only_to_offered_candidates():
     # Hallucinated target filtered out; only the offered candidate is linked.
     assert "[[Gradient Descent]]" in op.snippet
     assert "Made Up Note" not in op.snippet
-    assert commit.call_args.kwargs["leash"].name == "orphan"
+    assert commit.call_args.kwargs["bounds"].name == "orphan"
 
 
 def test_orphan_no_link_when_model_picks_nothing_valid():
@@ -194,7 +194,7 @@ def test_orphan_no_candidates():
 def test_orphan_hub_is_none_when_context_has_no_hub():
     """When context has no hub key, hub must be None (not basename of target_path)."""
     import silica.capabilities.orphan as orphan_module
-    from silica.agent.leash import orphan_leash as real_orphan_leash
+    from silica.agent.bounds import orphan_bounds as real_orphan_bounds
 
     item = WorkItem(
         kind="orphan",
@@ -205,11 +205,11 @@ def test_orphan_hub_is_none_when_context_has_no_hub():
 
     captured_hubs = []
 
-    def capture_orphan_leash(target, *, hub):
+    def capture_orphan_bounds(target, *, hub):
         captured_hubs.append(hub)
-        return real_orphan_leash(target, hub=hub)
+        return real_orphan_bounds(target, hub=hub)
 
-    with patch.object(orphan_module, "orphan_leash", side_effect=capture_orphan_leash), \
+    with patch.object(orphan_module, "orphan_bounds", side_effect=capture_orphan_bounds), \
          patch("silica.capabilities.orphan.commit_ops", return_value={"status": "no_ops"}), \
          patch("silica.capabilities.orphan._decide_links", return_value=OrphanLinkDecision(links=["Other"], rationale="test")), \
          patch("silica.driver.DRIVER.read_note", return_value=MagicMock(content="# MyNote\n")):

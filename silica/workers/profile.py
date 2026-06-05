@@ -1,7 +1,7 @@
 """Typed worker shapes and the PROFILES registry.
 
 A WorkerProfile is the typed shape of a worker: its permitted tool subset, its
-(optional) leash factory, its iteration cap, its system prompt, and a parser that
+(optional) bounds factory, its iteration cap, its system prompt, and a parser that
 turns the worker's final text + tool trace into a structured WorkerResult. The
 registry mirrors the CAPABILITIES pattern: production uses the global PROFILES;
 tests inject a fake dict.
@@ -16,7 +16,7 @@ from typing import Any, Callable
 class WorkerProfile:
     name: str
     tools: tuple[str, ...]
-    leash_factory: Callable[..., Any] | None  # None ⇒ read-only profile (Phase A)
+    bounds_factory: Callable[..., Any] | None  # None ⇒ read-only profile (Phase A)
     max_iterations: int
     system_prompt: str
     result_parser: Callable[[str, list[dict]], "WorkerResult"]

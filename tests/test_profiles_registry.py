@@ -21,7 +21,7 @@ def test_reader_and_router_registered():
 def test_profiles_are_read_only():
     for name in ("reader", "router"):
         p = PROFILES[name]
-        assert p.leash_factory is None
+        assert p.bounds_factory is None
         assert set(p.tools).issubset(READONLY_TOOLS), f"{name} exposes non-readonly tools"
 
 

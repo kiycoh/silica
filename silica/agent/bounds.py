@@ -1,20 +1,21 @@
-"""The Leash — a capability envelope that keeps a sub-agent on a tight rein.
+"""CapabilityBounds — execution bounds that constrain what a bounded sub-agent may write.
 
-A leashed sub-agent (dedup, refiner) is allowed to *write*, but only within a
+A bounded sub-agent (dedup, refiner) is allowed to *write*, but only within a
 strictly bounded envelope.  The framework — not the model — decides:
 
   * which op-types are permitted (`allowed_ops`),
   * which note paths it may touch (`target_predicate` + `forbidden_paths`),
   * that no information is lost on a rewrite (`content_guard`),
-  * how far it may explore before being reined in (`max_turns`, `timeout_s`,
+  * how far it may explore before being stopped (`max_turns`, `timeout_s`,
     `context_budget_chars`).
 
-`Leash.enforce()` runs BEFORE the writer: any op outside the envelope is dropped
-with a reason, so a small/eager model can never escalate beyond its leash.  The
-kept ops still flow through the normal validate→snapshot→write→lint micro-gate.
+`CapabilityBounds.enforce()` runs BEFORE the writer: any op outside the envelope
+is dropped with a reason, so a small/eager model can never escalate beyond its
+bounds.  The kept ops still flow through the normal validate→snapshot→write→lint
+micro-gate.
 
 Design note: enforcement is mechanical and deterministic.  The model only ever
-proposes; the leash disposes.
+proposes; the bounds dispose.
 """
 from __future__ import annotations
 
@@ -85,8 +86,8 @@ def make_link_addition_guard() -> Callable[[Op, str], str | None]:
 
 
 @dataclass(frozen=True)
-class Leash:
-    """A bounded capability envelope for a leashed sub-agent."""
+class CapabilityBounds:
+    """Execution bounds for a bounded sub-agent."""
 
     name: str
     allowed_ops: frozenset[OpType]
@@ -148,7 +149,7 @@ class Leash:
             if op.op not in self.allowed_ops:
                 rejected.append({
                     "op": op.model_dump(),
-                    "reason": f"op '{op.op.value}' not permitted by leash '{self.name}'",
+                    "reason": f"op '{op.op.value}' not permitted by bounds '{self.name}'",
                 })
                 continue
 
@@ -156,7 +157,7 @@ class Leash:
             if not self.allows_path(path):
                 rejected.append({
                     "op": op.model_dump(),
-                    "reason": f"target '{path}' outside leash '{self.name}'",
+                    "reason": f"target '{path}' outside bounds '{self.name}'",
                 })
                 continue
 
@@ -166,7 +167,7 @@ class Leash:
                 if reason is not None:
                     rejected.append({
                         "op": op.model_dump(),
-                        "reason": f"{reason} (leash '{self.name}')",
+                        "reason": f"{reason} (bounds '{self.name}')",
                     })
                     continue
 
@@ -192,11 +193,11 @@ class Leash:
 
 
 # ---------------------------------------------------------------------------
-# Presets — the two leashes used by the in-pipeline sub-agents.
+# Presets — the bounds instances used by the in-pipeline sub-agents.
 # ---------------------------------------------------------------------------
 
-def dedup_leash(larger_path: str, *, hub: str | None = None) -> Leash:
-    """Dedup envelope: append-only into the LARGER note of a borderline pair.
+def dedup_bounds(larger_path: str, *, hub: str | None = None) -> CapabilityBounds:
+    """Dedup bounds: append-only into the LARGER note of a borderline pair.
 
     The only permitted action is a `patch` against `larger_path`.  The model may
     never overwrite, delete, or create notes, and never touch the hub.  Which note
@@ -205,7 +206,7 @@ def dedup_leash(larger_path: str, *, hub: str | None = None) -> Leash:
     """
     larger_key = _norm_path(larger_path)
     forbidden = frozenset({hub} if hub else set())
-    return Leash(
+    return CapabilityBounds(
         name="dedup",
         allowed_ops=frozenset({OpType.patch}),
         target_predicate=lambda p: _norm_path(p) == larger_key,
@@ -213,20 +214,20 @@ def dedup_leash(larger_path: str, *, hub: str | None = None) -> Leash:
     )
 
 
-def refiner_leash(
+def refiner_bounds(
     target_path: str,
     *,
     hub: str | None = None,
     floor_ratio: float = 0.85,
-) -> Leash:
-    """Refiner envelope: stylistic overwrite of one note, with anti-info-loss.
+) -> CapabilityBounds:
+    """Refiner bounds: stylistic overwrite of one note, with anti-info-loss.
 
     Permits a single `overwrite` of `target_path` only if the rewrite preserves
     every wikilink and stays above `floor_ratio` of the original length.
     """
     target_key = _norm_path(target_path)
     forbidden = frozenset({hub} if hub else set())
-    return Leash(
+    return CapabilityBounds(
         name="refiner",
         allowed_ops=frozenset({OpType.overwrite}),
         target_predicate=lambda p: _norm_path(p) == target_key,
@@ -235,15 +236,15 @@ def refiner_leash(
     )
 
 
-def orphan_leash(orphan_path: str, *, hub: str | None = None) -> Leash:
-    """Connector envelope: append-only patch into the orphan note that ADDS a link.
+def orphan_bounds(orphan_path: str, *, hub: str | None = None) -> CapabilityBounds:
+    """Connector bounds: append-only patch into the orphan note that ADDS a link.
 
     Permits a single `patch` against `orphan_path` whose body introduces at least
     one wikilink (de-orphaning it).  Never overwrites, deletes, or creates.
     """
     orphan_key = _norm_path(orphan_path)
     forbidden = frozenset({hub} if hub else set())
-    return Leash(
+    return CapabilityBounds(
         name="orphan",
         allowed_ops=frozenset({OpType.patch}),
         target_predicate=lambda p: _norm_path(p) == orphan_key,

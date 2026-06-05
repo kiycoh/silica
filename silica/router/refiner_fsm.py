@@ -30,7 +30,7 @@ logger = logging.getLogger(__name__)
 class RefinerState(Enum):
     INIT = auto()
     TRIAGE = auto()
-    DELEGATE = auto()      # semantic enrichment worker
+    ENRICH = auto()        # semantic enrichment worker
     VALIDATE = auto()      # Gate: check rejection rate
     SNAPSHOT = auto()      # build inverses
     WRITE = auto()         # bulk write ops
@@ -46,13 +46,13 @@ class RefinerState(Enum):
 class RefinerFSM(BaseFSM[RefinerState]):
     """Deterministic state machine for the Refiner pipeline."""
 
-    def __init__(self, folder: str, hub_override: str | None = None):
+    def __init__(self, folder: str, hub: str | None = None):
         self.folder = folder
-        self.hub_override = hub_override
+        self.hub = hub
 
         self.state = RefinerState.INIT
         self.context: dict[str, Any] = {
-            "det_ops": [],
+            "mechanical_ops": [],
             "enrich_queue": [],
             "enrich_ops": [],
             "ops": [],
@@ -97,7 +97,7 @@ class RefinerFSM(BaseFSM[RefinerState]):
         self._rollback_state = RefinerState.ROLLBACK
         self._phase_to_state: dict[str, RefinerState] = {
             "triage":   RefinerState.TRIAGE,
-            "enrich":   RefinerState.DELEGATE,
+            "enrich":   RefinerState.ENRICH,
             "validate": RefinerState.VALIDATE,
             "snapshot": RefinerState.SNAPSHOT,
             "write":    RefinerState.WRITE,
@@ -110,7 +110,7 @@ class RefinerFSM(BaseFSM[RefinerState]):
 
         self._HANDLERS = {
             RefinerState.TRIAGE: self._handle_triage,
-            RefinerState.DELEGATE: self._handle_delegate,
+            RefinerState.ENRICH: self._handle_enrich,
             RefinerState.VALIDATE: self._handle_validate,
             RefinerState.SNAPSHOT: self._handle_snapshot,
             RefinerState.WRITE: self._handle_write,
@@ -123,7 +123,7 @@ class RefinerFSM(BaseFSM[RefinerState]):
 
         self._ON_ERROR = {
             RefinerState.TRIAGE: RefinerState.ERROR,
-            RefinerState.DELEGATE: RefinerState.ERROR,
+            RefinerState.ENRICH: RefinerState.ERROR,
             RefinerState.VALIDATE: RefinerState.ERROR,
             RefinerState.SNAPSHOT: RefinerState.ERROR,
             RefinerState.WRITE: RefinerState.ROLLBACK,
@@ -154,7 +154,7 @@ class RefinerFSM(BaseFSM[RefinerState]):
         import glob
         md_files = sorted(glob.glob(os.path.join(self.folder, "**", "*.md"), recursive=True))
         
-        det_ops = []
+        mechanical_ops = []
         enrich_queue = []
         summary: dict[str, Any] = {"total": len(md_files), "decouple": 0, "reformat": 0, "enrich": 0, "ok": 0, "errors": []}
         ledger = get_ledger()
@@ -212,7 +212,7 @@ class RefinerFSM(BaseFSM[RefinerState]):
                 # Generate Ops
                 if category == "decouple":
                     parent = os.path.dirname(path)
-                    hub = self.hub_override or os.path.splitext(basename)[0]
+                    hub = self.hub or os.path.splitext(basename)[0]
                     
                     preamble = body[:h2[0]["pos"]].strip()
                     if preamble:
@@ -236,7 +236,7 @@ class RefinerFSM(BaseFSM[RefinerState]):
                             hub=hub,
                             tags=[hub]
                         )
-                        det_ops.append({
+                        mechanical_ops.append({
                             "op": "write",
                             "path": spoke_path,
                             "heading": s["title"],
@@ -254,7 +254,7 @@ class RefinerFSM(BaseFSM[RefinerState]):
                     }
                     links = "\n".join(f"- [[{t}]]" for t in titles)
                     index_body = f"# {hub}\n\n" + (f"{preamble}\n\n" if preamble else "") + links + "\n"
-                    det_ops.append({
+                    mechanical_ops.append({
                         "op": "overwrite",
                         "path": path,
                         "heading": hub,
@@ -267,13 +267,13 @@ class RefinerFSM(BaseFSM[RefinerState]):
                     if data is not None:
                         norm = frontmatter.normalize_tags(data)
                         new_content = frontmatter.dump(norm, body)
-                        det_ops.append({
+                        mechanical_ops.append({
                             "op": "overwrite",
                             "path": path,
                             "heading": os.path.splitext(basename)[0],
                             "source_basename": basename,
                             "content": new_content,
-                            "hub": self.hub_override or os.path.splitext(basename)[0]
+                            "hub": self.hub or os.path.splitext(basename)[0]
                         })
 
                 elif category == "enrich":
@@ -281,13 +281,13 @@ class RefinerFSM(BaseFSM[RefinerState]):
                     if data is not None:
                         norm = frontmatter.normalize_tags(data)
                         new_content = frontmatter.dump(norm, body)
-                        det_ops.append({
+                        mechanical_ops.append({
                             "op": "overwrite",
                             "path": path,
                             "heading": os.path.splitext(basename)[0],
                             "source_basename": basename,
                             "content": new_content,
-                            "hub": self.hub_override or os.path.splitext(basename)[0]
+                            "hub": self.hub or os.path.splitext(basename)[0]
                         })
                     enrich_queue.append({
                         "path": path,
@@ -299,15 +299,15 @@ class RefinerFSM(BaseFSM[RefinerState]):
             except Exception as e:
                 summary["errors"].append({"path": path, "error": str(e)})
 
-        self.context["det_ops"] = det_ops
+        self.context["mechanical_ops"] = mechanical_ops
         self.context["enrich_queue"] = enrich_queue
         self.context["triage_summary"] = summary
         self._transition_success()
 
-    def _handle_delegate(self) -> None:
+    def _handle_enrich(self) -> None:
         queue = self.context["enrich_queue"]
         if not queue:
-            self.context["ops"] = self.context["det_ops"]
+            self.context["ops"] = self.context["mechanical_ops"]
             self._transition_success()
             return
 
@@ -319,7 +319,7 @@ class RefinerFSM(BaseFSM[RefinerState]):
         def enrich_one(task: dict) -> dict:
             path = task["path"]
             title = task["title"]
-            hub = self.hub_override or title
+            hub = self.hub or title
 
             try:
                 with open(path, "r", encoding="utf-8") as f:
@@ -377,13 +377,13 @@ class RefinerFSM(BaseFSM[RefinerState]):
                 "heading": os.path.splitext(os.path.basename(r["path"]))[0],
                 "source_basename": os.path.basename(r["path"]),
                 "content": r["content"],
-                "hub": self.hub_override or os.path.splitext(os.path.basename(r["path"]))[0]
+                "hub": self.hub or os.path.splitext(os.path.basename(r["path"]))[0]
             })
 
-        # Merge det_ops and enrich_ops
+        # Merge mechanical_ops and enrich_ops
         merged = []
         enrich_paths = {op["path"] for op in enrich_ops}
-        for op in self.context["det_ops"]:
+        for op in self.context["mechanical_ops"]:
             if op["path"] not in enrich_paths:
                 merged.append(op)
         merged.extend(enrich_ops)
