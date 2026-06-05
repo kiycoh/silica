@@ -197,6 +197,12 @@ class SilicaConfig:
         default_factory=lambda: float(os.getenv("SILICA_SIM_TITLE_THRESHOLD", "0.80"))
     )
 
+    # Language for the co-occurrence graph stemmer + stopwords (kernel/cooccurrence.py).
+    # Default English; "italian" and ~25 Snowball languages are supported.
+    cooccurrence_lang: str = field(
+        default_factory=lambda: os.getenv("SILICA_COOCCURRENCE_LANG", "english")
+    )
+
     # Salience gate (Phase 2.05): concept kept only if cosine(concept, doc_centroid) >= threshold
     sim_threshold_theme: float = field(
         default_factory=lambda: float(os.getenv("SILICA_SIM_THRESHOLD_THEME", "0.35"))

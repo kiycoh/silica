@@ -22,6 +22,7 @@ dependencies = [
   "orjson",
   "openai",
   "numpy>=2.4.6",
+  "snowballstemmer",
 ]
 
 [project.optional-dependencies]
