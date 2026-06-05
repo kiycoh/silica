@@ -63,8 +63,9 @@ class RefinerFSM(BaseFSM[RefinerState]):
 
         # Load the recipe
         from silica.router.recipe_parser import load_recipe
+        from silica.config import CONFIG
         try:
-            self._recipe = load_recipe("refiner")
+            self._recipe = load_recipe("refiner", domain=getattr(CONFIG, "domain", None))
         except Exception as e:
             logger.warning("Failed to load recipe 'refiner', using defaults: %s", e)
             self._recipe = {}

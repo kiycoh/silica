@@ -224,7 +224,7 @@ class InjectorFSM(BaseFSM[InjectorState]):
         # S3.3: Load the recipe for dynamic configuration
         from silica.router.recipe_parser import load_recipe
         try:
-            self._recipe = load_recipe("injector")
+            self._recipe = load_recipe("injector", domain=getattr(CONFIG, "domain", None))
         except Exception as e:
             logger.warning("Failed to load recipe 'injector', using defaults: %s", e)
             self._recipe = {}
