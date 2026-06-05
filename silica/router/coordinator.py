@@ -116,19 +116,28 @@ class Coordinator:
             return set()
 
     def _orphan_candidates(self, path: str, k: int = 3) -> list[dict]:
-        """Nearest semantic neighbours of an orphan note (existing notes only)."""
+        """Related notes for an orphan, via the relatedness facade.
+
+        Fuses embeddings + co-occurrence (RRF): pure candidate generation, no
+        cosine thresholding, so the facade is a clean drop-in. Still produces
+        link targets when the embedding index is empty — the co-occurrence leg
+        carries the routing on its own.
+        """
         from silica.agent.bounds import _norm_path
         try:
+            from silica.config import CONFIG
+            from silica.kernel.cooccurrence import CooccurStore
             from silica.kernel.embed import EmbedStore
-            store = EmbedStore()
+            from silica.kernel.relatedness import related_notes
+
             key = _norm_path(path)
-            vec = store.get_vec(key)
-            if not vec:
-                return []
-            return [
-                {"name": m.get("name", m.get("path", "")), "path": m.get("path", "")}
-                for m in store.cosine_top_k(vec, k=k, exclude={key})
-            ]
+            results = related_notes(
+                key,
+                embed_store=EmbedStore(),
+                cooccur_store=CooccurStore(lang=CONFIG.cooccurrence_lang),
+                k=k,
+            )
+            return [{"name": r.name, "path": r.path} for r in results]
         except Exception as e:
             logger.debug("orphan candidate lookup failed (non-fatal): %s", e)
             return []

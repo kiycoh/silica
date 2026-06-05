@@ -67,6 +67,28 @@ class DuplicatePair:        # PROPOSED — borderline duplicates
     score: float
 
 
+# --- Co-occurrence vs wikilink delta (PROPOSED, embedder-free) -------------
+
+@dataclass
+class AutolinkCandidate:    # co-occurrence − wikilink: related in text, unlinked
+    source: str
+    target: str
+    weight: float          # co-occurrence relatedness weight (higher = stronger)
+    shared: list[str]      # directly shared concept labels (evidence)
+
+
+@dataclass
+class StaleLink:           # wikilink − co-occurrence: linked, no textual co-presence
+    source: str
+    target: str
+
+
+@dataclass
+class MissingHub:          # central concept in the discourse with no hub note
+    concept: str           # surface label of the concept
+    centrality: float      # weighted degree in the co-occurrence graph
+
+
 @dataclass
 class VaultReport:
     generated_at: str
@@ -79,6 +101,9 @@ class VaultReport:
     clusters: list[ClusterStat]
     missing_links: list[MissingLink] = field(default_factory=list)
     duplicate_pairs: list[DuplicatePair] = field(default_factory=list)
+    autolink_candidates: list[AutolinkCandidate] = field(default_factory=list)
+    stale_links: list[StaleLink] = field(default_factory=list)
+    missing_hubs: list[MissingHub] = field(default_factory=list)
     lean_notes: list[str] = field(default_factory=list)
     reformat_notes: list[str] = field(default_factory=list)
     pagerank_map: dict[str, float] = field(default_factory=dict)  # all nodes: vault-relative path (no .md) → pagerank
@@ -93,7 +118,9 @@ def compute_report(
     *,
     top_k: int = 10,
     with_embeddings: bool = False,
+    with_cooccurrence: bool = False,
     _nodes_edges_override: tuple[list[dict], list[dict]] | None = None,
+    _cooccur_store_override: Any | None = None,
 ) -> VaultReport:
     """Build a VaultReport from the driver's wikilink graph.
 
@@ -293,12 +320,24 @@ def compute_report(
         report.missing_links = _compute_missing_links(report, G_und, tau=0.82, k=top_k)
         report.duplicate_pairs = _compute_duplicate_pairs(report)
 
+    if with_cooccurrence:
+        autolinks, stale, hubs = _compute_cooccur_delta(
+            report, G_und, node_label,
+            cooccur_store=_cooccur_store_override, k=top_k,
+        )
+        report.autolink_candidates = autolinks
+        report.stale_links = stale
+        report.missing_hubs = hubs
+
     totals = {
         "notes": len(real_ids),
         "links": n_links,
         "dangling_links": len(dangling),
         "missing_links": len(report.missing_links),
         "duplicate_pairs": len(report.duplicate_pairs),
+        "autolink_candidates": len(report.autolink_candidates),
+        "stale_links": len(report.stale_links),
+        "missing_hubs": len(report.missing_hubs),
         "lean_notes": len(lean_notes),
         "reformat_notes": len(reformat_notes),
         "orphans": len(orphans),
@@ -442,6 +481,102 @@ def _compute_duplicate_pairs(report: VaultReport) -> list[DuplicatePair]:
     return results
 
 
+def _compute_cooccur_delta(
+    report: VaultReport,
+    G_und: Any,
+    node_label: dict[str, str],
+    *,
+    cooccur_store: Any | None = None,
+    k: int = 10,
+) -> tuple[list[AutolinkCandidate], list[StaleLink], list[MissingHub]]:
+    """Delta between the co-occurrence graph and the wikilink graph.
+
+    Three PROPOSED, embedder-free signals (no network, pure local compute):
+
+      - AUTOLINK  (co-occurrence − wikilink): note pairs the author co-mentions
+        in text but never wikilinked, more than 2 hops apart.
+      - STALE     (wikilink − co-occurrence): wikilinked pairs whose notes share
+        no concepts in text — a structural link without textual co-presence.
+      - MISSING HUB (centrality − hub): a concept central in the discourse for
+        which no note is titled — the next hub note to create.
+
+    `cooccur_store` is injectable for testing; loaded from disk when None.
+    Returns empty lists when the index is empty (best-effort, never raises).
+    """
+    import networkx as nx
+    from silica.kernel.cooccurrence import CooccurStore, tokenize
+    from silica.kernel.relatedness import _cooccur_ranking
+
+    try:
+        store = cooccur_store if cooccur_store is not None else CooccurStore()
+    except Exception as exc:
+        logger.debug("graph_report: co-occurrence index unavailable (%s)", exc)
+        return [], [], []
+    if len(store) == 0:
+        return [], [], []
+
+    scope = report.scope or None
+
+    def _shared_labels(a: str, b: str) -> list[str]:
+        na, nb = store.note_nodes(a), store.note_nodes(b)
+        return sorted(store.node_label(s) for s in (set(na) & set(nb)))
+
+    # --- AUTOLINK: co-occurrence-related but not wikilinked (and >2 hops) ----
+    autolinks: list[AutolinkCandidate] = []
+    seen: set[tuple[str, str]] = set()
+    for nid in store.paths():
+        if nid not in G_und:
+            continue
+        ranking = _cooccur_ranking(store, nid, k=k, exclude=set(), scope=scope, expand=True)
+        for tgt, weight in ranking or []:
+            if tgt not in G_und:
+                continue
+            try:
+                if nx.shortest_path_length(G_und, nid, tgt) <= 2:
+                    continue  # already linked or trivially close
+            except Exception:
+                pass  # no path -> genuinely disconnected -> a valid candidate
+            key = (min(nid, tgt), max(nid, tgt))
+            if key in seen:
+                continue
+            seen.add(key)
+            autolinks.append(AutolinkCandidate(
+                source=key[0], target=key[1],
+                weight=round(float(weight), 2),
+                shared=_shared_labels(nid, tgt),
+            ))
+    autolinks.sort(key=lambda a: (-a.weight, a.source, a.target))
+    autolinks = autolinks[:k]
+
+    # --- STALE: wikilinked but the two notes share no concepts --------------
+    stale: list[StaleLink] = []
+    for u, v in G_und.edges():
+        if not store.note_nodes(u) or not store.note_nodes(v):
+            continue  # a note with no concepts can't be assessed -> don't flag
+        if not _shared_labels(u, v):
+            stale.append(StaleLink(source=min(u, v), target=max(u, v)))
+    stale.sort(key=lambda s: (s.source, s.target))
+    stale = stale[:k]
+
+    # --- MISSING HUB: central concept with no note titled after it ----------
+    Gc = store.to_networkx(scope=scope)
+    titled_stems: set[str] = set()
+    for label in node_label.values():
+        for sentence in tokenize(label, lang=store.lang):
+            titled_stems.update(stem for stem, _surface in sentence)
+
+    hubs: list[MissingHub] = []
+    for stem in Gc.nodes():
+        if stem in titled_stems:
+            continue  # a hub note already formalises this concept
+        wdeg = sum(d.get("weight", 0.0) for _u, _v, d in Gc.edges(stem, data=True))
+        hubs.append(MissingHub(concept=store.node_label(stem), centrality=round(wdeg, 2)))
+    hubs.sort(key=lambda h: (-h.centrality, h.concept))
+    hubs = hubs[:k]
+
+    return autolinks, stale, hubs
+
+
 # ---------------------------------------------------------------------------
 # Output functions
 # ---------------------------------------------------------------------------
@@ -546,6 +681,30 @@ def to_markdown(r: VaultReport, title: str = "Silica Vault Report") -> str:
         lines.append(f"\n### Borderline Duplicates ({len(r.duplicate_pairs)})")
         for dp in r.duplicate_pairs:
             lines.append(f"- [[{dp.source}]] vs [[{dp.target}]] (score: {dp.score:.3f})")
+
+    # Co-occurrence delta (proposed, embedder-free)
+    def _short(p: str) -> str:
+        return p.rsplit("/", 1)[-1].removesuffix(".md")
+
+    if r.autolink_candidates:
+        lines.append("\n## Autolink Candidates _(co-occurrence − wikilink — not authoritative)_")
+        lines.append("| Source | Target | Weight | Shared Concepts |")
+        lines.append("|---|---|---|---|")
+        for a in r.autolink_candidates:
+            shared = ", ".join(a.shared) if a.shared else "_(associative)_"
+            lines.append(f"| [[{_short(a.source)}]] | [[{_short(a.target)}]] | {a.weight} | {shared} |")
+
+    if r.stale_links:
+        lines.append("\n## Stale Links _(wikilink − co-occurrence — review)_")
+        for s in r.stale_links:
+            lines.append(f"- [[{_short(s.source)}]] ↔ [[{_short(s.target)}]] _(linked, no shared concepts)_")
+
+    if r.missing_hubs:
+        lines.append("\n## Missing Hubs _(central concepts with no hub note)_")
+        lines.append("| Concept | Centrality |")
+        lines.append("|---|---|")
+        for h in r.missing_hubs:
+            lines.append(f"| {h.concept} | {h.centrality} |")
 
     if r.lean_notes:
         lines.append(f"\n### Lean Notes (Enrichment Candidates) ({len(r.lean_notes)})")

@@ -23,7 +23,7 @@ import os
 import re
 import time
 from enum import Enum, auto
-from typing import Any, TYPE_CHECKING
+from typing import Any, Callable, TYPE_CHECKING
 
 if TYPE_CHECKING:
     from silica.driver.base import Txn, GraphSnapshot
@@ -44,6 +44,52 @@ from silica.kernel.paths import to_vault_relative
 from silica.router.base_fsm import BaseFSM
 
 logger = logging.getLogger(__name__)
+
+
+def _refresh_cooccurrence_for_ops(
+    ops: list,
+    committed_paths: set,
+    *,
+    read_body: Callable[[str], str],
+    lang: str = "english",
+    store: Any | None = None,
+) -> int:
+    """Refresh the embedder-free co-occurrence index for committed write/patch ops.
+
+    The freshness twin of the embedding refresh, but the STABLE leg: it imports
+    only the cooccurrence module (never the embedder/provider stack), so the
+    index stays fresh even when LM Studio is down. Uses build_index(force=True)
+    so a note's prior contribution is replaced, never inflated, with a single
+    save. Best-effort: a per-note read failure is skipped and the whole call
+    never raises. Returns the number of notes refreshed.
+    """
+    from silica.kernel.cooccurrence import build_index as _cooccur_build
+
+    notes: list[tuple[str, str, str]] = []
+    seen: set[str] = set()
+    for op in ops:
+        path = op.touched_ref()
+        if op.op not in (OpType.write, OpType.patch) or not path:
+            continue
+        if path not in committed_paths or path in seen:
+            continue
+        seen.add(path)
+        stem = os.path.splitext(os.path.basename(path))[0]
+        idx_path = path.removesuffix(".md")
+        try:
+            body = read_body(path) or ""
+        except Exception:
+            continue
+        notes.append((idx_path, stem, body))
+
+    if not notes:
+        return 0
+    try:
+        _cooccur_build(notes, store=store, lang=lang, force=True)
+    except Exception as exc:
+        logger.debug("WRITE: cooccur refresh skipped (%s)", exc)
+        return 0
+    return len(notes)
 
 
 def _inject_graph_ctx(chunk: dict, vault_ctx: dict) -> dict:
@@ -1593,6 +1639,16 @@ class InjectorFSM(BaseFSM[InjectorState]):
                         logger.debug("WRITE: embed refresh failed for '%s': %s", path, _re)
             except Exception as _ee:
                 logger.debug("WRITE: embed refresh skipped (%s)", _ee)
+
+            # Best-effort incremental co-occurrence refresh — the STABLE leg.
+            # Separate from the embed block above so it stays fresh even when the
+            # embedder is down (no network, pure local compute).
+            _refresh_cooccurrence_for_ops(
+                ops,
+                committed_paths,
+                read_body=lambda p: DRIVER.read_note(p).content or "",
+                lang=CONFIG.cooccurrence_lang,
+            )
         except Exception as _me:
             logger.debug("WRITE: manifest update failed (non-fatal): %s", _me)
 

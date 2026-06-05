@@ -52,13 +52,20 @@ def build_substrate(
         from silica.driver import DRIVER
         from silica.driver.base import NoteRef
 
+        from silica.kernel.cooccurrence import CooccurStore
+        from silica.kernel.relatedness import related_notes_for_query
+
         store = EmbedStore()
-        if len(store) == 0:
-            return None
 
-        embedder = get_embedder(CONFIG)
+        # Embedder is OPTIONAL now: if it is down, the embed leg abstains and the
+        # deterministic co-occurrence leg carries the substrate on its own.
+        embedder = None
+        try:
+            embedder = get_embedder(CONFIG)
+        except Exception as _emb_e:
+            logger.debug("build_substrate: embedder unavailable (%s) — co-occurrence only", _emb_e)
 
-        # Collect concept texts (name + excerpt) from the chunk for query embedding
+        # Collect concept texts (name + excerpt) from the chunk
         texts: list[str] = []
         for batch in chunk.get("batches", []):
             for c in batch.get("concepts", []):
@@ -71,49 +78,67 @@ def build_substrate(
         if not texts:
             return None
 
-        vecs = embedder.embed(texts[:8])
-        if not vecs:
-            return None
-
-        # Centroid of chunk concepts as the query vector
-        dim = len(vecs[0])
-        query_vec = [sum(v[i] for v in vecs) / len(vecs) for i in range(dim)]
+        # Embed-leg query vector: centroid of chunk concepts (None when the
+        # embedder is down or the index is empty — the leg then abstains).
+        query_vec = None
+        if embedder is not None and len(store) > 0:
+            try:
+                vecs = embedder.embed(texts[:8])
+                if vecs:
+                    dim = len(vecs[0])
+                    query_vec = [sum(v[i] for v in vecs) / len(vecs) for i in range(dim)]
+            except Exception as _ee:
+                logger.debug("build_substrate: query embed failed (%s)", _ee)
 
         # Build exclusion set: manifest titles + caller-supplied excludes
         exclude_lower: set[str] = {t.lower() for t in manifest_titles}
         if exclude:
             exclude_lower.update(s.lower() for s in exclude)
 
-        results = store.cosine_top_k(query_vec, k=k)
-        if not results:
+        cooccur_store = CooccurStore(lang=CONFIG.cooccurrence_lang)
+        if len(cooccur_store) == 0:
+            cooccur_store = None
+
+        related = related_notes_for_query(
+            query_vec=query_vec,
+            query_text="\n".join(texts[:8]),
+            embed_store=store,
+            cooccur_store=cooccur_store,
+            k=k,
+        )
+        if not related:
             return None
 
         manifest_lower = {t.lower() for t in manifest_titles}
 
         lines: list[str] = []
-        for r in results:
-            score = r.get("score", 0.0)
-            if score < tau:
+        for r in related:
+            # The cosine threshold gates only the embedding leg; pure
+            # co-occurrence candidates are a different signal and pass through.
+            if r.embed_score is not None and r.embed_score < tau:
                 continue
-            name = r.get("name", "")
-            path = r.get("path", "")
+            name = r.name
+            path = r.path
             if not name or name.lower() in exclude_lower:
                 continue
 
-            # Graph-far flag: semantically close but not already adjacent to run notes.
+            # Graph-far flag: related but not already adjacent to run notes.
             # Light check (1-hop links of this candidate) — best-effort.
             graph_far = False
             try:
                 path_with_ext = path + ".md" if not path.endswith(".md") else path
                 ref = NoteRef(name=name, path=path_with_ext)
                 neighbour_names = {lr.name.lower() for lr in DRIVER.links(ref)}
-                # graph-far = this candidate doesn't directly link to any run note
                 graph_far = not neighbour_names.intersection(manifest_lower)
             except Exception:
                 pass
 
+            if r.embed_score is not None:
+                score_label = f"score={r.embed_score:.3f}"
+            else:
+                score_label = f"cooccur~w{int(round(r.cooccur_weight or 0))}"
             flag = " [graph-far]" if graph_far else ""
-            lines.append(f"- [[{name}]] (score={score:.3f}){flag}")
+            lines.append(f"- [[{name}]] ({score_label}){flag}")
 
         # Append forward-reference hints: parent notes cleared by validate because
         # they don't exist yet.  High probability of appearing in future injections —
