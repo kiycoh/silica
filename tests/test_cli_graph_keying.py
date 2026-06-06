@@ -2,7 +2,7 @@
 
 Written BEFORE the implementation. All tests should be RED until cli_backend.py
 incremental snapshot is refactored.
-C1.1 (bulk resolvedLinks read via Obsidian) is scaffolded as xfail pending Spike S1.
+C1.1 (bulk resolvedLinks read via Obsidian eval/CDP) is implemented as Spike S1.
 """
 from __future__ import annotations
 
@@ -10,6 +10,7 @@ from pathlib import Path
 from unittest.mock import MagicMock, patch
 
 import pytest
+import networkx as nx
 
 from silica.driver.base import GraphSnapshot, NoteRef, Link
 
@@ -222,17 +223,49 @@ def test_graph_gate_verdict_unchanged_post_refactor(tmp_path):
 
 
 # ---------------------------------------------------------------------------
-# C1.1 — Bulk read from resolvedLinks (Spike S1 — deferred, xfail)
+# C1.1 — Bulk read from resolvedLinks (Spike S1 — implemented)
 # ---------------------------------------------------------------------------
 
-@pytest.mark.xfail(reason="Spike S1 pending: bulk resolvedLinks read via CDP not yet implemented")
 def test_cli_graph_reads_resolved_links(tmp_path):
-    """_load_graph_from_obsidian() reads resolvedLinks in bulk from Obsidian metadataCache."""
+    """_load_graph_from_obsidian() reads resolvedLinks in bulk via a single CDP eval."""
     from silica.driver.cli_backend import ObsidianCLIBackend
+    import json
 
     backend = ObsidianCLIBackend.__new__(ObsidianCLIBackend)
     backend.vault_path = tmp_path
+    backend._vault_name = ""
 
-    # This should call the CDP bridge to get resolvedLinks without per-note queries
-    result = backend._load_graph_from_obsidian()
+    # Seed two notes so the graph-population logic has paths to match
+    ref_a = _make_ref("Concepts/Alpha.md")
+    ref_b = _make_ref("Concepts/Beta.md")
+    backend._graph = nx.DiGraph()
+    backend._graph.add_node("Concepts/Alpha.md", ref=ref_a)
+    backend._graph.add_node("Concepts/Beta.md", ref=ref_b)
+    backend._notes = {
+        "Concepts/Alpha.md": ref_a,
+        "Concepts/Beta.md": ref_b,
+    }
+    backend._unresolved_links = set()
+    backend._mention_index = {}
+
+    # Mock the CLI eval to return metadataCache-shaped JSON
+    fake_metadata = {
+        "resolved": {
+            "Concepts/Alpha.md": {"Concepts/Beta.md": 1},
+        },
+        "unresolved": {
+            "Concepts/Alpha.md": {"GhostNote": 1},
+        },
+    }
+    with patch.object(backend, "_run_cli", return_value=json.dumps(fake_metadata)):
+        result = backend._load_graph_from_obsidian()
+
     assert result is not None, "_load_graph_from_obsidian must return a non-None graph"
+    # Resolved edge was added
+    assert backend._graph.has_edge("Concepts/Alpha.md", "Concepts/Beta.md"), (
+        "Expected resolved edge Alpha→Beta in graph"
+    )
+    # Unresolved link was recorded
+    assert ("Concepts/Alpha.md", "GhostNote") in backend._unresolved_links, (
+        "Expected unresolved link Alpha→GhostNote"
+    )

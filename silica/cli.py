@@ -6,6 +6,7 @@ From SILICA.md §8.4:
 """
 from __future__ import annotations
 
+import json
 import logging
 import sys
 
@@ -14,8 +15,8 @@ from rich.markdown import Markdown
 from silica.agent.loop import run_agent
 from silica.config import CONFIG
 from silica.prompts import SYSTEM_PROMPT
-from silica.ui.banner import print_banner
 from silica.ui.console import CONSOLE
+from silica.ui.home import print_home
 from silica.ui.prompt import build_session, bottom_toolbar, prompt_text
 
 # Import tools to trigger registration via @tool decorator
@@ -26,34 +27,407 @@ import silica.tools.wrapped  # noqa: F401
 logger = logging.getLogger(__name__)
 
 
+def _update_context_tokens(messages: list[dict]) -> None:
+    try:
+        import litellm
+        CONFIG.context_tokens = litellm.token_counter(model=CONFIG.model, messages=messages)
+    except Exception:
+        CONFIG.context_tokens = sum(len(m.get("content") or "") for m in messages) // 4
+
+
 def _setup_logging(debug: bool = False) -> None:
     """Configure logging for the CLI session."""
+    import threading
     CONFIG.debug_logging = debug
     level = logging.DEBUG if debug else logging.WARNING
-    
-    # Reset existing handlers to configure cleanly
+
     root = logging.getLogger()
     for h in root.handlers[:]:
         root.removeHandler(h)
 
-    handler = logging.StreamHandler(sys.stderr)
+    handler: logging.Handler
     if debug:
+        from rich.logging import RichHandler
         from silica.ui.logging import HumanFriendlyFormatter
-        formatter = HumanFriendlyFormatter()
-    else:
-        formatter = logging.Formatter(
+        handler = RichHandler(
+            console=CONSOLE,
+            markup=True,
+            show_path=False,
+            show_level=False,
+            show_time=False,
+        )
+        handler.setFormatter(HumanFriendlyFormatter())
+        # Rich's Live display is driven from the main thread; worker threads logging
+        # through RichHandler concurrently corrupt the terminal render state.
+        # Restrict RichHandler to the main thread only.
+        main_thread = threading.main_thread()
+        handler.addFilter(lambda r: threading.current_thread() is main_thread)
+
+        # Worker-thread records get a plain stderr fallback so they aren't silently dropped.
+        bg_handler = logging.StreamHandler(sys.stderr)
+        bg_handler.setFormatter(logging.Formatter(
             fmt="%(asctime)s [%(name)s] %(levelname)s: %(message)s",
             datefmt="%H:%M:%S",
+        ))
+        bg_handler.addFilter(lambda r: threading.current_thread() is not main_thread)
+        root.addHandler(bg_handler)
+    else:
+        handler = logging.StreamHandler(sys.stderr)
+        handler.setFormatter(
+            logging.Formatter(
+                fmt="%(asctime)s [%(name)s] %(levelname)s: %(message)s",
+                datefmt="%H:%M:%S",
+            )
         )
-    handler.setFormatter(formatter)
     root.addHandler(handler)
     root.setLevel(level)
 
-    # LiteLLM/httpx/openai are always silenced — their DEBUG is raw HTTP/request dumps
+    # LiteLLM/httpx/openai/httpcore are always silenced — their DEBUG is raw HTTP/request dumps
     logging.getLogger("httpx").setLevel(logging.WARNING)
+    logging.getLogger("httpcore").setLevel(logging.WARNING)
     logging.getLogger("litellm").setLevel(logging.WARNING)
     logging.getLogger("LiteLLM").setLevel(logging.ERROR)
     logging.getLogger("openai").setLevel(logging.WARNING)
+    logging.getLogger("markdown_it").setLevel(logging.WARNING)
+
+
+def _handle_direct_shortcut(raw_input: str, messages: list[dict]) -> bool:
+    """Execute read-only commands directly without an LLM round-trip.
+
+    Operates on the raw (case-preserved) input so that query strings and file
+    paths reach the tool with their original casing intact.  Returns True if
+    the command was handled, False to fall through to the normal dispatch.
+
+    Handled commands (immediate, synchronous):
+        /status [run_id]
+        /embed [folder] [--force]
+        /cooccur [folder] [--force]
+        /graph [output.html] [folder]
+        /find <query> [--k=N]
+        /undo [note-path]
+    """
+    from silica.tools import TOOLS
+
+    parts = raw_input.strip().split()
+    if not parts:
+        return False
+    cmd = parts[0].lower()
+
+    if cmd == "/status":
+        run_id = parts[1] if len(parts) > 1 else ""
+        result = TOOLS["silica_ledger_digest"].run(run_id=run_id)
+        try:
+            parsed = json.loads(result)
+            digest = parsed.get("digest", result)
+            CONSOLE.print(Markdown(str(digest)))
+        except Exception:
+            CONSOLE.print(result)
+        return True
+
+    if cmd == "/embed":
+        folder = ""
+        force = False
+        for part in parts[1:]:
+            if part == "--force":
+                force = True
+            elif part.startswith("--folder="):
+                folder = part[len("--folder="):]
+            elif not part.startswith("-"):
+                folder = part
+        result = TOOLS["silica_embed_refresh"].run(folder=folder, force=force)
+        try:
+            parsed = json.loads(result)
+            if "error" in parsed:
+                CONSOLE.print(f"  [red]Error:[/] {parsed['error']}")
+            else:
+                CONSOLE.print(f"  Indexed: [bold]{parsed.get('indexed', '?')}[/] / {parsed.get('total_notes', '?')} notes")
+            if parsed.get("read_errors"):
+                CONSOLE.print(f"  [yellow]Read errors:[/] {parsed['read_errors']}")
+        except Exception:
+            CONSOLE.print(result)
+        return True
+
+    if cmd == "/cooccur":
+        folder = ""
+        force = False
+        for part in parts[1:]:
+            if part == "--force":
+                force = True
+            elif part.startswith("--folder="):
+                folder = part[len("--folder="):]
+            elif not part.startswith("-"):
+                folder = part
+        result = TOOLS["silica_cooccurrence_refresh"].run(folder=folder, force=force)
+        try:
+            parsed = json.loads(result)
+            if "error" in parsed:
+                CONSOLE.print(f"  [red]Error:[/] {parsed['error']}")
+            else:
+                CONSOLE.print(f"  Indexed: [bold]{parsed.get('indexed', '?')}[/] / {parsed.get('total_notes', '?')} notes (co-occurrence)")
+            if parsed.get("read_errors"):
+                CONSOLE.print(f"  [yellow]Read errors:[/] {parsed['read_errors']}")
+        except Exception:
+            CONSOLE.print(result)
+        return True
+
+    if cmd == "/graph":
+        output_path = "graph.html"
+        folder = ""
+        positional = [p for p in parts[1:] if not p.startswith("-")]
+        if positional:
+            output_path = positional[0]
+        if len(positional) > 1:
+            folder = positional[1]
+        result = TOOLS["silica_graph_export"].run(output_path=output_path, folder=folder)
+        try:
+            parsed = json.loads(result)
+            CONSOLE.print(f"  Graph written to: [bold]{parsed.get('output_path', output_path)}[/]")
+        except Exception:
+            CONSOLE.print(result)
+        return True
+
+    if cmd == "/find":
+        k = 5
+        tokens: list[str] = []
+        for part in parts[1:]:
+            if part.startswith("--k="):
+                try:
+                    k = int(part[4:])
+                except ValueError:
+                    pass
+            else:
+                tokens.append(part)  # preserve original case
+        query = " ".join(tokens)
+        if not query:
+            CONSOLE.print("  Usage: /find <query> [--k=N]")
+            return True
+        result = TOOLS["silica_semantic_search"].run(query=query, k=k)
+        try:
+            parsed = json.loads(result)
+            results = parsed.get("results", [])
+            if results:
+                CONSOLE.print(f"  Results for [bold]{query}[/] (top {len(results)}):")
+                for r in results:
+                    score = r.get("score", 0.0)
+                    path = r.get("path", r.get("name", "?"))
+                    CONSOLE.print(f"    [{score:.3f}] {path}")
+            elif "error" in parsed:
+                CONSOLE.print(f"  [yellow]{parsed['error']}[/]")
+            else:
+                CONSOLE.print(f"  No results for '{query}'.")
+        except Exception:
+            CONSOLE.print(result)
+        return True
+
+    if cmd == "/undo":
+        from silica.driver import DRIVER
+        from silica.kernel.checkpoints import get_checkpoint_store
+
+        store = get_checkpoint_store()
+        note_path = parts[1] if len(parts) > 1 else store.most_recent_path()
+        if not note_path:
+            CONSOLE.print("  Nothing to undo — no patches recorded in this session.")
+            return True
+
+        content = store.undo(note_path)
+        if content is None:
+            CONSOLE.print(f"  [yellow]Nothing to undo for[/] {note_path} (already at original).")
+            return True
+
+        try:
+            DRIVER.overwrite(note_path, content)
+            depth = store.depth(note_path)
+            remaining = max(0, depth - 1)
+            CONSOLE.print(f"  Undone: [bold]{note_path}[/]  [dim]({remaining} undo step(s) remaining)[/]")
+        except Exception as exc:
+            CONSOLE.print(f"  [red]Undo failed:[/] {exc}")
+        return True
+
+    if cmd == "/revert":
+        from silica.kernel.undo_journal import get_undo_journal, revert_run
+        parts_split = raw_input.strip().split(maxsplit=1)
+        run_id = parts_split[1].strip() if len(parts_split) > 1 else get_undo_journal().last_active_run()
+        if not run_id:
+            CONSOLE.print("  Niente da annullare: nessuna iniezione registrata.")
+            return True
+        res = revert_run(run_id)
+        CONSOLE.print(
+            f"  Revert {run_id[:8]}…: {len(res['reverted'])} ripristinate, "
+            f"{len(res['skipped'])} saltate (modificate), {len(res['errors'])} errori."
+        )
+        return True
+
+    if cmd == "/dedup":
+        positional = [p for p in parts[1:] if not p.startswith("-")]
+        folder = " ".join(positional)
+        tool_name = "silica_dedup"
+        label = "Dedup"
+        CONSOLE.print(f"  {label} on [bold]{folder or '(vault)'}[/] — sub-agents on the worker model…")
+        result = TOOLS[tool_name].run(folder=folder)
+        try:
+            parsed = json.loads(result)
+            if "error" in parsed:
+                CONSOLE.print(f"  [yellow]{parsed['error']}[/]")
+            else:
+                scope = parsed.get("pairs_found", parsed.get("notes", parsed.get("items", 0)))
+                noun = "pair(s)" if cmd == "/dedup" else "note(s)"
+                CONSOLE.print(f"  Processed [bold]{scope}[/] {noun} — outcomes: {parsed.get('summary', {})}")
+        except Exception:
+            CONSOLE.print(result)
+        return True
+
+    return False
+
+
+def _expand_workflow_shortcut(user_input: str) -> str | None:
+    """Expand workflow shortcuts (e.g. /report, /inject) into agent-directed messages.
+
+    Returns the expanded message string, or None if the input is not a
+    recognised shortcut. Expanded messages flow through the normal agentic
+    loop so the agent calls the tools and follows the steering protocol.
+
+    Syntax:
+        /report [folder] [--top-k=N] [--embeddings]
+        /inject <file...> --target=DIR [--hub=H]
+
+    Examples:
+        /report
+        /report Concepts/ML
+        /report --top-k=15 --embeddings
+        /report Inbox --embeddings
+        /inject Inbox/notes.md --target=Concepts/AI
+        /inject Inbox/a.md Inbox/b.md --target=Concepts/AI --hub=AI
+    """
+    parts = user_input.strip().split()
+    if not parts:
+        return None
+
+    cmd = parts[0].lower()
+
+    if cmd == "/inject":
+        args = parts[1:]
+        inbox_files: list[str] = []
+        target_dir = ""
+        hub = ""
+        for arg in args:
+            if arg.startswith("--target="):
+                target_dir = arg[len("--target="):]
+            elif arg.startswith("--hub="):
+                hub = arg[len("--hub="):]
+            elif not arg.startswith("-"):
+                inbox_files.append(arg)  # preserve original case
+        if not inbox_files:
+            return "Error: /inject requires at least one file path. Usage: /inject <file...> --target=DIR"
+        if not target_dir:
+            return "Error: /inject requires --target=DIR. Usage: /inject <file...> --target=DIR"
+        files_json = json.dumps(inbox_files)
+        msg = (
+            f"Run the Injector pipeline for {len(inbox_files)} file(s).\n"
+            f"Call `silica_run_injector` with "
+            f"inbox_files={files_json}, target_dir={json.dumps(target_dir)}"
+        )
+        if hub:
+            msg += f", hub={json.dumps(hub)}"
+        msg += "."
+        return msg
+
+    if cmd == "/report":
+        args = parts[1:]
+        folder = ""
+        top_k = 10
+        with_embeddings = False
+
+        for arg in args:
+            if arg.startswith("--folder="):
+                folder = arg[len("--folder="):]
+            elif arg.startswith("--top-k="):
+                try:
+                    top_k = int(arg[len("--top-k="):])
+                except ValueError:
+                    pass
+            elif arg in ("--embeddings", "--with-embeddings"):
+                with_embeddings = True
+            elif not arg.startswith("-"):
+                folder = arg  # positional: /report Concepts/ML
+
+        scope_desc = f"scoped to `{folder}`" if folder else "on the whole vault"
+        embed_note = " Also propose missing links via the embedding index." if with_embeddings else ""
+
+        return (
+            f"Run a structural vault audit {scope_desc}.{embed_note}\n"
+            f"Call `silica_vault_report` with "
+            f"folder={json.dumps(folder)}, top_k={top_k}, "
+            f"with_embeddings={'true' if with_embeddings else 'false'}, seed_ledger=true. "
+            f"Then follow the steering loop exactly as described in your instructions: "
+            f"call `silica_ledger_next` repeatedly, execute each capability with its payload, "
+            f"call `silica_ledger_update` after each one, and stop when the plan returns done."
+        )
+
+    if cmd in ("/refine", "/enrich"):
+        args = parts[1:]
+        folder = next((p for p in args if not p.startswith("-")), "")
+
+        from silica.driver import DRIVER
+        from silica.planner.progress import ProgressLedger, TaskLedger
+        from silica.planner.analyst_plan import CheckpointSpec
+        from pathlib import Path
+        import orjson
+
+        refs = DRIVER.list_files(folder=folder)
+        paths = [r.path for r in refs if r.path.startswith(folder) or r.path == folder]
+        if not paths:
+            return f"Error: no files found in '{folder}'."
+
+        progress = ProgressLedger.new(mode="analyst", inputs={"scope": folder or "vault"})
+        run_id = progress.run_id
+        run_dir = Path.home() / ".silica" / "runs" / run_id
+        payloads_dir = run_dir / "payloads"
+        payloads_dir.mkdir(parents=True, exist_ok=True)
+
+        chunks = []
+        cur_chunk = []
+        cur_size = 0
+        for p in paths:
+            s = len(json.dumps(p))
+            if cur_size + s > 4000 and cur_chunk:
+                chunks.append(cur_chunk)
+                cur_chunk = [p]
+                cur_size = s
+            else:
+                cur_chunk.append(p)
+                cur_size += s
+        if cur_chunk:
+            chunks.append(cur_chunk)
+
+        cap = "silica_refine_batch" if cmd == "/refine" else "silica_enrich_batch"
+
+        for i, chunk in enumerate(chunks):
+            task = progress.add_task(cap)
+            payload = {"note_paths": chunk, "_reason": f"Batch {i+1} of {len(chunks)}"}
+            payload_path = str(payloads_dir / f"{task.id}.json")
+            Path(payload_path).write_bytes(orjson.dumps(payload, option=orjson.OPT_INDENT_2))
+            task.input_ref = payload_path
+
+        progress.save()
+
+        from silica.agent.progress import emit_batch_event
+        from silica.agent.events import BatchRunStartEvent
+        emit_batch_event(BatchRunStartEvent(run_id=run_id, kind=cmd.strip("/"), label=folder or "vault", total=len(chunks)))
+
+        tl = TaskLedger.new(
+            run_id=run_id,
+            user_request=f"{cmd.strip('/')} {folder or 'vault'}",
+            checkpoints=[CheckpointSpec(id="remediate", kind="gate", objective=cap)],
+            facts=[]
+        )
+        try:
+            tl.save()
+        except Exception:
+            pass
+
+        return f"A ledger for {cmd} has been created with {len(chunks)} chunk(s) across {len(paths)} note(s). Use `silica_ledger_next` to execute them."
+
+    return None
 
 
 def _handle_slash_command(cmd: str, messages: list[dict]) -> bool:
@@ -78,13 +452,8 @@ def _handle_slash_command(cmd: str, messages: list[dict]) -> bool:
         return True
 
     if cmd == "/help":
-        CONSOLE.print("  [bold cyan]/exit[/]     — exit silica")
-        CONSOLE.print("  [bold cyan]/model[/]    — show current LLM model")
-        CONSOLE.print("  [bold cyan]/tools[/]    — list registered tools")
-        CONSOLE.print("  [bold cyan]/clear[/]    — reset conversation history")
-        CONSOLE.print(f"  [bold cyan]/verbose[/]  — cycle tool progress: off → new → all → verbose  [dim](current: {CONFIG.tool_progress})[/]")
-        CONSOLE.print("  [bold cyan]/thinking[/] — toggle reasoning block display")
-        CONSOLE.print("  [bold cyan]/help[/]     — show this help message")
+        from silica.ui.commands import render_help
+        render_help()
         return True
 
     if cmd == "/thinking":
@@ -119,11 +488,7 @@ def main():
     debug_mode = "--verbose" in sys.argv or "-v" in sys.argv or CONFIG.debug_logging
     _setup_logging(debug=debug_mode)
 
-    print_banner()
-    CONSOLE.print(f"  Model: [bold]{CONFIG.model}[/]")
-    if CONFIG.vault_name:
-        CONSOLE.print(f"  Vault:   [bold]{CONFIG.vault_name}[/]")
-    CONSOLE.print()
+    print_home()
 
     session = build_session()
     messages: list[dict] = [{"role": "system", "content": SYSTEM_PROMPT}]
@@ -142,17 +507,21 @@ def main():
         if not user_input:
             continue
 
+        # Direct shortcuts bypass the LLM entirely (case-sensitive args preserved)
+        if user_input.startswith("/") and _handle_direct_shortcut(user_input, messages):
+            continue
+
+        # Expand workflow shortcuts (/report, /inject etc.) into agent-directed messages
+        expanded = _expand_workflow_shortcut(user_input)
+        if expanded is not None:
+            user_input = expanded
+
         # Handle slash commands
         if user_input.startswith("/"):
             cmd = user_input.strip().lower()
             if cmd == "/clear":
                 CONSOLE.clear()
-                print_banner()
-                CONSOLE.print(f"  Model: [bold]{CONFIG.model}[/]")
-                if CONFIG.vault_name:
-                    CONSOLE.print(f"  Vault:   [bold]{CONFIG.vault_name}[/]")
-                CONSOLE.print()
-
+                print_home()
                 messages.clear()
                 messages.append({"role": "system", "content": SYSTEM_PROMPT})
                 session = build_session()
@@ -171,12 +540,16 @@ def main():
             answer = run_agent(messages, model=CONFIG.model, tool_progress_callback=callback)
             if answer:
                 CONSOLE.print()
+                CONSOLE.print("[role.assistant]⏺ silica[/]")
                 CONSOLE.print(Markdown(answer))
                 CONSOLE.print()
             messages.append({"role": "assistant", "content": answer or ""})
+            _update_context_tokens(messages)
         except KeyboardInterrupt:
+            callback.close()
             CONSOLE.print("\n  [dim](interrupted)[/]")
         except Exception as e:
+            callback.close()
             logger.exception("Agent error")
             CONSOLE.print(f"\n  [bold red]Error:[/] {e}\n")
 

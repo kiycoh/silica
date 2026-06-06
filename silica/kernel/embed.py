@@ -1,0 +1,361 @@
+"""Persistent embedding store and cosine-similarity search (Phase 3).
+
+Architecture:
+  - EmbedStore  — orjson-backed index at ~/.silica/index/embeddings.json
+  - build_index — incremental: skips notes already present, batches new ones
+  - cosine_top_k inside EmbedStore — pure Python, no numpy
+  - refresh_note — re-embed a single note (call after writes)
+
+Embeddings substrate rule (from the plan):
+  "embeddings PROPOSE, graph DISPOSES"
+  This module is a CANDIDATE GENERATOR only. It is never authoritative about
+  vault structure; that role belongs to graph_diff / the driver.
+"""
+from __future__ import annotations
+
+import time
+from pathlib import Path
+from typing import Any
+
+import numpy as np
+import orjson
+
+_INDEX_PATH = Path.home() / ".silica" / "index" / "embeddings.json"
+
+# Maximum characters of note content to embed (title + body prefix).
+# Keeps embedding calls fast without losing most of the signal.
+_MAX_CHARS = 1200
+
+
+# ---------------------------------------------------------------------------
+# Pure maths
+# ---------------------------------------------------------------------------
+
+def _cosine(a: list[float], b: list[float]) -> float:
+    """Return cosine similarity in [−1, 1] between two vectors.
+
+    Returns 0.0 if either vector is the zero vector (degenerate case).
+    """
+    if len(a) != len(b):
+        return 0.0
+    dot = sum(ai * bi for ai, bi in zip(a, b))
+    mag_a = sum(ai * ai for ai in a) ** 0.5
+    mag_b = sum(bi * bi for bi in b) ** 0.5
+    if mag_a == 0.0 or mag_b == 0.0:
+        return 0.0
+    return dot / (mag_a * mag_b)
+
+
+def centroid(vectors: list[list[float]]) -> list[float]:
+    """Component-wise mean of a list of vectors. Returns [] if empty or ragged."""
+    if not vectors:
+        return []
+    dim = len(vectors[0])
+    if any(len(v) != dim for v in vectors):
+        return []
+    return [sum(v[i] for v in vectors) / len(vectors) for i in range(dim)]
+
+
+def document_theme_vector(embedder: Any, body: str, *, segment_chars: int = _MAX_CHARS) -> list[float]:
+    """Thematic centroid of a document: embed body segments then average.
+
+    Robust on long notes. Returns [] if embedder fails or body is empty.
+    """
+    if not body.strip():
+        return []
+    segs = [body[i:i + segment_chars] for i in range(0, len(body), segment_chars)] or [body]
+    try:
+        vecs = embedder.embed(segs)
+    except Exception:
+        return []
+    return centroid(vecs)
+
+
+# ---------------------------------------------------------------------------
+# EmbedStore
+# ---------------------------------------------------------------------------
+
+class EmbedStore:
+    """orjson-backed flat index mapping note paths to embedding vectors.
+
+    File schema:
+        {
+          "version": 1,
+          "notes": {
+            "<vault-relative-path>": {
+              "vec":  [float, ...],
+              "name": str,          # display name / title
+              "ts":   float         # unix timestamp of last embed
+            }
+          }
+        }
+
+    Keys are vault-relative paths WITHOUT the .md extension.
+    """
+
+    def __init__(self, path: Path | None = None):
+        # Resolve lazily so tests can monkeypatch `_INDEX_PATH` after import
+        self._path = path if path is not None else _INDEX_PATH
+        self._notes: dict[str, dict[str, Any]] = {}
+        # Lazily-built, unit-normalized search matrix (numpy). Invalidated on any
+        # mutation; rebuilt on the next cosine_top_k. Keeps _notes authoritative
+        # while making search a single BLAS matrix-vector product.
+        self._mat: np.ndarray | None = None
+        self._mat_paths: list[str] = []
+        self._mat_dim: int | None = None
+        self._load()
+
+    def _invalidate_matrix(self) -> None:
+        self._mat = None
+        self._mat_paths = []
+        self._mat_dim = None
+
+    # ------------------------------------------------------------------
+    # I/O
+    # ------------------------------------------------------------------
+
+    def _load(self) -> None:
+        self._invalidate_matrix()
+        if self._path.exists():
+            try:
+                data = orjson.loads(self._path.read_bytes())
+                self._notes = data.get("notes", {})
+            except Exception:
+                self._notes = {}
+
+    def save(self) -> Path:
+        self._path.parent.mkdir(parents=True, exist_ok=True)
+        self._path.write_bytes(
+            orjson.dumps(
+                {"version": 1, "notes": self._notes},
+                option=orjson.OPT_INDENT_2,
+            )
+        )
+        return self._path
+
+    # ------------------------------------------------------------------
+    # Mutation
+    # ------------------------------------------------------------------
+
+    def upsert(self, path: str, name: str, vec: list[float],
+                *, title_vec: list[float] | None = None) -> None:
+        """Insert or replace a note's embedding.
+
+        `title_vec` is the secondary title-only vector used for the dedup
+        title-similarity gate. Omitting it preserves any existing title_vec
+        stored for that path (backward-compatible with old index entries).
+        """
+        existing = self._notes.get(path, {})
+        entry: dict[str, Any] = {"vec": vec, "name": name, "ts": time.time()}
+        # Preserve existing title_vec if not explicitly provided
+        resolved_tv = title_vec if title_vec is not None else existing.get("title_vec")
+        if resolved_tv is not None:
+            entry["title_vec"] = resolved_tv
+        self._notes[path] = entry
+        self._invalidate_matrix()
+
+    def delete(self, path: str) -> None:
+        self._notes.pop(path, None)
+        self._invalidate_matrix()
+
+    # ------------------------------------------------------------------
+    # Lookup
+    # ------------------------------------------------------------------
+
+    def get_vec(self, path: str) -> list[float] | None:
+        entry = self._notes.get(path)
+        return entry["vec"] if entry else None
+
+    def get_title_vec(self, path: str) -> list[float] | None:
+        """Return the title-only embedding vector, or None if not yet indexed.
+
+        Returns None for old index entries that pre-date the title_vec feature;
+        callers must handle the None case (title_score = 0.0 fallback).
+        """
+        entry = self._notes.get(path)
+        return entry.get("title_vec") if entry else None
+
+    def has(self, path: str) -> bool:
+        return path in self._notes
+
+    def paths(self) -> list[str]:
+        return list(self._notes.keys())
+
+    def __len__(self) -> int:
+        return len(self._notes)
+
+    # ------------------------------------------------------------------
+    # Search
+    # ------------------------------------------------------------------
+
+    def _ensure_matrix(self) -> None:
+        """Build the unit-normalized search matrix from _notes (lazy, cached).
+
+        Only notes sharing the modal embedding dimension (that of the first
+        note) are placed in the matrix; any odd-dimension note falls through to
+        a 0.0 score, exactly matching the old per-pair _cosine length guard.
+        Zero vectors are normalized to zero rows so they score 0.0.
+        """
+        if self._mat is not None:
+            return
+        paths = list(self._notes.keys())
+        if not paths:
+            self._mat = np.zeros((0, 0), dtype=np.float32)
+            self._mat_paths = []
+            self._mat_dim = None
+            return
+        dim = len(self._notes[paths[0]]["vec"])
+        rows = [self._notes[p]["vec"] for p in paths if len(self._notes[p]["vec"]) == dim]
+        kept = [p for p in paths if len(self._notes[p]["vec"]) == dim]
+        mat = np.asarray(rows, dtype=np.float32)
+        norms = np.linalg.norm(mat, axis=1, keepdims=True)
+        norms[norms == 0.0] = 1.0  # zero rows stay zero → 0.0 similarity
+        self._mat = mat / norms
+        self._mat_paths = kept
+        self._mat_dim = dim
+
+    def cosine_top_k(
+        self,
+        query_vec: list[float],
+        k: int = 5,
+        exclude: set[str] | None = None,
+    ) -> list[dict[str, Any]]:
+        """Return the top-k most similar notes as dicts with keys:
+            path, name, score
+        Optionally exclude a set of paths (e.g. the query note itself).
+
+        Search is a single normalized matrix-vector product (numpy/BLAS); this
+        is the hot path for COLLISION and AUTOLINK on large vaults.
+        """
+        exclude = exclude or set()
+        self._ensure_matrix()
+
+        # Every note defaults to 0.0 — matches _cosine's degenerate cases
+        # (zero query, zero vector, or dimension mismatch).
+        scores: dict[str, float] = {p: 0.0 for p in self._notes}
+
+        q = np.asarray(query_vec, dtype=np.float32)
+        q_norm = float(np.linalg.norm(q))
+        if q_norm != 0.0 and self._mat is not None and self._mat.size and self._mat_dim == q.shape[0]:
+            sims = self._mat @ (q / q_norm)
+            for path, sim in zip(self._mat_paths, sims.tolist()):
+                scores[path] = sim
+
+        results = [(s, p) for p, s in scores.items() if p not in exclude]
+        results.sort(reverse=True)  # by (score, path) desc — preserves tie-break
+        return [
+            {"path": path, "name": self._notes[path]["name"], "score": round(float(score), 4)}
+            for score, path in results[:k]
+        ]
+
+
+# ---------------------------------------------------------------------------
+# Index management
+# ---------------------------------------------------------------------------
+
+def _note_text(title: str, body: str, *, folder: str = "") -> str:
+    """Combine title and body prefix for embedding.
+
+    If `folder` is provided, it is prepended as a bracketed domain hint
+    (e.g. "[Robotica] CAN\n\n...") to anchor domain-ambiguous acronyms
+    in their correct semantic neighbourhood. This never alters vault content.
+
+    Images and other media embeds are stripped via kernel.media.preprocess_text
+    before the text is truncated, so they never pollute the embedding space.
+    """
+    from silica.kernel.media import preprocess_text
+    prefix = f"[{folder}] " if folder else ""
+    combined = f"{prefix}{title}\n\n{preprocess_text(body)}"
+    return combined[:_MAX_CHARS]
+
+def _note_title_text(title: str, *, folder: str = "") -> str:
+    """Title-only text for the secondary title-similarity embedding vector.
+
+    Used alongside `_note_text` to build a compact, body-free representation
+    that captures title-level semantic relationships (e.g. "ROS" ↔ "JSON in
+    ROS 2") even when the full-note vectors diverge below the dedup threshold.
+    """
+    prefix = f"[{folder}] " if folder else ""
+    return f"{prefix}{title}"
+
+
+def build_index(
+    embedder: Any,
+    notes: list[tuple[str, str, str]],
+    *,
+    store: EmbedStore | None = None,
+    batch_size: int = 32,
+    force: bool = False,
+) -> EmbedStore:
+    """Build or incrementally refresh the embedding index.
+
+    Args:
+        embedder: an object with `embed(texts: list[str]) -> list[list[float]]`
+        notes: list of (path, name, body) tuples — vault-relative path (no .md),
+               display name (title), and body text.
+        store: existing EmbedStore to update (loads from disk if None).
+        batch_size: number of texts to embed per API call.
+        force: if True, re-embed ALL notes regardless of existing entries.
+
+    Returns:
+        The updated EmbedStore (already saved to disk).
+
+    Embedding strategy — interleaved batch:
+        For each note we embed two texts in one call:
+            [full_0, title_0, full_1, title_1, ...]
+        Full vectors (even indices)  → note's primary `vec`.
+        Title vectors (odd indices)  → note's secondary `title_vec`.
+        This captures title-level relationships for the dedup title-gate
+        with zero extra API round-trips.
+    """
+    if store is None:
+        store = EmbedStore()
+
+    to_embed = [
+        (path, name, body)
+        for path, name, body in notes
+        if force or not store.has(path)
+    ]
+
+    for i in range(0, len(to_embed), batch_size):
+        batch = to_embed[i : i + batch_size]
+        folders = [path.rsplit("/", 1)[0] if "/" in path else "" for path, _, _ in batch]
+        full_texts  = [_note_text(name, body, folder=f)  for (_, name, body), f in zip(batch, folders)]
+        title_texts = [_note_title_text(name, folder=f)  for (_, name, _),    f in zip(batch, folders)]
+        # Interleave: [full_0, title_0, full_1, title_1, ...]
+        interleaved = [t for pair in zip(full_texts, title_texts) for t in pair]
+        try:
+            vecs = embedder.embed(interleaved)
+        except Exception as exc:
+            raise RuntimeError(f"Embedding call failed on batch {i//batch_size}: {exc}") from exc
+        full_vecs  = vecs[0::2]  # even positions
+        title_vecs = vecs[1::2]  # odd positions
+        for (path, name, _), fv, tv in zip(batch, full_vecs, title_vecs):
+            store.upsert(path, name, fv, title_vec=tv)
+
+    store.save()
+    return store
+
+
+def refresh_note(
+    embedder: Any,
+    path: str,
+    name: str,
+    body: str,
+    *,
+    store: EmbedStore | None = None,
+) -> EmbedStore:
+    """Re-embed a single note and persist the updated store.
+
+    Designed to be called after a note is written to the vault (freshness hook).
+    Embeds both the full note text and the title-only text in a single API call.
+    """
+    if store is None:
+        store = EmbedStore()
+    _folder = path.rsplit("/", 1)[0] if "/" in path else ""
+    full_text  = _note_text(name, body, folder=_folder)
+    title_text = _note_title_text(name, folder=_folder)
+    vecs = embedder.embed([full_text, title_text])
+    store.upsert(path, name, vecs[0], title_vec=vecs[1])
+    store.save()
+    return store

@@ -155,6 +155,14 @@ class ObsidianDriver(Protocol):
         """Incoming links to a note."""
         ...
 
+    def mentions_of(self, title: str) -> list[str]:
+        """Vault-relative paths of notes whose body mentions `title`.
+
+        Backed by an inverted text index built during graph indexing — used by
+        the backlink/refiner passes. Both backends implement this.
+        """
+        ...
+
     def orphans(self) -> list[NoteRef]:
         """Notes with no incoming links."""
         ...
@@ -203,6 +211,17 @@ class ObsidianDriver(Protocol):
         """Delete a note from the vault."""
         ...
 
+    def autolink_note(self, path: str, candidates: list[str] | None = None) -> list[str]:
+        """Wrap unlinked mentions of vault titles in `path` with links, in place.
+
+        Returns the list of titles linked. The CLI backend delegates skip-region
+        detection, link resolution, and link rendering to Obsidian's own engine
+        (respecting the user's link-format preference). The FS backend uses the
+        deterministic pure-Python autolink() kernel. `candidates` optionally
+        restricts which titles are considered (embedding/cluster-prioritised subset).
+        """
+        ...
+
     # -- advanced ----------------------------------------------------------
 
     def list_files(self, folder: str = "") -> list[NoteRef]:
@@ -214,7 +233,22 @@ class ObsidianDriver(Protocol):
         ...
 
     def base_query(self, base: str, view: str) -> list[dict]:
-        """Query an Obsidian Base (DB on frontmatter)."""
+        """Query an Obsidian Base (DB on frontmatter).
+
+        CAPABILITY GAP: CLI-backend only. The FS backend has no Bases engine
+        and returns [] (logged). Callers must treat an empty result as
+        "unavailable on this backend", not "no matches".
+        """
+        ...
+
+    # -- graph data (in-process, avoids O(N) subprocess calls) -------------
+
+    def graph_data(self, folder: str = "") -> tuple[dict, set, Any]:
+        """Return (notes, unresolved_links, graph) for in-process consumers.
+
+        Ensures the graph index is populated first. Used by graph_export to
+        avoid O(N) CLI calls while keeping the contract explicit.
+        """
         ...
 
     # -- transactionality --------------------------------------------------
@@ -224,5 +258,14 @@ class ObsidianDriver(Protocol):
         ...
 
     def restore(self, txn: Txn) -> None:
-        """Rollback to a previous snapshot via history/sync restore."""
+        """Rollback a transaction.
+
+        CAPABILITY GAP: rollback completeness is backend-dependent.
+          - created_paths (undo write ops): honored by both backends.
+          - versions (undo patch ops via history): CLI-backend only; the FS
+            backend has no version history and no-ops these (logged).
+        Prefer content-based rollback (InverseOp.restore_version with
+        prior_content, applied via silica_restore) for backend-agnostic undo;
+        this version-based path is a fallback only.
+        """
         ...

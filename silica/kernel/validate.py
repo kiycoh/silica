@@ -3,6 +3,8 @@ import logging
 from pydantic import BaseModel
 from silica.driver import DRIVER
 from silica.kernel.ops import Op, OpType
+from silica.kernel.templates import slugify
+from silica.kernel.wikilink import extract_links
 
 logger = logging.getLogger(__name__)
 
@@ -12,10 +14,38 @@ class Rejection(BaseModel):
     reason: str
 
 
-def validate_operations(ops: list[Op] | list[dict], payloads: list, target_dir: str, hub: str | None = None) -> tuple[list[Op], list[Rejection]]:
+def validate_operations(
+    ops: list[Op] | list[dict],
+    payloads: list,
+    target_dir: str,
+    hub: str | None = None,
+    cleared_parents_out: list | None = None,
+) -> tuple[list[Op], list[Rejection]]:
     """Validates operations against payloads and target_dir using DRIVER."""
     from silica.kernel.ops_io import parse_ops
     ops = parse_ops(ops)
+
+    # Sanitize filesystem-illegal characters (e.g. ':') from path filenames.
+    # When a write op carries a `title` field, rebuild the path from title so
+    # the note is filed under the clean concept name rather than the heading.
+    for op in ops:
+        if op.op == OpType.write and op.title and op.path and target_dir:
+            clean_title = slugify(op.title)
+            if clean_title:
+                new_path = f"{target_dir.rstrip('/')}/{clean_title}.md"
+                if new_path != op.path:
+                    logger.debug("validate: title-derived path '%s' → '%s'", op.path, new_path)
+                    op.path = new_path
+
+        if op.path:
+            folder, filename = os.path.split(op.path)
+            name, ext = os.path.splitext(filename)
+            sanitized = slugify(name) + ext
+            if sanitized != filename:
+                new_path = (os.path.join(folder, sanitized) if folder else sanitized).replace("\\", "/")
+                logger.debug("validate: sanitized path '%s' → '%s'", op.path, new_path)
+                op.path = new_path
+
     valid_concepts: dict[str, set[str]] = {}
     expected_collision_paths: dict[tuple[str, str], str | None] = {}
     inbox_folders = set()
@@ -103,10 +133,51 @@ def validate_operations(ops: list[Op] | list[dict], payloads: list, target_dir: 
                 else:
                     richest_op.op = OpType.write
 
+    # Pre-compute note stems created in this run so parent validation can allow
+    # forward references to notes being written in the same batch.
+    _run_write_stems: set[str] = {
+        os.path.splitext(os.path.basename(op.path))[0].lower()
+        for op in ops
+        if op.op in (OpType.write, OpType.overwrite) and op.path
+    }
+
+    def _resolve_parent(op: Op, cleared_out: list | None = None) -> None:
+        """Neutralise an unresolvable parent — fall back to hub, no Rejection.
+
+        If cleared_out is provided, records the cleared reference as a forward-link
+        hint so the distiller can anticipate the note in future iterations.
+        """
+        if not op.parent:
+            return
+        p_key = op.parent.lower()
+        if p_key in _run_write_stems:
+            return
+        matches = DRIVER.search_names(op.parent)
+        if not any(r.name.lower() == p_key for r in matches):
+            logger.warning(
+                "validate: parent '%s' not found in vault or current run — clearing to hub fallback",
+                op.parent,
+            )
+            if cleared_out is not None:
+                cleared_out.append({
+                    "cleared_parent": op.parent,
+                    "note_heading": op.heading or "",
+                    "note_path": op.path or "",
+                })
+            op.parent = None
+
     validated_ops = []
     rejected_ops = []
-    
+
     target_dir_abs = os.path.abspath(target_dir) if target_dir else ""
+
+    def _is_within_dir(path_abs: str, dir_abs: str) -> bool:
+        if not dir_abs:
+            return True
+        try:
+            return os.path.commonpath([path_abs, dir_abs]) == dir_abs
+        except ValueError:
+            return False
 
     for op in ops:
         heading = op.heading
@@ -130,7 +201,7 @@ def validate_operations(ops: list[Op] | list[dict], payloads: list, target_dir: 
 
         if path:
             path_abs = os.path.abspath(path)
-            forbidden = any(path_abs.startswith(folder) for folder in inbox_folders)
+            forbidden = any(_is_within_dir(path_abs, folder) for folder in inbox_folders)
             if "/0 Inbox/" in path or "/0 inbox/" in path.lower() or forbidden:
                 rejected_ops.append(Rejection(op=op, reason=f"Target path '{path}' contains forbidden inbox segment"))
                 continue
@@ -151,23 +222,27 @@ def validate_operations(ops: list[Op] | list[dict], payloads: list, target_dir: 
                         rejected_ops.append(Rejection(op=op, reason=f"Path '{path}' does not match expected collision '{expected_path}'"))
                         continue
                 else:
-                    if target_dir_abs and not path_abs.startswith(target_dir_abs):
+                    if not _is_within_dir(path_abs, target_dir_abs):
                         rejected_ops.append(Rejection(op=op, reason=f"Coerced patch path '{path}' not in target folder"))
                         continue
+            elif not _is_within_dir(path_abs, target_dir_abs):
+                rejected_ops.append(Rejection(op=op, reason=f"Path '{path}' not in target folder"))
+                continue
 
             if not path_exists(path):
                 rejected_ops.append(Rejection(op=op, reason=f"Collision path '{path}' does not exist in vault"))
                 continue
 
+            _resolve_parent(op, cleared_parents_out)
             validated_ops.append(op)
 
         elif op_type == OpType.write:
             if not path:
                 rejected_ops.append(Rejection(op=op, reason="Missing 'path' field for write operation"))
                 continue
-                
+
             path_abs = os.path.abspath(path)
-            if target_dir_abs and not path_abs.startswith(target_dir_abs):
+            if not _is_within_dir(path_abs, target_dir_abs):
                 rejected_ops.append(Rejection(op=op, reason=f"Path '{path}' not in target folder"))
                 continue
 
@@ -175,22 +250,24 @@ def validate_operations(ops: list[Op] | list[dict], payloads: list, target_dir: 
                 rejected_ops.append(Rejection(op=op, reason=f"Target path '{path}' already exists (should be patch/overwrite)"))
                 continue
 
+            _resolve_parent(op, cleared_parents_out)
             validated_ops.append(op)
 
         elif op_type == OpType.overwrite:
             if not path:
                 rejected_ops.append(Rejection(op=op, reason="Missing 'path' field for overwrite operation"))
                 continue
-            
+
             path_abs = os.path.abspath(path)
-            if target_dir_abs and not path_abs.startswith(target_dir_abs):
+            if not _is_within_dir(path_abs, target_dir_abs):
                 rejected_ops.append(Rejection(op=op, reason=f"Path '{path}' not in target folder"))
                 continue
 
             if not path_exists(path):
                 # If target note doesn't exist, overwrite degrades to write gracefully
                 op.op = OpType.write
-            
+
+            _resolve_parent(op, cleared_parents_out)
             validated_ops.append(op)
 
         else:
@@ -228,7 +305,7 @@ def validate_operations(ops: list[Op] | list[dict], payloads: list, target_dir: 
                     op=OpType.write,
                     heading=hub,
                     path=hub_path,
-                    snippet=f"Hub automatically generated by the Injector pipeline.",
+                    snippet="Hub automatically generated by the Injector pipeline.",
                     hub=hub,
                     source_basename=source_basename
                 )
@@ -237,5 +314,52 @@ def validate_operations(ops: list[Op] | list[dict], payloads: list, target_dir: 
 
     if hub_ops:
         validated_ops = hub_ops + validated_ops
+
+    # 4. Prospective link check: patch/overwrite ops must not introduce wikilinks that
+    # cannot be resolved either in the current vault or within this batch's write ops.
+    # write ops are exempt — their outbound links may be intentional forward references.
+    batch_created_names: set[str] = {
+        os.path.splitext(os.path.basename(op.path))[0].lower()
+        for op in validated_ops
+        if op.op == OpType.write and op.path
+    }
+
+    _link_resolve_cache: dict[str, bool] = {}
+
+    def _link_resolves(target: str) -> bool:
+        stem = target.removesuffix(".md")
+        key = stem.lower()
+        if key in _link_resolve_cache:
+            return _link_resolve_cache[key]
+        if key in batch_created_names:
+            _link_resolve_cache[key] = True
+            return True
+        if "/" in stem:
+            result = path_exists(stem + ".md") or path_exists(stem)
+        else:
+            matches = DRIVER.search_names(stem)
+            result = any(r.name.lower() == key for r in matches)
+        _link_resolve_cache[key] = result
+        return result
+
+    prospective_valid: list[Op] = []
+    for op in validated_ops:
+        if op.op not in (OpType.patch, OpType.overwrite):
+            prospective_valid.append(op)
+            continue
+        text = op.snippet or op.content or ""
+        if not text:
+            prospective_valid.append(op)
+            continue
+        links = extract_links(text)
+        broken = [lnk for lnk in links if not _link_resolves(lnk)]
+        if broken:
+            rejected_ops.append(Rejection(
+                op=op,
+                reason=f"Introduces unresolved wikilinks: {broken!r}",
+            ))
+        else:
+            prospective_valid.append(op)
+    validated_ops = prospective_valid
 
     return validated_ops, rejected_ops

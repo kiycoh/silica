@@ -54,6 +54,18 @@ class TestDistillerOutputSchema:
         output = DistillerOutput.model_validate({"updates": []})
         assert output.updates == []
 
+    def test_op_concepts_default_none(self):
+        # #9: concepts is optional and absent by default (backward compatible)
+        op = Op.model_validate(_op_dict())
+        assert op.concepts is None
+
+    def test_op_accepts_llm_concepts(self):
+        # #9: LLM-extracted concept phrases are parsed and preserved
+        data = _op_dict()
+        data["concepts"] = ["quantum entanglement", "Bell inequality"]
+        op = Op.model_validate(data)
+        assert op.concepts == ["quantum entanglement", "Bell inequality"]
+
     def test_invalid_op_type_raises(self):
         with pytest.raises(Exception):
             DistillerOutput.model_validate({"updates": [{"op": "invalid", "heading": "x", "source_basename": "x.md"}]})
@@ -188,3 +200,20 @@ class TestRunDistillerSchemaPassing:
             target="1 Cultura/Test",
         )
         assert "error" in result
+
+
+# ---------------------------------------------------------------------------
+# #9 prompt instruction: the distiller is told to emit normalized concepts
+# ---------------------------------------------------------------------------
+
+def test_distiller_prompt_documents_concepts_field():
+    from pathlib import Path
+    import silica.workers as _w
+    prompt = (Path(_w.__file__).parent / "distiller_prompt.txt").read_text(encoding="utf-8")
+    # A dedicated instruction block must exist (distinct from the INPUT payload's
+    # per-batch "concepts" array, which predates #9).
+    assert "Concept Keyphrases" in prompt
+    # …explaining the co-occurrence purpose and normalization mandate…
+    assert "co-occurrence" in prompt
+    lowered = prompt.lower()
+    assert "normaliz" in lowered  # normalize / normalized / normalization

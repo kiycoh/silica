@@ -1,49 +1,65 @@
 from __future__ import annotations
 
-from importlib.resources import files
-
+from art import text2art
+from rich.console import Group as RichGroup
 from rich.text import Text
 
 from silica.config import CONFIG
 from silica.ui.console import CONSOLE
+from silica.ui.theme import BRAND_CYAN, BRAND_INDIGO
 
-_VERSION = "0.2.0"
-_CAPTION = f"  [dim]v{_VERSION} · Obsidian-native agent[/]"
-
-
-def _load_wordmark() -> list[str]:
-    # Load the static wordmark from the asset
-    text = (files("silica.ui") / "assets" / "ascii-art-font.txt").read_text(encoding="utf-8")
-    return text.rstrip("\n").split("\n") + [""]
+_VERSION = "0.2.1"
+_CAPTION = f"  [dim]v{_VERSION} · Your personal note curator agent[/]"
 
 
-def _gradient(n: int, c0=(0x22, 0xd3, 0xee), c1=(0x63, 0x66, 0xf1)) -> list[str]:
+def _gradient(n: int, c0: tuple[int, int, int] = BRAND_CYAN, c1: tuple[int, int, int] = BRAND_INDIGO) -> list[str]:
     if n <= 1:
         return [f"#{c0[0]:02x}{c0[1]:02x}{c0[2]:02x}"]
     out = []
     for i in range(n):
         t = i / (n - 1)
-        r, g, b = (round(a + (b - a) * t) for a, b in zip(c0, c1))
+        r, g, b = (round(a + (bb - a) * t) for a, bb in zip(c0, c1))
         out.append(f"#{r:02x}{g:02x}{b:02x}")
     return out  # cyan → indigo
 
 
-def _print_wordmark() -> bool:
-    if CONSOLE.width < 60:
-        return False
+def _compute_art() -> list[str] | None:
+    """Return art lines if banner would render, else None."""
+    if CONFIG.banner_style != "wordmark":
+        return None
     try:
-        art = _load_wordmark()
+        raw = text2art("SILICA", font=CONFIG.banner_font)
+        art = [ln for ln in raw.rstrip("\n").split("\n")]
+        while art and not art[-1].strip():
+            art.pop()
     except Exception:
-        return False
-    for line, color in zip(art, _gradient(len(art))):
-        CONSOLE.print(Text(line, style=f"bold {color}"))
-    CONSOLE.print(_CAPTION)
-    return True
+        return None
+    if not art:
+        return None
+    if CONSOLE.width < max(len(ln) for ln in art) + 2:
+        return None
+    return art
+
+
+def banner_group() -> RichGroup | None:
+    """Banner art + caption as a renderable Group, or None if font unavailable or terminal too narrow."""
+    art = _compute_art()
+    if art is None:
+        return None
+    items: list = [Text(line, style=f"bold {color}") for line, color in zip(art, _gradient(len(art)))]
+    items.append(Text.from_markup(_CAPTION))
+    return RichGroup(*items)
+
+
+def banner_height() -> int:
+    """Number of art lines banner_group() would render, or 0 if it would return None."""
+    art = _compute_art()
+    return len(art) if art is not None else 0
 
 
 def print_banner() -> None:
-    style = CONFIG.banner_style
-    if style in ("crystal", "wordmark") and _print_wordmark():
+    bg = banner_group()
+    if bg is not None:
+        CONSOLE.print(bg)
         return
-    # minimal or fallback from failed guard
-    CONSOLE.print(f"  [bold cyan]silica[/] [dim]v{_VERSION} · Obsidian-native agent[/]")
+    CONSOLE.print(f"  [bold cyan]silica[/] [dim]v{_VERSION} · Your personal note curator agent[/]")

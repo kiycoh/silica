@@ -40,5 +40,43 @@ class ThinkingStartEvent:
 class ThinkingEndEvent:
     iteration: int
 
-RenderEvent = ToolProgressEvent | ReasoningEvent | ThinkingStartEvent | ThinkingEndEvent
+@dataclass(slots=True)
+class LLMStreamEvent:
+    chunk_type: str
+    content: str
+    iteration: int
+
+@dataclass(slots=True)
+class BatchRunStartEvent:
+    run_id: str
+    kind: str    # "refine" | "enrich"
+    label: str   # display label, e.g. "Concepts/ML"
+    total: int   # total number of batches
+
+RenderEvent = ToolProgressEvent | ReasoningEvent | ThinkingStartEvent | ThinkingEndEvent | LLMStreamEvent | BatchRunStartEvent
+
+
+# --- work-queue events (published on silica.agent.bus.BUS) -------------------
+
+@dataclass(slots=True)
+class WorkFeedbackEvent:
+    item_id: str    # WorkItem.id
+    kind: str       # "dedup" | "refine" | "orphan" | "enrich"
+    phase: str      # "reading" | "calling_llm" | "committing"
+    detail: str = ""
+
+
+@dataclass(slots=True)
+class WorkCompleteEvent:
+    item_id: str
+    kind: str
+    status: str     # "done" | "no_merge" | "no_change" | "skipped" | "error"
+    duration_s: float
+
+
+@dataclass(slots=True)
+class WorkCancelledEvent:
+    item_id: str
+    kind: str
+    phase: str      # where cancellation was detected
 

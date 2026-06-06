@@ -1,6 +1,6 @@
 import re
 
-LIMITS = {"max_lines": 60, "max_chars": 6000, "lean_chars": 600}
+LIMITS = {"max_lines": 60, "max_chars": 6000, "lean_chars": 600, "max_tags": 3}
 
 def metrics(content):
     return {"char_count": len(content), "line_count": len(content.splitlines())}
@@ -88,6 +88,9 @@ def ofm_lint(content, stem=None):
         F.append("tags empty")
     else:
         F += _fm.lint_tags(data)  # per-item normalization issues
+        tag_list = raw_tags if isinstance(raw_tags, list) else [raw_tags]
+        if len(tag_list) > LIMITS["max_tags"]:
+            F.append(f"too many tags ({len(tag_list)}); max {LIMITS['max_tags']}")
 
     # AI field: must be explicitly boolean
     if not isinstance(data.get("AI"), bool):

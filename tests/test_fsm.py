@@ -1,4 +1,4 @@
-from unittest.mock import patch, MagicMock
+from unittest.mock import patch, MagicMock, call
 from silica.router.orchestrator import InjectorFSM, InjectorState
 from silica.tools.registry import TOOLS
 
@@ -111,14 +111,15 @@ def test_fsm_delegate_single_chunk(mock_run_distiller):
     with patch.object(fsm, "_make_tmp", return_value="temp_chunk_path.json") as mock_make_tmp:
         fsm.step()
         
-        mock_run_distiller.assert_called_once_with(
-            payload={"chunk_id": 0, "concepts": ["a"]},
-            target="TargetDir",
-            hub="TargetDir"
-        )
+        call_kwargs = mock_run_distiller.call_args.kwargs
+        assert call_kwargs["payload"] == {"chunk_id": 0, "concepts": ["a"]}
+        assert call_kwargs["target"] == "TargetDir"
+        assert call_kwargs["hub"] == "TargetDir"
+        # ledger_digest is injected by Phase 2 — just assert it's a string or None
+        assert isinstance(call_kwargs.get("ledger_digest"), (str, type(None)))
         mock_make_tmp.assert_called_once_with({"updates": [{"op": "write", "path": "notes/note1.md", "heading": "Note 1"}]})
         assert fsm.state == InjectorState.SANITIZE
-        assert fsm.context["distiller_output_path"] == "temp_chunk_path.json"
+        assert fsm.context["chunk"]["distiller_output_path"] == "temp_chunk_path.json"
 
 
 @patch("silica.router.orchestrator.silica_recon")
@@ -131,11 +132,13 @@ def test_fsm_delegate_single_chunk(mock_run_distiller):
 @patch("silica.router.orchestrator.silica_bulk_write")
 @patch("silica.router.orchestrator.silica_lint")
 @patch("silica.tools.wrapped.silica_cleanup")
+@patch("silica.kernel.embed.EmbedStore")
 def test_fsm_multi_chunk_loop(
-    mock_cleanup, mock_lint, mock_write, mock_snapshot, mock_driver,
+    mock_embed_store, mock_cleanup, mock_lint, mock_write, mock_snapshot, mock_driver,
     mock_validate, mock_sanitize, mock_run_distiller, mock_payload, mock_recon
 ):
     # Setup mock payload with 2 chunks
+    mock_embed_store.return_value.__len__ = lambda _: 0  # empty index → COLLISION skips early
     mock_recon.return_value = {"success": True}
     mock_payload.return_value = {
         "chunks": [
@@ -178,22 +181,30 @@ def test_fsm_multi_chunk_loop(
     expected_sequence = [
         # First chunk cycle
         InjectorState.RECON,
+        InjectorState.CROSSDEDUP, # Phase 1.5 (best-effort, single file → skip)
         InjectorState.PAYLOAD,
+        InjectorState.SALIENCE,   # Phase 2.05 (best-effort, embedder unavailable → skip)
+        InjectorState.COLLISION,  # Phase 5 (best-effort, no index → skip)
         InjectorState.DELEGATE,
         InjectorState.SANITIZE,
         InjectorState.VALIDATE,
         InjectorState.SNAPSHOT,
         InjectorState.WRITE,
         InjectorState.HUB_UPDATE,
+        InjectorState.AUTOLINK,   # Phase 4
+        InjectorState.BACKLINK,   # Phase 4.5 (best-effort)
         InjectorState.LINT,
         InjectorState.CLEANUP,
-        # Second chunk cycle
+        # Second chunk cycle (SALIENCE does not re-run)
+        InjectorState.COLLISION,  # Phase 5 (best-effort, no index → skip)
         InjectorState.DELEGATE,
         InjectorState.SANITIZE,
         InjectorState.VALIDATE,
         InjectorState.SNAPSHOT,
         InjectorState.WRITE,
         InjectorState.HUB_UPDATE,
+        InjectorState.AUTOLINK,   # Phase 4
+        InjectorState.BACKLINK,   # Phase 4.5 (best-effort)
         InjectorState.LINT,
         InjectorState.CLEANUP,
     ]
@@ -201,8 +212,10 @@ def test_fsm_multi_chunk_loop(
 
     # Verify run_distiller was called twice, once for each chunk
     assert mock_run_distiller.call_count == 2
-    mock_run_distiller.assert_any_call(payload={"chunk_id": 0, "concepts": ["a"]}, target="TargetDir", hub="TargetDir")
-    mock_run_distiller.assert_any_call(payload={"chunk_id": 1, "concepts": ["b"]}, target="TargetDir", hub="TargetDir")
+    # Phase 2: run_distiller now receives ledger_digest kwarg — check payloads only
+    payloads_seen = [c.kwargs["payload"] for c in mock_run_distiller.call_args_list]
+    assert any({"chunk_id": 0, "concepts": ["a"]}.items() <= p.items() for p in payloads_seen)
+    assert any({"chunk_id": 1, "concepts": ["b"]}.items() <= p.items() for p in payloads_seen)
 
     # Verify cleanup (file move) was only called once (on the final chunk completion)
     mock_cleanup.assert_called_once_with("Inbox/test.md", "done")
@@ -226,27 +239,43 @@ def test_fsm_recipe_configuration():
 
 
 @patch("silica.router.orchestrator.silica_validate_ops")
-def test_fsm_gate_all_rejected_gives_no_ops(mock_validate):
-    # When ALL ops are rejected (validated_count=0), VALIDATE must go to CLEANUP
-    # with final_status="no_ops" — not ERROR.  Rejected ops are saved to the
-    # deferred store; the pipeline does not abort with an error.
-    mock_validate.return_value = {
+def test_fsm_gate_all_rejected_steers_then_defers(mock_validate):
+    # Phase 6: when ALL ops are rejected, VALIDATE steers back to DELEGATE (max 2
+    # attempts). After the budget is exhausted, it goes to CLEANUP with "no_ops".
+    all_rejected = {
         "success": True,
         "rejection_rate": 1.0,
         "total": 2,
         "validated_count": 0,
         "rejected_count": 2,
-        "rejected_ops": [],
+        "rejected_ops": [{"reason": "bad path"}],
         "validated_ops": [],
     }
+    mock_validate.return_value = all_rejected
 
     fsm = InjectorFSM("Inbox/test.md", "TargetDir")
-    fsm.context["payload"] = {"payload": {"chunk_id": 0}}
-    fsm.context["sanitized"] = {"parsed": []}
+    fsm._chunks = [{"schema_version": 1, "batches": []}]
+    fsm._current_chunk_idx = 0
+    fsm.context.setdefault("chunk", {})["sanitized"] = {"parsed": []}
     fsm.state = InjectorState.VALIDATE
 
+    # First call: steer attempt 1 → go to DELEGATE
     fsm.step()
+    assert fsm.state == InjectorState.DELEGATE
+    assert fsm.context.get("chunk_0_steer_attempts") == 1
+    assert fsm.context.get("chunk_0_steer_context") is not None
 
+    # Put FSM back at VALIDATE and call again (simulating steer attempt 2)
+    fsm.context.setdefault("chunk", {})["sanitized"] = {"parsed": []}
+    fsm.state = InjectorState.VALIDATE
+    fsm.step()
+    assert fsm.state == InjectorState.DELEGATE
+    assert fsm.context.get("chunk_0_steer_attempts") == 2
+
+    # Third call: budget exhausted → CLEANUP with "no_ops"
+    fsm.context.setdefault("chunk", {})["sanitized"] = {"parsed": []}
+    fsm.state = InjectorState.VALIDATE
+    fsm.step()
     assert fsm.state == InjectorState.CLEANUP
     assert fsm.context.get("final_status") == "no_ops"
 
@@ -267,7 +296,7 @@ def test_fsm_gate_partial_rejection_continues(mock_validate):
 
     fsm = InjectorFSM("Inbox/test.md", "TargetDir")
     fsm.context["payload"] = {"payload": {"chunk_id": 0}}
-    fsm.context["sanitized"] = {"parsed": []}
+    fsm.context.setdefault("chunk", {})["sanitized"] = {"parsed": []}
     fsm.context["source_content_hash"] = ""  # no deferred store call
     fsm.state = InjectorState.VALIDATE
 
@@ -275,7 +304,40 @@ def test_fsm_gate_partial_rejection_continues(mock_validate):
 
     # Pipeline advances past VALIDATE (to SNAPSHOT)
     assert fsm.state == InjectorState.SNAPSHOT
-    assert "abort_reason" not in fsm.context
+    assert "abort_reason" not in fsm.context.get("chunk", {})
+
+
+@patch("silica.router.orchestrator.silica_lint")
+@patch("silica.router.orchestrator.DRIVER")
+@patch("silica.tools.wrapped.silica_restore")
+@patch("builtins.open")
+def test_fsm_graph_regression_orphan_is_warning(mock_open, mock_restore, mock_driver, mock_lint):
+    """Orphan-only regression errors must emit a WARNING and not trigger ROLLBACK."""
+    mock_open.return_value.__enter__.return_value.read.return_value = '[]'
+    mock_lint.return_value = {"success": True}
+
+    pre_graph = MagicMock()
+    post_graph = MagicMock()
+    mock_driver.graph_snapshot.return_value = post_graph
+
+    fsm = InjectorFSM("Inbox/test.md", "TargetDir")
+    fsm.context.setdefault("chunk", {})["ops_path"] = "dummy_ops.json"
+    fsm._pre_graph = pre_graph
+    fsm._txn = MagicMock()
+    fsm._txn.created_paths = ["notes/NoteA.md"]
+    fsm.context.setdefault("chunk", {})["snapshot"] = {
+        "txn_id": "txn_123",
+        "inverses": [],
+    }
+
+    fsm.state = InjectorState.LINT
+
+    orphan_error = "Unplanned orphans introduced: done/lezione_1.md"
+    with patch("silica.kernel.graph_diff.check_graph_regression", return_value=(False, [orphan_error])) as mock_check:
+        fsm.step()
+        mock_check.assert_called_once_with(pre_graph, post_graph, ["notes/NoteA.md"], frozenset())
+        # Orphan-only: pipeline must NOT roll back
+        assert fsm.state != InjectorState.ROLLBACK, "Orphan-only errors must not trigger ROLLBACK"
 
 
 @patch("silica.router.orchestrator.silica_lint")
@@ -283,53 +345,42 @@ def test_fsm_gate_partial_rejection_continues(mock_validate):
 @patch("silica.tools.wrapped.silica_restore")
 @patch("builtins.open")
 def test_fsm_graph_regression_gate_rollback(mock_open, mock_restore, mock_driver, mock_lint):
-    # Setup mock file reading for ops_path
+    """Blocking regression errors (broken backlinks, unresolved links) still trigger ROLLBACK."""
     mock_open.return_value.__enter__.return_value.read.return_value = '[]'
-    
-    # Lint passes
     mock_lint.return_value = {"success": True}
-    
-    # Pre-graph exists
+
     pre_graph = MagicMock()
     post_graph = MagicMock()
     mock_driver.graph_snapshot.return_value = post_graph
-    
+
     fsm = InjectorFSM("Inbox/test.md", "TargetDir")
-    fsm.context["ops_path"] = "dummy_ops.json"
+    fsm.context.setdefault("chunk", {})["ops_path"] = "dummy_ops.json"
     fsm._pre_graph = pre_graph
-    fsm._txn = MagicMock()
-    fsm._txn.created_paths = ["notes/NoteA.md"]
-    
-    # Setup snapshot data for rollback inverse application
+
+    # self._txn is the single source of truth for rollback inverses (C3).
     inverses = [{"op": "delete", "path": "notes/NoteA.md"}]
-    fsm.context["snapshot"] = {
+    from silica.driver.base import Txn
+    fsm._txn = Txn(id="txn_123", created_paths=["notes/NoteA.md"], inverses=inverses)
+    fsm.context.setdefault("chunk", {})["snapshot"] = {
         "txn_id": "txn_123",
-        "inverses": inverses
+        "inverses": inverses,
     }
-    
+
     fsm.state = InjectorState.LINT
-    
-    # Mock the regression check to fail
-    with patch("silica.kernel.graph_diff.check_graph_regression", return_value=(False, ["New orphans detected"])) as mock_check:
+
+    blocking_error = "Broken backlinks detected for 'NoteA': decreased from 2 to 0"
+    with patch("silica.kernel.graph_diff.check_graph_regression", return_value=(False, [blocking_error])) as mock_check:
         fsm.step()
-        
-        # Verify check_graph_regression was called with pre_graph, post_graph, and created_paths
-        mock_check.assert_called_once_with(pre_graph, post_graph, ["notes/NoteA.md"])
-        
-        # Verify transition to ROLLBACK on gate rejection
+        mock_check.assert_called_once_with(pre_graph, post_graph, ["notes/NoteA.md"], frozenset())
         assert fsm.state == InjectorState.ROLLBACK
-        assert "Graph regression gate failed: New orphans detected" in fsm.context["abort_reason"]
-        
-    # Now run the ROLLBACK step
+        assert "Graph regression gate failed: Broken backlinks" in fsm.context["chunk"]["abort_reason"]
+
     mock_restore.return_value = {"success": True}
     fsm.step()
-    
-    # Verify restore was called with the correct parameters
     mock_restore.assert_called_once_with(txn_id="txn_123", inverses=inverses)
-    
-    # Verify final status transitions to ERROR
-    assert fsm.state == InjectorState.ERROR
-    assert "Rolled Back" in fsm.context["final_status"]
+
+    assert fsm.state == InjectorState.DONE
+    assert fsm.context["final_status"] == "partial"
 
 
 def test_fsm_recipe_transition_sequence():
@@ -338,11 +389,20 @@ def test_fsm_recipe_transition_sequence():
     # Verify sequential progression
     fsm.state = InjectorState.RECON
     fsm._transition_success()
+    assert fsm.state == InjectorState.CROSSDEDUP  # Phase 1.5
+
+    fsm._transition_success()
     assert fsm.state == InjectorState.PAYLOAD
-    
+
+    fsm._transition_success()
+    assert fsm.state == InjectorState.SALIENCE   # Phase 2.05
+
+    fsm._transition_success()
+    assert fsm.state == InjectorState.COLLISION  # Phase 5
+
     fsm._transition_success()
     assert fsm.state == InjectorState.DELEGATE
-    
+
     fsm._transition_success()
     assert fsm.state == InjectorState.SANITIZE
     
@@ -359,6 +419,12 @@ def test_fsm_recipe_transition_sequence():
     assert fsm.state == InjectorState.HUB_UPDATE
 
     fsm._transition_success()
+    assert fsm.state == InjectorState.AUTOLINK  # Phase 4
+
+    fsm._transition_success()
+    assert fsm.state == InjectorState.BACKLINK  # Phase 4.5
+
+    fsm._transition_success()
     assert fsm.state == InjectorState.LINT
 
     fsm._transition_success()
@@ -370,7 +436,7 @@ def test_fsm_recipe_transition_sequence():
 
 @patch("silica.router.orchestrator.silica_recon")
 @patch("silica.router.orchestrator.silica_payload")
-@patch("silica.agent.delegate.delegate")
+@patch("silica.kernel.prep_delegation.run_distiller")
 @patch("silica.router.orchestrator.silica_sanitize")
 @patch("silica.router.orchestrator.silica_validate_ops")
 @patch("silica.router.orchestrator.DRIVER")
@@ -380,12 +446,12 @@ def test_fsm_recipe_transition_sequence():
 @patch("silica.tools.wrapped.silica_cleanup")
 def test_fsm_recipe_end_to_end_flow(
     mock_cleanup, mock_lint, mock_write, mock_snapshot, mock_driver,
-    mock_validate, mock_sanitize, mock_delegate, mock_payload, mock_recon
+    mock_validate, mock_sanitize, mock_run_distiller, mock_payload, mock_recon
 ):
     # Setup mocks
     mock_recon.return_value = {"success": True}
     mock_payload.return_value = {"payload": {"chunk_id": 0}}
-    mock_delegate.return_value = [{"updates": []}]
+    mock_run_distiller.return_value = {"updates": []}
     mock_sanitize.return_value = {"parsed": []}
     mock_validate.return_value = {"success": True, "rejection_rate": 0.0, "validated_count": 1, "rejected_count": 0}
     mock_snapshot.return_value = {"txn_id": "txn_123", "inverses": []}
@@ -419,13 +485,18 @@ def test_fsm_recipe_end_to_end_flow(
     # Verify the sequence of states visited exactly matches the injector.yaml phases
     expected_sequence = [
         InjectorState.RECON,
+        InjectorState.CROSSDEDUP, # Phase 1.5 (best-effort, single file → skip)
         InjectorState.PAYLOAD,
+        InjectorState.SALIENCE,   # Phase 2.05 (best-effort, embedder unavailable → skip)
+        InjectorState.COLLISION,  # Phase 5 (best-effort, empty index → skip)
         InjectorState.DELEGATE,
         InjectorState.SANITIZE,
         InjectorState.VALIDATE,
         InjectorState.SNAPSHOT,
         InjectorState.WRITE,
         InjectorState.HUB_UPDATE,
+        InjectorState.AUTOLINK,   # Phase 4
+        InjectorState.BACKLINK,   # Phase 4.5 (best-effort)
         InjectorState.LINT,
         InjectorState.CLEANUP,
     ]
@@ -452,6 +523,146 @@ def test_fsm_already_ingested():
         )
         # content_hash kwarg must be present (may be empty str if file not found)
         assert "content_hash" in call_args[1]
+
+
+# ---------------------------------------------------------------------------
+# Phase 5 — Collision routing tests
+# ---------------------------------------------------------------------------
+
+def _make_fsm_at_collision(chunk_concepts: list, tmp_path=None) -> InjectorFSM:
+    """Helper: build an FSM positioned at COLLISION with given chunk."""
+    fsm = InjectorFSM("Inbox/test.md", "TargetDir")
+    fsm._chunks = [{"schema_version": 1, "batches": [
+        {"inbox_file": "Inbox/test.md", "concepts": chunk_concepts}
+    ]}]
+    fsm._current_chunk_idx = 0
+    fsm.state = InjectorState.COLLISION
+    fsm.context["source_content_hash"] = "abc123"
+    return fsm
+
+
+def test_collision_high_similarity_routes_to_patch():
+    """score ≥ τ_high → pre-routed patch op stored in context, concept removed from chunk."""
+    fsm = _make_fsm_at_collision([{"name": "Neural Networks", "excerpt": "A neural net intro."}])
+
+    mock_store = MagicMock()
+    mock_store.__len__ = lambda _: 5  # non-empty index
+    mock_store.cosine_top_k.return_value = [{"path": "DL/Neural Networks.md", "name": "Neural Networks", "score": 0.92}]
+
+    mock_embedder = MagicMock()
+    mock_embedder.embed.return_value = [[0.1, 0.2, 0.3]]
+
+    with patch("silica.router.orchestrator.CONFIG") as mock_cfg, \
+         patch("silica.router.orchestrator.DRIVER") as mock_driver, \
+         patch("silica.kernel.embed.EmbedStore", return_value=mock_store), \
+         patch("silica.agent.providers.get_embedder", return_value=mock_embedder):
+        mock_cfg.sim_threshold_high = 0.85
+        mock_cfg.sim_threshold_low = 0.65
+        mock_driver.read_note.return_value = MagicMock()  # graph confirms node exists
+
+        fsm.step()
+
+    assert fsm.state == InjectorState.DELEGATE
+    collision_ops = fsm.context.get("chunk_0_collision_ops", [])
+    assert len(collision_ops) == 1
+    assert collision_ops[0]["op"] == "patch"
+    assert collision_ops[0]["path"] == "DL/Neural Networks.md"
+    # Concept removed from modified chunk
+    remaining = fsm._chunks[0].get("batches", [])
+    assert remaining == [] or all(len(b.get("concepts", [])) == 0 for b in remaining)
+
+
+def test_collision_low_similarity_keeps_for_distillation():
+    """score ≤ τ_low → concept kept in chunk for normal distillation, no patch ops."""
+    fsm = _make_fsm_at_collision([{"name": "Quantum Entanglement", "excerpt": "Something unrelated."}])
+
+    mock_store = MagicMock()
+    mock_store.__len__ = lambda _: 5
+    mock_store.cosine_top_k.return_value = [{"path": "Physics/Photons.md", "name": "Photons", "score": 0.40}]
+
+    mock_embedder = MagicMock()
+    mock_embedder.embed.return_value = [[0.1, 0.2, 0.3]]
+
+    with patch("silica.router.orchestrator.CONFIG") as mock_cfg, \
+         patch("silica.kernel.embed.EmbedStore", return_value=mock_store), \
+         patch("silica.agent.providers.get_embedder", return_value=mock_embedder):
+        mock_cfg.sim_threshold_high = 0.85
+        mock_cfg.sim_threshold_low = 0.65
+
+        fsm.step()
+
+    assert fsm.state == InjectorState.DELEGATE
+    collision_ops = fsm.context.get("chunk_0_collision_ops", [])
+    assert collision_ops == []
+    # Concept still in chunk
+    concepts_left = [
+        c
+        for b in fsm._chunks[0].get("batches", [])
+        for c in b.get("concepts", [])
+    ]
+    assert len(concepts_left) == 1
+    assert concepts_left[0]["name"] == "Quantum Entanglement"
+
+
+def test_collision_borderline_deferred():
+    """τ_low < score < τ_high → concept deferred, removed from chunk, deferred store called."""
+    fsm = _make_fsm_at_collision([{"name": "Backprop", "excerpt": "Backpropagation intro."}])
+
+    mock_store = MagicMock()
+    mock_store.__len__ = lambda _: 5
+    mock_store.cosine_top_k.return_value = [{"path": "DL/Gradient Descent.md", "name": "Gradient Descent", "score": 0.75}]
+
+    mock_embedder = MagicMock()
+    mock_embedder.embed.return_value = [[0.1, 0.2, 0.3]]
+
+    mock_deferred = MagicMock()
+
+    with patch("silica.router.orchestrator.CONFIG") as mock_cfg, \
+         patch("silica.kernel.embed.EmbedStore", return_value=mock_store), \
+         patch("silica.agent.providers.get_embedder", return_value=mock_embedder), \
+         patch("silica.kernel.deferred.get_deferred_store", return_value=mock_deferred):
+        mock_cfg.sim_threshold_high = 0.85
+        mock_cfg.sim_threshold_low = 0.65
+
+        fsm.step()
+
+    assert fsm.state == InjectorState.DELEGATE
+    collision_ops = fsm.context.get("chunk_0_collision_ops", [])
+    assert collision_ops == []
+    # Concept removed from chunk (deferred)
+    concepts_left = [
+        c
+        for b in fsm._chunks[0].get("batches", [])
+        for c in b.get("concepts", [])
+    ]
+    assert concepts_left == []
+    # Deferred store was called
+    mock_deferred.put.assert_called_once()
+    put_kwargs = mock_deferred.put.call_args[1]
+    assert put_kwargs["content_hash"] == "abc123"
+    assert len(put_kwargs["rejected_ops"]) == 1
+
+
+def test_collision_empty_index_skips_transparently():
+    """Empty embedding index → COLLISION is a no-op, chunk flows unchanged."""
+    concepts = [{"name": "Test Concept"}, {"name": "Another Concept"}]
+    fsm = _make_fsm_at_collision(concepts)
+
+    mock_store = MagicMock()
+    mock_store.__len__ = lambda _: 0  # empty index
+
+    with patch("silica.kernel.embed.EmbedStore", return_value=mock_store):
+        fsm.step()
+
+    assert fsm.state == InjectorState.DELEGATE
+    assert fsm.context.get("chunk_0_collision_ops", []) == []
+    # Chunk is UNCHANGED (not modified by collision)
+    concepts_left = [
+        c
+        for b in fsm._chunks[0].get("batches", [])
+        for c in b.get("concepts", [])
+    ]
+    assert len(concepts_left) == 2
 
 
 @patch("silica.agent.llm.call_llm")
@@ -498,7 +709,7 @@ def test_fsm_short_circuit_no_ops(mock_validate):
 
     fsm = InjectorFSM("Inbox/test.md", "TargetDir")
     fsm.context["payload"] = {"payload": {"chunk_id": 0}}
-    fsm.context["sanitized"] = {"parsed": []}
+    fsm.context.setdefault("chunk", {})["sanitized"] = {"parsed": []}
     fsm.state = InjectorState.VALIDATE
 
     with patch.object(fsm, "_make_tmp", return_value="dummy_ops.json"):
@@ -511,7 +722,7 @@ def test_fsm_short_circuit_no_ops(mock_validate):
 
 @patch("silica.router.orchestrator.silica_recon")
 @patch("silica.router.orchestrator.silica_payload")
-@patch("silica.agent.delegate.delegate")
+@patch("silica.kernel.prep_delegation.run_distiller")
 @patch("silica.router.orchestrator.silica_sanitize")
 @patch("silica.router.orchestrator.silica_validate_ops")
 @patch("silica.router.orchestrator.DRIVER")
@@ -520,13 +731,13 @@ def test_fsm_short_circuit_no_ops(mock_validate):
 @patch("silica.tools.wrapped.silica_cleanup")
 def test_fsm_create_settle_timeout_rollback(
     mock_cleanup, mock_restore, mock_snapshot, mock_driver,
-    mock_validate, mock_sanitize, mock_delegate, mock_payload, mock_recon
+    mock_validate, mock_sanitize, mock_run_distiller, mock_payload, mock_recon
 ):
     from silica.driver.base import SettleTimeout
-    
+
     mock_recon.return_value = {"success": True}
     mock_payload.return_value = {"payload": {"chunk_id": 0}}
-    mock_delegate.return_value = [{"updates": []}]
+    mock_run_distiller.return_value = {"updates": []}
     mock_sanitize.return_value = {"parsed": [{"op": "write", "path": "test.md", "heading": "Test", "hub": "Hub", "source_basename": "test_fsm_settle.md"}]}
     
     import json
@@ -554,16 +765,306 @@ def test_fsm_create_settle_timeout_rollback(
         with patch("silica.kernel.graph_diff.check_graph_regression", return_value=(True, [])):
             res = fsm.run()
         
-    assert fsm.state == InjectorState.ERROR
-    assert "Rolled Back" in res.get("final_status")
-    assert "Settle timeout mock error" in res.get("final_status")
-    
-    # Check that cleanup is not called (inbox not moved)
+    # Chunk-level containment: single-chunk run concludes as partial (not ERROR)
+    assert fsm.state == InjectorState.DONE
+    assert res.get("final_status") == "partial"
+
+    # Check that cleanup is not called (inbox not moved — chunk had a failure)
     mock_cleanup.assert_not_called()
     # Check that restore (rollback) was called
     mock_restore.assert_called_once()
 
 
+# ---------------------------------------------------------------------------
+# CROSSDEDUP tests
+# ---------------------------------------------------------------------------
+
+def _make_fsm_at_crossdedup(recon_list: list[dict]) -> InjectorFSM:
+    """Helper: build an FSM positioned at CROSSDEDUP with pre-populated recon."""
+    fsm = InjectorFSM("Inbox/a.md", "TargetDir", inbox_files=["Inbox/a.md", "Inbox/b.md"])
+    fsm.state = InjectorState.CROSSDEDUP
+    fsm.context["recon"] = recon_list
+    return fsm
 
 
+def test_crossdedup_skips_single_file():
+    """Single-file runs skip CROSSDEDUP immediately."""
+    fsm = InjectorFSM("Inbox/a.md", "TargetDir")
+    fsm.state = InjectorState.CROSSDEDUP
+    fsm.context["recon"] = [{"file": "Inbox/a.md", "new_concepts": ["PIL"], "collisions": []}]
+    fsm.step()
+    assert fsm.state == InjectorState.PAYLOAD
+    assert fsm.context["recon"][0]["new_concepts"] == ["PIL"]
+
+
+def test_crossdedup_removes_cross_file_near_duplicate():
+    """A concept that appears in two files with cosine ≥ τ_high is removed from the second file."""
+    recon = [
+        {"file": "Inbox/a.md", "new_concepts": ["PIL"],           "collisions": []},
+        {"file": "Inbox/b.md", "new_concepts": ["Prodotto Interno Lordo"], "collisions": []},
+    ]
+    fsm = _make_fsm_at_crossdedup(recon)
+
+    # vec[0] ≈ vec[1] → high cosine
+    similar_vec = [1.0, 0.0, 0.0]
+    mock_embedder = MagicMock()
+    mock_embedder.embed.return_value = [similar_vec, similar_vec]
+
+    with patch("silica.agent.providers.get_embedder", return_value=mock_embedder), \
+         patch("silica.router.orchestrator.CONFIG") as mock_cfg:
+        mock_cfg.sim_threshold_high = 0.85
+        fsm.step()
+
+    assert fsm.state == InjectorState.PAYLOAD
+    assert fsm.context["recon"][0]["new_concepts"] == ["PIL"]        # winner kept
+    assert fsm.context["recon"][1]["new_concepts"] == []             # loser removed
+    assert fsm.context["crossdedup_merged"] == 1
+
+
+def test_crossdedup_keeps_distinct_concepts():
+    """Concepts that are semantically different are left untouched in both files."""
+    recon = [
+        {"file": "Inbox/a.md", "new_concepts": ["PIL"],            "collisions": []},
+        {"file": "Inbox/b.md", "new_concepts": ["Entropia"],       "collisions": []},
+    ]
+    fsm = _make_fsm_at_crossdedup(recon)
+
+    mock_embedder = MagicMock()
+    mock_embedder.embed.return_value = [[1.0, 0.0], [0.0, 1.0]]  # orthogonal → cosine 0.0
+
+    with patch("silica.agent.providers.get_embedder", return_value=mock_embedder), \
+         patch("silica.router.orchestrator.CONFIG") as mock_cfg:
+        mock_cfg.sim_threshold_high = 0.85
+        fsm.step()
+
+    assert fsm.state == InjectorState.PAYLOAD
+    assert fsm.context["recon"][0]["new_concepts"] == ["PIL"]
+    assert fsm.context["recon"][1]["new_concepts"] == ["Entropia"]
+    assert "crossdedup_merged" not in fsm.context
+
+
+def test_crossdedup_skips_when_embedder_unavailable():
+    """Best-effort: if get_embedder raises, CROSSDEDUP passes through unchanged."""
+    recon = [
+        {"file": "Inbox/a.md", "new_concepts": ["PIL"],     "collisions": []},
+        {"file": "Inbox/b.md", "new_concepts": ["PIL"],     "collisions": []},
+    ]
+    fsm = _make_fsm_at_crossdedup(recon)
+
+    with patch("silica.agent.providers.get_embedder", side_effect=RuntimeError("no key")):
+        fsm.step()
+
+    assert fsm.state == InjectorState.PAYLOAD
+    assert fsm.context["recon"][1]["new_concepts"] == ["PIL"]  # untouched
+
+
+def test_crossdedup_skips_when_embed_call_fails():
+    """Best-effort: if embedder.embed raises, CROSSDEDUP passes through unchanged."""
+    recon = [
+        {"file": "Inbox/a.md", "new_concepts": ["PIL"],     "collisions": []},
+        {"file": "Inbox/b.md", "new_concepts": ["PIL"],     "collisions": []},
+    ]
+    fsm = _make_fsm_at_crossdedup(recon)
+
+    mock_embedder = MagicMock()
+    mock_embedder.embed.side_effect = RuntimeError("rate limit")
+
+    with patch("silica.agent.providers.get_embedder", return_value=mock_embedder), \
+         patch("silica.router.orchestrator.CONFIG") as mock_cfg:
+        mock_cfg.sim_threshold_high = 0.85
+        fsm.step()
+
+    assert fsm.state == InjectorState.PAYLOAD
+    assert fsm.context["recon"][1]["new_concepts"] == ["PIL"]  # untouched
+
+
+# ---------------------------------------------------------------------------
+# WRITE partial-failure containment (Fase A → B)
+# ---------------------------------------------------------------------------
+
+@patch("silica.kernel.deferred.get_deferred_store")
+@patch("silica.kernel.atomic_write.commit_note_atomic")
+def test_handle_write_partial_failure_defers_and_continues(
+    mock_commit, mock_get_store, tmp_path
+):
+    """Partial write failure: committed ops survive, failed ops land in deferred store,
+    FSM continues to HUB_UPDATE (no rollback), has_partial_failure is set."""
+    import json
+    from silica.kernel.atomic_write import NoteCommitResult
+    from silica.kernel.deferred import DeferredStore
+    from silica.kernel.ops import InverseOp, InverseOpKind
+
+    ops_data = [
+        {"op": "write", "path": "TargetDir/A.md", "heading": "A", "hub": "TargetDir",
+         "source_basename": "test.md", "snippet": "a"},
+        {"op": "write", "path": "TargetDir/B.md", "heading": "B", "hub": "TargetDir",
+         "source_basename": "test.md", "snippet": "b"},
+    ]
+    ops_file = tmp_path / "ops.json"
+    ops_file.write_text(json.dumps(ops_data))
+
+    # Op A committed, op B failed (lint failure)
+    def commit_side_effect(op, hub=None, lint=True):
+        if "A.md" in (op.path or ""):
+            inv = InverseOp(kind=InverseOpKind.delete_created, path=op.path or "")
+            return NoteCommitResult(ok=True, path=op.path or "", op=op.op.value,
+                                    inverses=[inv])
+        return NoteCommitResult(ok=False, path=op.path or "", op=op.op.value,
+                                error="Settle timeout", reverted=True)
+    mock_commit.side_effect = commit_side_effect
+
+    deferred_store = DeferredStore(tmp_path / "deferred")
+    mock_get_store.return_value = deferred_store
+
+    fsm = InjectorFSM("Inbox/test.md", "TargetDir")
+    fsm.state = InjectorState.WRITE
+    fsm.context["source_content_hash"] = "abc123hash"
+    fsm.context["chunk"] = {
+        "ops_path": str(ops_file),
+        "txn_id": "txn_test",
+        "snapshot": {"txn_id": "txn_test", "inverses": []},
+    }
+
+    fsm.step()
+
+    # FSM advances to HUB_UPDATE — no rollback
+    assert fsm.state == InjectorState.HUB_UPDATE
+    assert fsm.context.get("has_partial_failure") is True
+
+    # Op B deferred under the source content hash
+    bundle = deferred_store.get("abc123hash")
+    assert bundle is not None
+    failed_paths = {o.get("path") for o in bundle["rejected_ops"]}
+    assert "TargetDir/B.md" in failed_paths
+    assert "Settle timeout" in bundle["rejection_reasons"].get("TargetDir/B.md", "")
+
+
+@patch("silica.kernel.atomic_write.commit_note_atomic")
+def test_handle_write_all_fail_defers_and_continues(mock_commit, tmp_path):
+    """When ALL ops fail lint/write, they are deferred and FSM continues (no rollback).
+
+    This is the new per-note atomic behavior: bulk_write_atomic never raises;
+    every failure is self-reverted and deferred. The FSM advances to HUB_UPDATE
+    with has_partial_failure set.
+    """
+    import json
+    from silica.kernel.atomic_write import NoteCommitResult
+
+    ops_data = [
+        {"op": "write", "path": "TargetDir/A.md", "heading": "A", "hub": "TargetDir",
+         "source_basename": "test.md", "snippet": "a"},
+    ]
+    ops_file = tmp_path / "ops.json"
+    ops_file.write_text(json.dumps(ops_data))
+
+    mock_commit.return_value = NoteCommitResult(
+        ok=False, path="TargetDir/A.md", op="write",
+        error="fatal lint failure", reverted=True,
+    )
+
+    fsm = InjectorFSM("Inbox/test.md", "TargetDir")
+    fsm.state = InjectorState.WRITE
+    fsm.context["source_content_hash"] = "xyz"
+    fsm.context["chunk"] = {
+        "ops_path": str(ops_file),
+        "txn_id": "txn_x",
+        "snapshot": {"txn_id": "txn_x", "inverses": []},
+    }
+
+    # All-fail: _handle_write defers and continues (no raise, no rollback).
+    fsm.step()
+
+    assert fsm.state == InjectorState.HUB_UPDATE
+    assert fsm.context.get("has_partial_failure") is True
+    write_ctx = fsm.context.get("write", {})
+    assert write_ctx.get("successful") == 0
+    assert len(write_ctx.get("failed", [])) == 1
+
+
+def test_hub_inverse_appears_in_chunk_ctx_snapshot(tmp_path):
+    """After HUB_UPDATE, the hub rollback inverse must land in the txn's authoritative
+    inverses list (the single source of truth read by ROLLBACK) — not in a stale dict."""
+    import json, os
+    from unittest.mock import patch, MagicMock
+    from silica.router.orchestrator import InjectorFSM
+
+    ops_path = str(tmp_path / "ops.json")
+    with open(ops_path, "w") as f:
+        json.dump([{
+            "op": "write", "path": "TargetDir/Note.md",
+            "heading": "Note", "source_basename": "test.md",
+            "content": "# Note\n", "snippet": "Note snippet",
+            "hub": None, "parent": None,
+        }], f)
+
+    fsm = InjectorFSM("Inbox/test.md", "TargetDir", hub="Hub")
+    # _chunk_ctx is a property returning self.context.setdefault("chunk", {}),
+    # so seed the per-chunk state via context["chunk"] directly.
+    fsm.context["chunk"] = {
+        "ops_path": ops_path,
+        "snapshot": {"txn_id": "txn-001", "inverses": [], "created_paths": []},
+        "snapshot_domain": [],
+    }
+    fsm._current_chunk_idx = 0
+    fsm._chunk_flat_to_fi_ci = {0: (0, 0)}
+    fsm._file_chunks = [{"source_file": "Inbox/test.md", "chunks": [{}]}]
+
+    mock_hub_note = MagicMock()
+    mock_hub_note.content = "# Hub\n\nExisting content\n"
+
+    from silica.driver.base import Txn
+    fsm._txn = Txn(id="txn-001", created_paths=[], inverses=[])
+
+    with patch("silica.router.orchestrator.DRIVER") as mock_driver, \
+         patch("silica.router.orchestrator.time") as mock_time:
+        mock_driver.read_note.return_value = mock_hub_note
+        mock_driver.overwrite.return_value = None
+        mock_time.monotonic.side_effect = [0.0, 10.0]
+        mock_time.sleep.return_value = None
+        fsm._handle_hub_update()
+
+    txn_inverses = fsm._txn.inverses_serialized
+    assert any(
+        inv.get("path", "").endswith("Hub.md") for inv in txn_inverses
+    ), f"Hub inverse missing from txn.inverses; got: {txn_inverses}"
+    # The dual-write to _chunk_ctx['snapshot']['inverses'] is gone — the txn is
+    # now the single source of truth, so the snapshot dict stays as SNAPSHOT left it.
+    assert fsm._chunk_ctx["snapshot"]["inverses"] == [], \
+        "Hub inverse must not be dual-written into _chunk_ctx['snapshot']['inverses']"
+    # Also confirm it did NOT land in stale context['snapshot'].
+    assert "snapshot" not in fsm.context or "inverses" not in fsm.context.get("snapshot", {}), \
+        "Hub inverse was written to stale context['snapshot']"
+
+
+def test_refiner_default_recipe_includes_backlink():
+    """RefinerFSM default recipe (loaded from YAML) includes backlink after write and before lint."""
+    from silica.router.refiner_fsm import RefinerFSM
+    from unittest.mock import patch
+
+    with patch("silica.router.refiner_fsm.DRIVER"):
+        fsm = RefinerFSM(folder="Concepts")
+
+    phase_ids = [p["id"] for p in fsm._recipe.get("phases", [])]
+    assert "backlink" in phase_ids, (
+        f"'backlink' phase missing from RefinerFSM default recipe. Got: {phase_ids}"
+    )
+    assert phase_ids.index("backlink") > phase_ids.index("write"), \
+        "'backlink' must appear after 'write'"
+    assert phase_ids.index("backlink") < phase_ids.index("lint"), \
+        "'backlink' must appear before 'lint'"
+
+
+def test_refiner_python_fallback_recipe_includes_autolink_and_backlink():
+    """RefinerFSM Python fallback recipe (used when YAML load fails) includes autolink + backlink."""
+    from silica.router.refiner_fsm import RefinerFSM
+    from unittest.mock import patch
+
+    with patch("silica.router.refiner_fsm.DRIVER"), \
+         patch("silica.router.recipe_parser.load_recipe", side_effect=FileNotFoundError("no yaml")):
+        fsm = RefinerFSM(folder="Concepts")
+
+    phase_ids = [p["id"] for p in fsm._recipe.get("phases", [])]
+    assert "autolink" in phase_ids, f"'autolink' missing from fallback recipe: {phase_ids}"
+    assert "backlink" in phase_ids, f"'backlink' missing from fallback recipe: {phase_ids}"
+    assert phase_ids.index("autolink") < phase_ids.index("backlink") < phase_ids.index("lint")
 

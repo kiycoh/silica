@@ -47,6 +47,7 @@ def lint_tags(data):
     return issues
 
 def normalize_tags(data):
+    from silica.kernel.ofm import LIMITS
     data = dict(data or {})
     tags = _ensure_tag_list(data.get('tags'))
     seen, out = set(), []
@@ -54,7 +55,7 @@ def normalize_tags(data):
         ct = clean_tag(t)
         if ct and ct not in seen:
             seen.add(ct); out.append(ct)
-    data['tags'] = out
+    data['tags'] = out[:LIMITS["max_tags"]]
     return data
 
 def dump(data, body):

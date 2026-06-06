@@ -14,15 +14,20 @@ def slugify(s: str) -> str:
     return s.strip().replace('  ', ' ')  # keep spaces, Obsidian likes them
 
 
-def template_spoke(heading: str, snippet: str, hub: str, tags: list[str] | None = None, related: list[str] | None = None) -> str:
+def template_spoke(heading: str, snippet: str, hub: str, title: str | None = None, tags: list[str] | None = None, related: list[str] | None = None, parent: str | None = None) -> str:
     today = datetime.date.today().strftime("%Y, %m, %d")
     body = snippet.strip() or "(da espandere)"
+    h1 = title or heading  # title wins: filename and H1 stay in sync
 
-    # parent note link
-    parent_note = f'"[[{hub}]]"'
+    # parent note link — specific parent overrides hub when provided
+    if parent:
+        parent_note = f'"[[{parent}]]"'
+        related_items = [f'"[[{parent}]]"', f'"[[{hub}]]"']
+    else:
+        parent_note = f'"[[{hub}]]"'
+        related_items = [f'"[[{hub}]]"']
 
     # related list
-    related_items = [f'"[[{hub}]]"']
     if related:
         for r in related:
             r_link = f'"[[{r}]]"'
@@ -58,7 +63,7 @@ AI: true
 
     return f"""{frontmatter}
 
-# {heading}
+# {h1}
 
 {body}
 """
@@ -96,3 +101,19 @@ AI: true
         return existing_content.rstrip() + "\n" + patch_text
 
     return patch_text
+
+
+def provenance_header(heading: str, source_basename: str) -> str:
+    """The exact header line patch_snippet emits for a (heading, source) block.
+
+    Single source of truth so the patch executor can detect an already-injected
+    block and stay idempotent on re-injection.
+    """
+    return f"## Note aggiuntive — {heading} (da {source_basename})"
+
+
+def block_present(existing_content: str | None, heading: str, source_basename: str) -> bool:
+    """True if a provenance block for (heading, source_basename) is already present."""
+    if not existing_content:
+        return False
+    return provenance_header(heading, source_basename) in existing_content

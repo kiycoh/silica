@@ -27,12 +27,16 @@ class Op(BaseModel):
     heading: str                        # concept name; provenance key in payload
     source_basename: str                # inbox filename (basename) this op derives from
     path: str | None = None             # vault-relative path; required for write/patch/overwrite/delete
+    title: str | None = None            # clean note filename stem when heading is structurally compound
     snippet: str = ""                   # distilled body (write / patch)
     hub: str | None = None              # [[Hub]] link required for write ops
     content: str | None = None          # full body (overwrite only)
     tags: list[str] | None = None
     related: list[str] | None = None
+    concepts: list[str] | None = None  # #9: normalized concept phrases for the co-occurrence graph
     reason: str | None = None           # skip reason / rejection note
+    linked_axis: str | None = None      # thematic axis this concept belongs to (Layer 2)
+    parent: str | None = None           # specific parent note (≠ run hub); None → falls back to hub
 
     @model_validator(mode="after")
     def validate_path_required(self) -> Op:
@@ -138,6 +142,7 @@ class BulkResult(BaseModel):
 
 
 class DistillerOutput(BaseModel):
+    main_thematic_axes: list[str] = Field(default_factory=list)
     updates: list[Op]
 
 

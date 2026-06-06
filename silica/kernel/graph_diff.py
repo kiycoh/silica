@@ -27,6 +27,7 @@ def check_graph_regression(
     pre: GraphSnapshot,
     post: GraphSnapshot,
     created_paths: list[str],
+    deferred_stems: frozenset[str] = frozenset(),
 ) -> tuple[bool, list[str]]:
     """Verify that the changes do not introduce structural regressions.
 
@@ -40,6 +41,13 @@ def check_graph_regression(
          intentional forward references to concepts not yet in the vault —
          they mirror the same exemption that Rule 1 already grants to newly
          created orphans (unplanned_orphans = new_orphans - norm_created).
+         Links to *deferred* targets (planned but not yet written due to a
+         settle failure) are also exempt — they will be resolved on the next
+         pipeline iteration when the deferred ops are retried.
+
+    Args:
+      deferred_stems: lowercase basenames (no extension) of notes that were
+        planned in this chunk but failed to settle and were deferred for retry.
 
     Returns:
       (success, list_of_errors)
@@ -74,13 +82,24 @@ def check_graph_regression(
     # 2. New unresolved links check
     pre_unres = {normalize_link(link.source, link.target) for link in pre.unresolved}
     post_unres = {normalize_link(link.source, link.target) for link in post.unresolved}
-    
+
     new_unres = post_unres - pre_unres
     # Exempt links whose source is a newly created note — same carve-out that
     # Rule 1 grants to planned orphans. norm_created is already computed above.
+    #
+    # Also exempt sources not observed in the pre-snapshot domain: when a write
+    # op creates a note that links to an existing vault note, that target's
+    # neighborhood enters the post-snapshot but was absent from the pre-snapshot
+    # (the newly created note didn't exist yet so its link targets weren't
+    # included in the incremental domain).  Pre-existing ghost links on those
+    # target notes surface as new_unres even though nothing changed in them —
+    # a false positive that mirrors the Rule 1 domain-expansion problem already
+    # guarded by norm_pre_observed.
     new_unres_blocking = {
         (src, tgt) for src, tgt in new_unres
         if src not in norm_created
+        and src in norm_pre_observed   # must have a concrete pre-write baseline
+        and tgt not in deferred_stems  # exempt planned-but-deferred targets
     }
     if new_unres_blocking:
         detail_links = []

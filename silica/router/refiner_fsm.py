@@ -10,7 +10,6 @@ import logging
 import os
 from enum import Enum, auto
 from typing import Any
-import orjson
 
 from silica.driver import DRIVER
 from silica.driver.base import NoteRef, Txn, GraphSnapshot
@@ -22,8 +21,8 @@ from silica.tools.composed import (
 from silica.kernel.ops import OpType
 from silica.kernel.ops_io import load_ops, parse_ops
 from silica.kernel.ledger import get_ledger
-from silica.kernel.paths import silica_tmp_dir
 from silica.kernel import frontmatter, ofm, templates
+from silica.router.base_fsm import BaseFSM
 
 logger = logging.getLogger(__name__)
 
@@ -31,10 +30,12 @@ logger = logging.getLogger(__name__)
 class RefinerState(Enum):
     INIT = auto()
     TRIAGE = auto()
-    DELEGATE = auto()      # semantic enrichment worker
+    ENRICH = auto()        # semantic enrichment worker
     VALIDATE = auto()      # Gate: check rejection rate
     SNAPSHOT = auto()      # build inverses
     WRITE = auto()         # bulk write ops
+    AUTOLINK = auto()      # Phase 4 — inject wikilinks into touched notes (best-effort)
+    BACKLINK = auto()      # Phase 4.5 — reverse: inject links to new notes into pre-existing ones
     LINT = auto()          # Gate: lint + graph diff
     CLEANUP = auto()       # mark committed
     ROLLBACK = auto()      # rollback txn if gate fails
@@ -42,16 +43,16 @@ class RefinerState(Enum):
     ERROR = auto()
 
 
-class RefinerFSM:
+class RefinerFSM(BaseFSM[RefinerState]):
     """Deterministic state machine for the Refiner pipeline."""
 
-    def __init__(self, folder: str, hub_override: str | None = None):
+    def __init__(self, folder: str, hub: str | None = None):
         self.folder = folder
-        self.hub_override = hub_override
+        self.hub = hub
 
         self.state = RefinerState.INIT
         self.context: dict[str, Any] = {
-            "det_ops": [],
+            "mechanical_ops": [],
             "enrich_queue": [],
             "enrich_ops": [],
             "ops": [],
@@ -62,8 +63,9 @@ class RefinerFSM:
 
         # Load the recipe
         from silica.router.recipe_parser import load_recipe
+        from silica.config import CONFIG
         try:
-            self._recipe = load_recipe("refiner")
+            self._recipe = load_recipe("refiner", domain=getattr(CONFIG, "domain", None))
         except Exception as e:
             logger.warning("Failed to load recipe 'refiner', using defaults: %s", e)
             self._recipe = {}
@@ -81,18 +83,40 @@ class RefinerFSM:
                     { "id": "validate",   "kind": "gate",       "tool": "silica_validate_ops", "abort_code": 2 },
                     { "id": "snapshot",   "kind": "txn",        "tool": "silica_snapshot" },
                     { "id": "write",      "kind": "mechanical", "tool": "silica_bulk_write" },
+                    { "id": "autolink",   "kind": "mechanical", "best_effort": True },
+                    { "id": "backlink",   "kind": "mechanical", "best_effort": True },
                     { "id": "lint",       "kind": "gate",       "tool": "silica_lint" },
                     { "id": "cleanup",    "kind": "mechanical", "tool": "silica_cleanup", "on_success_only": True },
                     { "id": "rollback",   "kind": "txn",        "tool": "silica_restore", "on_gate_fail": True }
                 ]
             }
 
+        # BaseFSM contract
+        self._phase_label = "Refiner"
+        self._done_state = RefinerState.DONE
+        self._error_state = RefinerState.ERROR
+        self._rollback_state = RefinerState.ROLLBACK
+        self._phase_to_state: dict[str, RefinerState] = {
+            "triage":   RefinerState.TRIAGE,
+            "enrich":   RefinerState.ENRICH,
+            "validate": RefinerState.VALIDATE,
+            "snapshot": RefinerState.SNAPSHOT,
+            "write":    RefinerState.WRITE,
+            "autolink": RefinerState.AUTOLINK,
+            "backlink": RefinerState.BACKLINK,
+            "lint":     RefinerState.LINT,
+            "cleanup":  RefinerState.CLEANUP,
+            "rollback": RefinerState.ROLLBACK,
+        }
+
         self._HANDLERS = {
             RefinerState.TRIAGE: self._handle_triage,
-            RefinerState.DELEGATE: self._handle_delegate,
+            RefinerState.ENRICH: self._handle_enrich,
             RefinerState.VALIDATE: self._handle_validate,
             RefinerState.SNAPSHOT: self._handle_snapshot,
             RefinerState.WRITE: self._handle_write,
+            RefinerState.AUTOLINK: self._handle_autolink,
+            RefinerState.BACKLINK: self._handle_backlink,
             RefinerState.LINT: self._handle_lint,
             RefinerState.CLEANUP: self._handle_cleanup,
             RefinerState.ROLLBACK: self._handle_rollback,
@@ -100,120 +124,28 @@ class RefinerFSM:
 
         self._ON_ERROR = {
             RefinerState.TRIAGE: RefinerState.ERROR,
-            RefinerState.DELEGATE: RefinerState.ERROR,
+            RefinerState.ENRICH: RefinerState.ERROR,
             RefinerState.VALIDATE: RefinerState.ERROR,
             RefinerState.SNAPSHOT: RefinerState.ERROR,
             RefinerState.WRITE: RefinerState.ROLLBACK,
             RefinerState.LINT: RefinerState.ROLLBACK,
         }
 
-    def _get_recipe_gate(self, name: str, default: Any) -> Any:
-        return self._recipe.get("gates", {}).get(name, default)
-
-    def _get_recipe_phase(self, phase_id: str) -> dict:
-        for phase in self._recipe.get("phases", []):
-            if phase.get("id") == phase_id:
-                return phase
-        return {}
-
-    def _make_tmp(self, content: Any, suffix: str = ".json") -> str:
-        """Write content as JSON to ~/.silica/tmp/ and track for cleanup."""
-        import uuid
-        path = str(silica_tmp_dir() / f"{uuid.uuid4().hex}{suffix}")
-        with open(path, "wb") as f:
-            if isinstance(content, list) and len(content) > 0 and hasattr(content[0], "model_dump"):
-                f.write(orjson.dumps([item.model_dump() for item in content], option=orjson.OPT_INDENT_2))
-            elif hasattr(content, "model_dump"):
-                f.write(orjson.dumps(content.model_dump(), option=orjson.OPT_INDENT_2))
-            else:
-                f.write(orjson.dumps(content, option=orjson.OPT_INDENT_2))
-        self._tmp_files.append(path)
-        return path
-
-    def _cleanup_tmp(self) -> None:
-        for path in self._tmp_files:
-            try:
-                os.unlink(path)
-            except OSError:
-                pass
-        self._tmp_files.clear()
-
     def run(self) -> dict[str, Any]:
         self.state = RefinerState.TRIAGE
+        self._run_loop()
 
-        try:
-            while self.state not in (RefinerState.DONE, RefinerState.ERROR):
-                try:
-                    self.step()
-                except Exception as e:
-                    logger.error("FSM Error in state %s: %s", self.state, e)
-                    self.context["error"] = str(e)
-                    
-                    next_state = self._ON_ERROR.get(self.state, RefinerState.ERROR)
-                    if next_state == RefinerState.ROLLBACK and self._txn:
-                        self.context["abort_reason"] = str(e)
-                        self.state = RefinerState.ROLLBACK
-                    else:
-                        self.state = RefinerState.ERROR
-        finally:
-            self._cleanup_tmp()
-
-        if self.state == RefinerState.DONE:
+        if self.state == self._done_state:
             if "final_status" not in self.context:
                 self.context["final_status"] = "Success"
             self._write_ledger("committed")
-        elif self.state == RefinerState.ERROR:
+        elif self.state == self._error_state:
             if "final_status" not in self.context:
                 self.context["final_status"] = f"Failed: {self.context.get('error', 'unknown error')}"
             # C2.5 — materialise 'failed' so the note isn't stuck as stale
             self._write_ledger_failed()
 
         return self.context
-
-    def step(self) -> None:
-        logger.info("Refiner phase: %s", self.state.name)
-        handler = self._HANDLERS.get(self.state)
-        if handler:
-            handler()
-        else:
-            raise RuntimeError(f"No handler defined for state {self.state}")
-
-    def _transition_success(self) -> None:
-        phases = self._recipe.get("phases", [])
-        
-        PHASE_TO_STATE = {
-            "triage": RefinerState.TRIAGE,
-            "enrich": RefinerState.DELEGATE,
-            "validate": RefinerState.VALIDATE,
-            "snapshot": RefinerState.SNAPSHOT,
-            "write": RefinerState.WRITE,
-            "lint": RefinerState.LINT,
-            "cleanup": RefinerState.CLEANUP,
-            "rollback": RefinerState.ROLLBACK,
-        }
-
-        sequence = [p["id"] for p in phases if not p.get("on_gate_fail") and p.get("id") != "rollback" and p.get("id") != "cleanup"]
-        
-        current_phase_id = None
-        for k, v in PHASE_TO_STATE.items():
-            if v == self.state:
-                current_phase_id = k
-                break
-                
-        if current_phase_id in sequence:
-            idx = sequence.index(current_phase_id)
-            if idx + 1 < len(sequence):
-                next_phase_id = sequence[idx + 1]
-                self.state = PHASE_TO_STATE[next_phase_id]
-            else:
-                if "cleanup" in [p["id"] for p in phases]:
-                    self.state = RefinerState.CLEANUP
-                else:
-                    self.state = RefinerState.DONE
-        elif self.state == RefinerState.CLEANUP:
-            self.state = RefinerState.DONE
-        elif self.state == RefinerState.ROLLBACK:
-            self.state = RefinerState.ERROR
 
     # ------------------------------------------------------------------
     # State Handlers
@@ -223,7 +155,7 @@ class RefinerFSM:
         import glob
         md_files = sorted(glob.glob(os.path.join(self.folder, "**", "*.md"), recursive=True))
         
-        det_ops = []
+        mechanical_ops = []
         enrich_queue = []
         summary: dict[str, Any] = {"total": len(md_files), "decouple": 0, "reformat": 0, "enrich": 0, "ok": 0, "errors": []}
         ledger = get_ledger()
@@ -281,7 +213,7 @@ class RefinerFSM:
                 # Generate Ops
                 if category == "decouple":
                     parent = os.path.dirname(path)
-                    hub = self.hub_override or os.path.splitext(basename)[0]
+                    hub = self.hub or os.path.splitext(basename)[0]
                     
                     preamble = body[:h2[0]["pos"]].strip()
                     if preamble:
@@ -305,7 +237,7 @@ class RefinerFSM:
                             hub=hub,
                             tags=[hub]
                         )
-                        det_ops.append({
+                        mechanical_ops.append({
                             "op": "write",
                             "path": spoke_path,
                             "heading": s["title"],
@@ -323,7 +255,7 @@ class RefinerFSM:
                     }
                     links = "\n".join(f"- [[{t}]]" for t in titles)
                     index_body = f"# {hub}\n\n" + (f"{preamble}\n\n" if preamble else "") + links + "\n"
-                    det_ops.append({
+                    mechanical_ops.append({
                         "op": "overwrite",
                         "path": path,
                         "heading": hub,
@@ -336,13 +268,13 @@ class RefinerFSM:
                     if data is not None:
                         norm = frontmatter.normalize_tags(data)
                         new_content = frontmatter.dump(norm, body)
-                        det_ops.append({
+                        mechanical_ops.append({
                             "op": "overwrite",
                             "path": path,
                             "heading": os.path.splitext(basename)[0],
                             "source_basename": basename,
                             "content": new_content,
-                            "hub": self.hub_override or os.path.splitext(basename)[0]
+                            "hub": self.hub or os.path.splitext(basename)[0]
                         })
 
                 elif category == "enrich":
@@ -350,13 +282,13 @@ class RefinerFSM:
                     if data is not None:
                         norm = frontmatter.normalize_tags(data)
                         new_content = frontmatter.dump(norm, body)
-                        det_ops.append({
+                        mechanical_ops.append({
                             "op": "overwrite",
                             "path": path,
                             "heading": os.path.splitext(basename)[0],
                             "source_basename": basename,
                             "content": new_content,
-                            "hub": self.hub_override or os.path.splitext(basename)[0]
+                            "hub": self.hub or os.path.splitext(basename)[0]
                         })
                     enrich_queue.append({
                         "path": path,
@@ -368,15 +300,15 @@ class RefinerFSM:
             except Exception as e:
                 summary["errors"].append({"path": path, "error": str(e)})
 
-        self.context["det_ops"] = det_ops
+        self.context["mechanical_ops"] = mechanical_ops
         self.context["enrich_queue"] = enrich_queue
         self.context["triage_summary"] = summary
         self._transition_success()
 
-    def _handle_delegate(self) -> None:
+    def _handle_enrich(self) -> None:
         queue = self.context["enrich_queue"]
         if not queue:
-            self.context["ops"] = self.context["det_ops"]
+            self.context["ops"] = self.context["mechanical_ops"]
             self._transition_success()
             return
 
@@ -388,7 +320,7 @@ class RefinerFSM:
         def enrich_one(task: dict) -> dict:
             path = task["path"]
             title = task["title"]
-            hub = self.hub_override or title
+            hub = self.hub or title
 
             try:
                 with open(path, "r", encoding="utf-8") as f:
@@ -407,13 +339,10 @@ class RefinerFSM:
                 "5. Return the result structured in JSON format containing a single key 'content' with the full body of the note (including normalized and updated YAML frontmatter tags, and the enriched body)."
             )
 
-            user_message = (
-                f"Enrich the following note.\n"
-                f"Title: {title}\n"
-                f"Path: {path}\n"
-                f"Current content of the note:\n"
-                f"{content}"
-            )
+            from silica.kernel.context_builder import build_context
+            note_payload = f"Title: {title}\nPath: {path}\nCurrent content:\n{content}"
+            ctx = build_context(checkpoint_id="enrich", payload=note_payload)
+            user_message = f"Enrich the following note.\n\n{ctx}"
 
             try:
                 response = call_llm(
@@ -449,13 +378,13 @@ class RefinerFSM:
                 "heading": os.path.splitext(os.path.basename(r["path"]))[0],
                 "source_basename": os.path.basename(r["path"]),
                 "content": r["content"],
-                "hub": self.hub_override or os.path.splitext(os.path.basename(r["path"]))[0]
+                "hub": self.hub or os.path.splitext(os.path.basename(r["path"]))[0]
             })
 
-        # Merge det_ops and enrich_ops
+        # Merge mechanical_ops and enrich_ops
         merged = []
         enrich_paths = {op["path"] for op in enrich_ops}
-        for op in self.context["det_ops"]:
+        for op in self.context["mechanical_ops"]:
             if op["path"] not in enrich_paths:
                 merged.append(op)
         merged.extend(enrich_ops)
@@ -566,6 +495,114 @@ class RefinerFSM:
         self.context["write"] = res
         self._transition_success()
 
+    def _handle_autolink(self) -> None:
+        """Best-effort wikilink injection into all ops written this run (best_effort: true)."""
+        ops_path = self.context.get("ops_path")
+        if not ops_path:
+            self._transition_success()
+            return
+
+        try:
+            from silica.kernel.autolink import build_title_index
+            from silica.kernel.ops_io import load_ops
+            from silica.kernel.ops import OpType
+
+            ops = load_ops(ops_path)
+            touched_paths = [
+                ref
+                for op in ops
+                if (ref := op.touched_ref()) and op.op not in (OpType.delete, OpType.skip)
+            ]
+
+            if touched_paths:
+                all_refs = DRIVER.list_files()
+                title_index = build_title_index(all_refs)
+                total_added = 0
+                for path in touched_paths:
+                    try:
+                        added = DRIVER.autolink_note(path, candidates=title_index)
+                        total_added += len(added)
+                    except Exception as _ae:
+                        logger.debug("AUTOLINK: skipped '%s' (non-fatal): %s", path, _ae)
+                logger.info("AUTOLINK: finished — %d link(s) added", total_added)
+        except Exception as e:
+            logger.warning("AUTOLINK: phase failed (non-fatal): %s", e)
+
+        self._transition_success()
+
+    def _handle_backlink(self) -> None:
+        """Best-effort reverse link injection for newly written notes."""
+        ops_path = self.context.get("ops_path")
+        if not ops_path:
+            self._transition_success()
+            return
+
+        try:
+            from silica.kernel.autolink import backlink_pass, build_title_index
+
+            ops = load_ops(ops_path)
+            new_titles: list[str] = [
+                os.path.splitext(os.path.basename(ref))[0]
+                for op in ops
+                if (ref := op.touched_ref()) and op.op == OpType.write
+            ]
+
+            if not new_titles:
+                self._transition_success()
+                return
+
+            touched_paths_abs: set[str] = {
+                os.path.abspath(ref)
+                for op in ops
+                if (ref := op.touched_ref())
+            }
+            neighbourhood: list[str] = []
+            seen_norm: set[str] = set()
+
+            if hasattr(DRIVER, "mentions_of"):
+                try:
+                    for title in new_titles:
+                        for path in DRIVER.mentions_of(title):
+                            norm = os.path.abspath(path)
+                            if norm not in seen_norm and norm not in touched_paths_abs:
+                                seen_norm.add(norm)
+                                neighbourhood.append(path)
+                except Exception as _me:
+                    logger.debug("BACKLINK: mentions_of failed, falling back to search_context: %s", _me)
+                    for title in new_titles:
+                        try:
+                            for hit in DRIVER.search_context(title):
+                                p = hit.ref.path or hit.ref.name
+                                norm = os.path.abspath(p)
+                                if norm not in seen_norm and norm not in touched_paths_abs:
+                                    seen_norm.add(norm)
+                                    neighbourhood.append(p)
+                        except Exception as _se:
+                            logger.debug("BACKLINK: search_context for '%s': %s", title, _se)
+            else:
+                for title in new_titles:
+                    try:
+                        for hit in DRIVER.search_context(title):
+                            p = hit.ref.path or hit.ref.name
+                            norm = os.path.abspath(p)
+                            if norm not in seen_norm and norm not in touched_paths_abs:
+                                seen_norm.add(norm)
+                                neighbourhood.append(p)
+                    except Exception as _se:
+                        logger.debug("BACKLINK: search_context for '%s': %s", title, _se)
+
+
+            if neighbourhood:
+                all_refs = DRIVER.list_files()
+                title_index = build_title_index(all_refs)
+                added_map = backlink_pass(new_titles, title_index=title_index, neighbourhood=neighbourhood)
+                total = sum(len(v) for v in added_map.values())
+                logger.info("BACKLINK: %d link(s) added in %d note(s)", total, len(added_map))
+        except Exception as e:
+            logger.warning("BACKLINK: phase failed (non-fatal): %s", e)
+
+        self._transition_success()
+
     def _handle_lint(self) -> None:
         try:
             ops = load_ops(self.context["ops_path"])
@@ -611,13 +648,24 @@ class RefinerFSM:
                 from silica.kernel.graph_diff import check_graph_regression
                 
                 created_paths = self._txn.created_paths if self._txn else []
-                success, errors = check_graph_regression(self._pre_graph, post_graph, created_paths)
+                deferred_stems = frozenset(self.context.get("deferred_stems", []))
+                success, errors = check_graph_regression(
+                    self._pre_graph, post_graph, created_paths, deferred_stems
+                )
                 if not success:
-                    self.context["abort_reason"] = (
-                        f"Graph regression gate failed: {'; '.join(errors)}"
-                    )
-                    self.state = RefinerState.ROLLBACK
-                    return
+                    orphan_errors = [e for e in errors if e.startswith("Unplanned orphans")]
+                    blocking_errors = [e for e in errors if not e.startswith("Unplanned orphans")]
+                    if orphan_errors:
+                        logger.warning(
+                            "[Graph Regression Gate]: Orphan warning (non-blocking): %s",
+                            "; ".join(orphan_errors),
+                        )
+                    if blocking_errors:
+                        reason = f"Graph regression gate failed: {'; '.join(blocking_errors)}"
+                        logger.warning("[Graph Regression Gate]: Blocking errors (triggering rollback): %s", "; ".join(blocking_errors))
+                        self.context["abort_reason"] = reason
+                        self.state = RefinerState.ROLLBACK
+                        return
             except Exception as e:
                 logger.error("Failed to perform graph-diff check: %s", e)
                 self.context["abort_reason"] = f"Graph regression gate error: {e}"

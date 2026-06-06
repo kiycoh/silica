@@ -291,10 +291,11 @@ def test_llm_openrouter_include_reasoning(mock_completion):
         mock_completion.assert_called_with(
             model="openrouter/some-model",
             messages=messages,
+            max_tokens=256000,
             include_reasoning=True,
             timeout=120.0
         )
-        
+
         # Test openrouter model with show_thinking=False and verbose=True
         CONFIG.show_thinking = False
         CONFIG.verbose = True
@@ -302,6 +303,7 @@ def test_llm_openrouter_include_reasoning(mock_completion):
         mock_completion.assert_called_with(
             model="openrouter/some-model",
             messages=messages,
+            max_tokens=256000,
             include_reasoning=True,
             timeout=120.0
         )
@@ -331,6 +333,136 @@ def test_thinking_slash_toggle():
         CONFIG.show_thinking = orig_thinking
 
 
+def test_stage_track_centers_on_running_phase():
+    from silica.agent.progress import _stage_track
+    phases = [
+        {"phase": "recon",      "status": "done",    "elapsed": 1.0},
+        {"phase": "cross-dedup","status": "done",    "elapsed": 0.5},
+        {"phase": "payload",    "status": "done",    "elapsed": 0.8},
+        {"phase": "salience",   "status": "done",    "elapsed": 0.3},
+        {"phase": "collision",  "status": "running", "elapsed": None},
+    ]
+    track = _stage_track(phases, console_width=120)
+    plain = track.plain
+    # Running phase is visible
+    assert "◉ collision" in plain
+    # Phases in window are visible (collision is index 4; window is indices 1-7)
+    assert "✓ payload" in plain
+    assert "✓ salience" in plain
+    # Phases outside window are NOT visible (recon is index 0, outside window start=1)
+    assert "✓ recon" not in plain
+    # Leading ellipsis present because window doesn't start at 0
+    assert plain.startswith("…")
+
+
+def test_stage_track_empty_shows_pending_from_start():
+    from silica.agent.progress import _stage_track
+    track = _stage_track([], console_width=120)
+    plain = track.plain
+    # No running phase → center=0, window starts at 0, no leading ellipsis
+    assert not plain.startswith("…")
+    assert "· recon" in plain
+    assert "· cross-dedup" in plain
+
+
+def test_stage_track_failed_phase_shown():
+    from silica.agent.progress import _stage_track
+    phases = [
+        {"phase": "recon",      "status": "done",   "elapsed": 1.0},
+        {"phase": "cross-dedup","status": "failed",  "elapsed": 0.2},
+    ]
+    track = _stage_track(phases, console_width=120)
+    plain = track.plain
+    assert "✗ cross-dedup" in plain
+
+
+def _make_mock_batch(kind: str = "refine") -> dict:
+    """Minimal _batch dict for micro-phase tests (bypasses terminal-gated BatchRunStartEvent)."""
+    from unittest.mock import MagicMock
+    return {
+        "run_id": "r1", "kind": kind, "label": "Concepts",
+        "total": 5, "done": 0, "failed": 0,
+        "start_time": 0.0, "progress_obj": MagicMock(),
+        "task_id": 0, "current_label": "", "micro_phase": "",
+    }
+
+
+def test_batch_micro_phase_tracked_from_work_feedback():
+    import silica.agent.bus as bus_mod
+    from silica.agent.events import WorkFeedbackEvent
+    from silica.agent.progress import make_progress_callback
+
+    orig_bus = bus_mod.BUS
+    bus_mod.BUS = bus_mod.EventBus()
+    try:
+        cb = make_progress_callback()
+        cb._batch = _make_mock_batch("refine")
+
+        bus_mod.BUS.publish("work/feedback", WorkFeedbackEvent(
+            item_id="i1", kind="refine", phase="calling_llm"
+        ))
+        assert cb._batch["micro_phase"] == "calling_llm"
+    finally:
+        cb.close()
+        bus_mod.BUS = orig_bus
+
+
+def test_batch_micro_phase_ignored_for_wrong_kind():
+    import silica.agent.bus as bus_mod
+    from silica.agent.events import WorkFeedbackEvent
+    from silica.agent.progress import make_progress_callback
+
+    orig_bus = bus_mod.BUS
+    bus_mod.BUS = bus_mod.EventBus()
+    try:
+        cb = make_progress_callback()
+        cb._batch = _make_mock_batch("refine")
+
+        bus_mod.BUS.publish("work/feedback", WorkFeedbackEvent(
+            item_id="i1", kind="dedup", phase="reading"
+        ))
+        assert cb._batch["micro_phase"] == ""
+    finally:
+        cb.close()
+        bus_mod.BUS = orig_bus
+
+
+def test_batch_micro_phase_resets_on_ledger_next_complete():
+    import json
+    import silica.agent.bus as bus_mod
+    from silica.agent.events import WorkFeedbackEvent, ToolCompleteEvent
+    from silica.agent.progress import make_progress_callback
+
+    orig_bus = bus_mod.BUS
+    orig_mode = CONFIG.tool_progress
+    bus_mod.BUS = bus_mod.EventBus()
+    try:
+        CONFIG.tool_progress = "all"  # must not be "off" — ToolCompleteEvent is behind mode guard
+        cb = make_progress_callback()
+        cb._batch = _make_mock_batch("refine")
+
+        # Set micro phase via BUS
+        bus_mod.BUS.publish("work/feedback", WorkFeedbackEvent(
+            item_id="i1", kind="refine", phase="committing"
+        ))
+        assert cb._batch["micro_phase"] == "committing"
+
+        # ledger_next complete (not done — advances done counter, resets micro_phase)
+        cb(ToolCompleteEvent(
+            name="silica_ledger_next",
+            args={},
+            call_id="c1",
+            result=json.dumps({"done": False, "payload": {"note_paths": ["a/b.md"]}}),
+            duration_s=0.1,
+            iteration=1,
+        ))
+        assert cb._batch["micro_phase"] == ""
+    finally:
+        cb.close()
+        bus_mod.BUS = orig_bus
+        CONFIG.tool_progress = orig_mode
+
+
 def test_print_banner_styles(capsys):
     from silica.ui.banner import print_banner
     from rich.console import Console, ConsoleDimensions
@@ -342,7 +474,7 @@ def test_print_banner_styles(capsys):
         print_banner()
         captured = capsys.readouterr()
         assert "silica" in captured.out
-        assert "Obsidian-native agent" in captured.out
+        assert "Your personal note curator agent" in captured.out
 
         # Wordmark/Crystal style with large terminal
         with patch.object(Console, "width", new_callable=PropertyMock, return_value=100), \
@@ -350,15 +482,16 @@ def test_print_banner_styles(capsys):
             CONFIG.banner_style = "wordmark"
             print_banner()
             captured = capsys.readouterr()
-            assert "___" in captured.out or "\\/" in captured.out
-            assert "Obsidian-native agent" in captured.out
+            # wordmark renders multi-line ASCII/block art; minimal would be a single line
+            assert len(captured.out.splitlines()) > 2
+            assert "Your personal note curator agent" in captured.out
 
-            # Since crystal is removed, it should behave like wordmark
+            # crystal is removed — falls back to minimal banner
             CONFIG.banner_style = "crystal"
             print_banner()
             captured = capsys.readouterr()
-            assert "___" in captured.out or "\\/" in captured.out
-            assert "Obsidian-native agent" in captured.out
+            assert "silica" in captured.out
+            assert "Your personal note curator agent" in captured.out
     finally:
         CONFIG.banner_style = orig_style
 

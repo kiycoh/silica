@@ -26,7 +26,6 @@ from silica.driver.base import (
     Link,
     NoteContent,
     NoteRef,
-    SettleTimeout,
     Txn,
 )
 from silica.kernel import frontmatter as fm
@@ -47,7 +46,9 @@ class ObsidianFSBackend:
         self._links: dict[str, set[str]] = {}         # source_path -> set(target_name)
         self._graph = nx.DiGraph()
         self._unresolved_links: set[tuple[str, str]] = set() # (source_path, raw_target)
+        self._mention_index: dict[str, set[str]] = {}        # title_lower -> set(path)
         self._needs_reindex: bool = True
+        self._dirty_paths: set[str] = set()           # paths patched since last full rebuild
 
     def _path_of(self, ref: NoteRef | str) -> str | None:
         if isinstance(ref, NoteRef):
@@ -145,6 +146,7 @@ class ObsidianFSBackend:
         self._links.clear()
         self._graph.clear()
         self._unresolved_links.clear()
+        self._mention_index.clear()
 
         from silica.config import CONFIG
         inbox_norm = os.path.normcase(CONFIG.inbox_dir.replace("\\", "/").strip("/")) if CONFIG.inbox_dir else None
@@ -195,7 +197,7 @@ class ObsidianFSBackend:
                 
                 files_to_process.append((rel_path_file, path))
 
-        # Pass 2: Parse and resolve links
+        # Pass 2: Parse and resolve links + build mention index
         for rel_path_file, path in files_to_process:
             try:
                 content = path.read_text(encoding="utf-8")
@@ -207,11 +209,74 @@ class ObsidianFSBackend:
                         self._graph.add_edge(rel_path_file, ref.path)
                     else:
                         self._unresolved_links.add((rel_path_file, target))
+                
+                # Mention index
+                content_lower = content.lower()
+                for title_lower in self._notes_by_name:
+                    if len(title_lower) >= 2 and title_lower in content_lower:
+                        self._mention_index.setdefault(title_lower, set()).add(rel_path_file)
             except Exception as e:
                 logger.warning("Failed to index %s: %s", rel_path_file, e)
 
         self._needs_reindex = False
+        self._dirty_paths.clear()
         logger.debug("Indexed %d notes", len(self._notes))
+
+    def _patch_index(self, rel_path: str, content: str | None) -> None:
+        """Incrementally update the graph index for a single changed path.
+
+        If content is None the note was deleted — remove it from the index.
+        Call this instead of setting _needs_reindex = True for single-file writes.
+        """
+        # --- remove stale data for this path ---
+        if rel_path in self._graph:
+            self._graph.remove_edges_from(list(self._graph.out_edges(rel_path)))
+        self._unresolved_links = {(s, t) for s, t in self._unresolved_links if s != rel_path}
+        for paths_set in self._mention_index.values():
+            paths_set.discard(rel_path)
+
+        if content is None:
+            # deletion path
+            if rel_path in self._graph:
+                self._graph.remove_node(rel_path)
+            old_ref = self._notes.pop(rel_path, None)
+            if old_ref:
+                name_lower = old_ref.name.lower()
+                if name_lower in self._notes_by_name:
+                    self._notes_by_name[name_lower] = [
+                        r for r in self._notes_by_name[name_lower] if r.path != rel_path
+                    ]
+            self._dirty_paths.discard(rel_path)
+            return
+
+        # --- upsert node ---
+        name = rel_path.rsplit("/", 1)[-1].removesuffix(".md")
+        ref = NoteRef(name=name, path=rel_path)
+        self._notes[rel_path] = ref
+        self._graph.add_node(rel_path, ref=ref)
+        name_lower = name.lower()
+        if name_lower not in self._notes_by_name:
+            self._notes_by_name[name_lower] = []
+        if ref not in self._notes_by_name[name_lower]:
+            self._notes_by_name[name_lower].append(ref)
+
+        # --- rebuild edges for this path ---
+        targets = set(extract_links(content))
+        self._links[rel_path] = targets
+        for target in targets:
+            target_ref = self._resolve_target(target, source_path=rel_path)
+            if target_ref:
+                self._graph.add_edge(rel_path, target_ref.path)
+            else:
+                self._unresolved_links.add((rel_path, target))
+
+        # --- rebuild mention index for this path ---
+        content_lower = content.lower()
+        for title_lower in self._notes_by_name:
+            if len(title_lower) >= 2 and title_lower in content_lower:
+                self._mention_index.setdefault(title_lower, set()).add(rel_path)
+
+        self._dirty_paths.add(rel_path)
 
     def _resolve_path(self, ref: NoteRef | str) -> Path:
         """Resolve a NoteRef or name to a full filesystem path."""
@@ -258,6 +323,14 @@ class ObsidianFSBackend:
             if query in ref.name.lower():
                 results.append(ref)
         return results
+
+    def mentions_of(self, title: str) -> list[str]:
+        """Return vault-relative paths of notes whose body mentions `title`.
+        
+        O(1) lookup into the inverted text index built during indexing.
+        """
+        self._ensure_index()
+        return list(self._mention_index.get(title.lower(), set()))
 
     def search_context(self, query: str) -> list[Hit]:
         """Search vault content with line-level context snippets."""
@@ -373,6 +446,11 @@ class ObsidianFSBackend:
             results.append(Link(source=self._node_ref(s), target=t.removesuffix(".md")))
         return results
 
+    def graph_data(self, folder: str = "") -> tuple[dict, set, Any]:
+        """Return (notes, unresolved_links, graph) for in-process consumers."""
+        self._ensure_index()
+        return self._notes, self._unresolved_links, self._graph
+
     def graph_snapshot(self, refs: list[NoteRef] | None = None) -> GraphSnapshot:
         """Graph snapshot for non-regression gating.
 
@@ -419,8 +497,8 @@ class ObsidianFSBackend:
         link_counts = {}
         backlink_counts = {}
         for path in neighborhood:
-            ref = self._notes.get(path)
-            if ref:
+            note = self._notes.get(path)
+            if note:
                 resolved_count = self._graph.out_degree(path) if path in self._graph else 0
                 unresolved_count = sum(1 for s, t in self._unresolved_links if s == path)
                 key = path.removesuffix(".md")
@@ -466,17 +544,11 @@ class ObsidianFSBackend:
         full_path.parent.mkdir(parents=True, exist_ok=True)
 
         full_path.write_text(content, encoding="utf-8")
-        self._needs_reindex = True
-
         name = rel_path.rsplit("/", 1)[-1].removesuffix(".md")
-        self._ensure_index()
-        expected_targets = set(extract_links(content))
-        indexed_targets = self._links.get(rel_path, set())
-        if not expected_targets.issubset(indexed_targets):
-            raise SettleTimeout(
-                f"Settle timeout (links indexing) for {name} on FS backend. "
-                f"Expected: {expected_targets}, Indexed: {indexed_targets}"
-            )
+        if self._needs_reindex:
+            self._rebuild_index()
+        else:
+            self._patch_index(rel_path, content)
         return NoteRef(name=name, path=rel_path)
 
     def overwrite(self, path: str, content: str) -> NoteRef:
@@ -500,10 +572,27 @@ class ObsidianFSBackend:
             raise RuntimeError(f"Cannot overwrite non-existent file: {path}")
 
         full_path.write_text(content, encoding="utf-8")
-        self._needs_reindex = True
-
         name = rel_path.rsplit("/", 1)[-1].removesuffix(".md")
+        if self._needs_reindex:
+            self._rebuild_index()
+        else:
+            self._patch_index(rel_path, content)
         return NoteRef(name=name, path=rel_path)
+
+    def autolink_note(self, path: str, candidates: list[str] | None = None) -> list[str]:
+        """FS backend: pure-Python kernel autolink + direct overwrite."""
+        import os
+        from silica.kernel.autolink import autolink, build_title_index
+        nc = self.read_note(path)
+        body = nc.content or ""
+        if not body.strip():
+            return []
+        title_index = build_title_index(self.list_files())
+        self_title = os.path.splitext(os.path.basename(path))[0]
+        new_body, added = autolink(body, title_index, candidates=candidates, self_title=self_title)
+        if added:
+            self.overwrite(path, new_body)
+        return added
 
     def append(self, ref: NoteRef | str, content: str) -> None:
         """Append content to an existing note."""
@@ -513,8 +602,13 @@ class ObsidianFSBackend:
             
         with open(path, "a", encoding="utf-8") as f:
             f.write(content)
-            
-        self._needs_reindex = True
+
+        rel_path_str = path.relative_to(self.vault_path).as_posix()
+        if self._needs_reindex:
+            self._rebuild_index()
+        else:
+            full_content = path.read_text(encoding="utf-8")
+            self._patch_index(rel_path_str, full_content)
 
     def set_prop(self, ref: NoteRef | str, name: str, value: Any, type_: str = "text") -> None:
         """Set a frontmatter property on a note."""
@@ -546,8 +640,15 @@ class ObsidianFSBackend:
         dst = self.vault_path / to
         dst.parent.mkdir(parents=True, exist_ok=True)
         
+        src_rel = src.relative_to(self.vault_path).as_posix()
         src.rename(dst)
-        self._needs_reindex = True
+        if self._needs_reindex:
+            self._rebuild_index()
+        else:
+            dst_content = dst.read_text(encoding="utf-8")
+            self._patch_index(src_rel, None)
+            dst_rel = dst.relative_to(self.vault_path).as_posix()
+            self._patch_index(dst_rel, dst_content)
 
     def delete(self, ref: NoteRef | str) -> None:
         """Delete a note from the vault."""
@@ -555,8 +656,12 @@ class ObsidianFSBackend:
         if not path.exists():
             raise RuntimeError(f"File not found: {path}")
             
+        rel_path_str = path.relative_to(self.vault_path).as_posix()
         path.unlink()
-        self._needs_reindex = True
+        if self._needs_reindex:
+            self._rebuild_index()
+        else:
+            self._patch_index(rel_path_str, None)
 
     # ------------------------------------------------------------------
     # Advanced
@@ -631,6 +736,9 @@ class ObsidianFSBackend:
                 if full_path.exists():
                     full_path.unlink()
                     logger.info("Rolled back created note: %s", path)
-                    self._needs_reindex = True
+                    if self._needs_reindex:
+                        pass  # full rebuild will happen on next _ensure_index
+                    else:
+                        self._patch_index(path, None)
             except Exception as e:
                 logger.error("Failed to delete created note %s during rollback: %s", path, e)

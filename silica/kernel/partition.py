@@ -1,4 +1,44 @@
+from __future__ import annotations
+
 import json
+
+
+def partition_by_file(
+    payload: dict,
+    max_concepts: int,
+    max_bytes: int = 80 * 1024,
+) -> list[dict]:
+    """Partition payload into per-source-file groups, each chunked internally.
+
+    Returns a list of dicts:
+        [{"source_file": str, "chunks": [<chunk_dict>, ...]}, ...]
+
+    Invariant: no chunk spans two source files. Each chunk dict has the standard
+    {"schema_version": ..., "batches": [{"inbox_file": str, "concepts": [...]}]}
+    shape, plus a "source_file" key tagging which inbox file it belongs to.
+
+    Chunk size constraints (max_concepts, max_bytes) are applied per-file using
+    the existing partition_by_concepts logic.
+    """
+    schema_version = payload.get("schema_version", 1)
+    result: list[dict] = []
+
+    for batch in payload.get("batches", []):
+        inbox_file: str = batch.get("inbox_file", "")
+        concepts: list = batch.get("concepts", [])
+        if not concepts:
+            continue
+
+        # Build a single-file sub-payload and partition it
+        sub_payload = {"schema_version": schema_version, "batches": [{"inbox_file": inbox_file, "concepts": concepts}]}
+        chunks = partition_by_concepts(sub_payload, max_concepts, max_bytes)
+
+        # Tag each chunk with its source_file
+        tagged_chunks = [dict(chunk, source_file=inbox_file) for chunk in chunks]
+        result.append({"source_file": inbox_file, "chunks": tagged_chunks})
+
+    return result
+
 
 def partition_by_concepts(payload: dict, max_concepts: int, max_bytes: int = 80 * 1024) -> list:
     """Deterministic partition of payload into chunks.

@@ -59,34 +59,39 @@ class TestAgentGuardsAndProvider(unittest.TestCase):
         mock_client = MagicMock()
         mock_openai_cls.return_value = mock_client
 
-        mock_choice = MagicMock()
-        mock_choice.finish_reason = "length"
-        mock_choice.message.content = "Truncated structured"
-        mock_choice.message.parsed = None
-        mock_choice.message.tool_calls = None
+        # Non-structured path now streams: return an iterable of one chunk
+        # whose last choice carries finish_reason="length".
+        mock_delta = MagicMock()
+        mock_delta.content = "Truncated structured"
+        mock_delta.tool_calls = None
 
-        mock_response = MagicMock()
-        mock_response.choices = [mock_choice]
-        mock_response.usage = {}
+        mock_chunk_choice = MagicMock()
+        mock_chunk_choice.finish_reason = "length"
+        mock_chunk_choice.delta = mock_delta
 
-        mock_client.chat.completions.create.return_value = mock_response
+        mock_chunk = MagicMock()
+        mock_chunk.choices = [mock_chunk_choice]
+
+        mock_client.chat.completions.create.return_value = [mock_chunk]
 
         # Instantiate provider
         provider = OpenAICompatibleProvider(base_url="http://dummy", api_key="dummy", model="test-model")
         resp = provider.call_llm(messages=[], max_tokens=4000)
 
-        # Check call arguments
+        # Check call arguments (stream=True is now added)
         mock_client.chat.completions.create.assert_called_once()
         kwargs = mock_client.chat.completions.create.call_args[1]
         self.assertEqual(kwargs.get("max_tokens"), 4000)
+        self.assertTrue(kwargs.get("stream"))
         self.assertEqual(resp.finish_reason, "length")
 
     @patch("silica.agent.providers.get_provider")
-    def test_run_distiller_fails_on_length(self, mock_get_provider):
+    def test_run_distiller_accepts_complete_output_at_length_limit(self, mock_get_provider):
+        # New contract (#1): finish_reason == "length" is no longer fatal by
+        # itself. When the emitted JSON is complete and parseable, use it.
         mock_provider = MagicMock()
         mock_get_provider.return_value = mock_provider
 
-        # Setup length finish reason
         mock_response = MagicMock()
         mock_response.finish_reason = "length"
         mock_response.text = '{"updates": []}'
@@ -95,20 +100,39 @@ class TestAgentGuardsAndProvider(unittest.TestCase):
         payload = {"schema_version": 1, "batches": []}
         res = run_distiller(payload=payload, target="TargetFolder")
 
-        # Verify it returns error dictionary
+        self.assertNotIn("error", res)
+        self.assertEqual(res["updates"], [])
+
+    @patch("silica.agent.providers.get_provider")
+    def test_run_distiller_errors_only_on_unrecoverable_truncation(self, mock_get_provider):
+        # A length-truncated response with no complete `updates` entry to
+        # salvage still surfaces an error.
+        mock_provider = MagicMock()
+        mock_get_provider.return_value = mock_provider
+
+        mock_response = MagicMock()
+        mock_response.finish_reason = "length"
+        mock_response.text = '{"updates": [{"heading": "Cut", "op": "wri'
+        mock_provider.call_llm.return_value = mock_response
+
+        payload = {"schema_version": 1, "batches": []}
+        res = run_distiller(payload=payload, target="TargetFolder")
+
         self.assertIn("error", res)
-        self.assertIn("maximum tokens limit", res["error"])
 
     def test_is_tool_failure(self):
         # Dict representation
         self.assertTrue(_is_tool_failure({"error": "something"}))
         self.assertFalse(_is_tool_failure({"success": True}))
 
-        # String representation
+        # String representation: only a structured {"error": ...} payload is a
+        # failure. Plain prose is a successful tool output even when it happens
+        # to contain words like "error"/"failed" (e.g. grep hits, "0 errors"
+        # reports) — substring-sniffing those is a false positive.
         self.assertTrue(_is_tool_failure('{"error": "bad stuff"}'))
-        self.assertTrue(_is_tool_failure('An error occurred'))
-        self.assertTrue(_is_tool_failure('Failed to read file'))
-        self.assertTrue(_is_tool_failure('Exception raised'))
+        self.assertFalse(_is_tool_failure('An error occurred'))
+        self.assertFalse(_is_tool_failure('Failed to read file'))
+        self.assertFalse(_is_tool_failure('Exception raised'))
         self.assertFalse(_is_tool_failure('All systems operational'))
 
     @patch("silica.agent.loop.call_llm")

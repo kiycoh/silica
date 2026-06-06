@@ -53,3 +53,26 @@ class TestOpsIO(unittest.TestCase):
         finally:
             if os.path.exists(path):
                 os.unlink(path)
+
+    def test_ops_io_round_trip_preserves_concepts(self):
+        # #9: LLM concept keyphrases must survive the validate->disk->_handle_write
+        # round-trip, otherwise the co-occurrence wiring never receives them.
+        ops = [
+            Op(
+                op=OpType.write,
+                heading="Backpropagation",
+                source_basename="inbox.md",
+                path="notes/Backpropagation.md",
+                snippet="...",
+                concepts=["backpropagation", "loss gradient"],
+            ),
+        ]
+        fd, path = tempfile.mkstemp(suffix=".json")
+        os.close(fd)
+        try:
+            dump_ops(path, ops)
+            loaded = load_ops(path)
+            self.assertEqual(loaded[0].concepts, ["backpropagation", "loss gradient"])
+        finally:
+            if os.path.exists(path):
+                os.unlink(path)

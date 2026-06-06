@@ -1,0 +1,58 @@
+[
+  {
+    "id": "basic_link",
+    "description": "Should link exact title match in body text",
+    "body": "Neural Networks are inspired by the brain. See also Gradient Descent for optimization.",
+    "title_index": ["Neural Networks", "Gradient Descent", "Backpropagation"],
+    "expected_links": ["Neural Networks", "Gradient Descent"],
+    "expected_no_links": []
+  },
+  {
+    "id": "skip_frontmatter",
+    "description": "Frontmatter YAML must not be linked",
+    "body": "---\ntags: [Neural Networks, Deep Learning]\n---\n# Topic\nNeural Networks are powerful.",
+    "title_index": ["Neural Networks", "Deep Learning"],
+    "expected_links": ["Neural Networks"],
+    "expected_no_links": []
+  },
+  {
+    "id": "skip_code_block",
+    "description": "Title inside fenced code block must not be linked",
+    "body": "Outside code: Neural Networks.\n```python\nNeural Networks\n```\nAfter code: Gradient Descent.",
+    "title_index": ["Neural Networks", "Gradient Descent"],
+    "expected_links": ["Neural Networks", "Gradient Descent"],
+    "expected_no_links": []
+  },
+  {
+    "id": "idempotent",
+    "description": "Already-linked titles must not be double-linked",
+    "body": "See [[Neural Networks]] for details. Neural Networks are important.",
+    "title_index": ["Neural Networks"],
+    "expected_links": [],
+    "expected_no_links": ["Neural Networks"]
+  },
+  {
+    "id": "skip_math",
+    "description": "Titles inside LaTeX math blocks must not be linked",
+    "body": "The loss $Neural Networks$ is important. Neural Networks are used here.",
+    "title_index": ["Neural Networks"],
+    "expected_links": ["Neural Networks"],
+    "expected_no_links": []
+  },
+  {
+    "id": "ambiguous_basename_skip",
+    "description": "Duplicate basenames are ambiguous → no link emitted",
+    "body": "The Attention mechanism is fundamental.",
+    "title_index": ["Attention", "Attention"],
+    "expected_links": [],
+    "expected_no_links": ["Attention"]
+  },
+  {
+    "id": "longest_match_first",
+    "description": "Longer titles take precedence over shorter ones that share a prefix",
+    "body": "Deep Learning Networks are powerful tools.",
+    "title_index": ["Deep Learning", "Deep Learning Networks"],
+    "expected_links": ["Deep Learning Networks"],
+    "expected_no_links": ["Deep Learning"]
+  }
+]

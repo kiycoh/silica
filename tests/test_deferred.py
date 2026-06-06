@@ -130,3 +130,47 @@ def test_deferred_store_populated_on_partial_rejection(tmp_path):
     assert bundle is not None
     assert bundle["rejected_ops"][0]["path"] == "Dir/MCU.md"
     assert bundle["rejection_reasons"]["Dir/MCU.md"] == "too generic"
+
+
+def test_defer_ops_accumulates_across_phases(tmp_path, monkeypatch):
+    """_defer_ops must MERGE into the bundle, not overwrite it: COLLISION,
+    VALIDATE and WRITE all key on the same source content_hash, so a later
+    phase (or chunk) deferring ops must not clobber an earlier phase's ops."""
+    import silica.kernel.deferred as deferred_mod
+    from silica.router.orchestrator import InjectorFSM
+
+    # Point the module-global store at a temp dir so we don't touch ~/.silica.
+    monkeypatch.setattr(deferred_mod, "_store", DeferredStore(path=tmp_path / "deferred"))
+
+    fsm = InjectorFSM("Inbox/lez.md", "TargetDir", hub="Hub")
+    fsm.context["source_content_hash"] = "shared-hash"
+
+    # COLLISION defers one op...
+    assert fsm._defer_ops(
+        [{"op": "skip", "heading": "A", "source_basename": "lez.md", "path": None}],
+        {"A": "borderline"},
+        phase="COLLISION",
+    )
+    # ...then VALIDATE defers another for the SAME content hash.
+    assert fsm._defer_ops(
+        [{"op": "write", "path": "TargetDir/B.md", "heading": "B", "source_basename": "lez.md"}],
+        {"TargetDir/B.md": "too generic"},
+        phase="VALIDATE",
+    )
+
+    bundle = deferred_mod.get_deferred_store().get("shared-hash")
+    headings = {o.get("heading") for o in bundle["rejected_ops"]}
+    assert headings == {"A", "B"}, f"VALIDATE clobbered COLLISION's deferred op: {headings}"
+    assert bundle["rejection_reasons"] == {"A": "borderline", "TargetDir/B.md": "too generic"}
+
+
+def test_defer_ops_skips_without_content_hash(tmp_path, monkeypatch):
+    """No content_hash → nothing persisted, returns False (no crash)."""
+    import silica.kernel.deferred as deferred_mod
+    from silica.router.orchestrator import InjectorFSM
+
+    monkeypatch.setattr(deferred_mod, "_store", DeferredStore(path=tmp_path / "deferred"))
+    fsm = InjectorFSM("Inbox/lez.md", "TargetDir")
+    # No source_content_hash set and no per-file hashes → empty hash.
+    assert fsm._defer_ops([{"op": "skip", "heading": "X"}], {}, phase="VALIDATE") is False
+    assert deferred_mod.get_deferred_store().list_all() == []

@@ -1,6 +1,61 @@
 import json
 import re
 
+# Matches [[any/path/to/Note.md]] or [[Note.md]] (with optional #anchor and |alias)
+_MD_EXT_WIKILINK_RE = re.compile(
+    r'\[\[([^\]#|]+?)\.md((?:#[^\]#|]*)?)(\|[^\]]*)?\]\]',
+    re.IGNORECASE,
+)
+
+# Characters illegal in filesystem filenames
+_ILLEGAL_FILENAME_CHARS_RE = re.compile(r'[/\\:*?"<>|]')
+
+
+def _strip_md_ext(text: str) -> str:
+    """Remove .md extension from inside wikilinks: [[Note.md]] → [[Note]]."""
+    return _MD_EXT_WIKILINK_RE.sub(
+        lambda m: f"[[{m.group(1)}{m.group(2)}{m.group(3) or ''}]]",
+        text,
+    )
+
+
+def normalize_ops(ops: list) -> list:
+    """Post-process a list of op dicts to fix common distiller output errors.
+
+    Applied normalizations:
+    1. Strip .md extension from wikilinks in `snippet`, `content`, and `related`.
+    2. Strip filesystem-illegal characters from `title` when present.
+    """
+    if not isinstance(ops, list):
+        return ops
+
+    cleaned: list = []
+    for op in ops:
+        if not isinstance(op, dict):
+            cleaned.append(op)
+            continue
+        op = dict(op)  # shallow copy — don't mutate in place
+
+        for field in ("snippet", "content"):
+            if isinstance(op.get(field), str):
+                op[field] = _strip_md_ext(op[field])
+
+        if isinstance(op.get("related"), list):
+            op["related"] = [
+                _strip_md_ext(r) if isinstance(r, str) else r
+                for r in op["related"]
+            ]
+
+        if isinstance(op.get("title"), str):
+            op["title"] = _ILLEGAL_FILENAME_CHARS_RE.sub("", op["title"]).strip()
+            if not op["title"]:
+                op["title"] = None
+
+        cleaned.append(op)
+
+    return cleaned
+
+
 def parse_json(raw: str, strict: bool = False):
     cleaned = raw.strip()
     if cleaned.startswith('\ufeff'):
