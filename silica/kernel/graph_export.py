@@ -1,8 +1,8 @@
 """L1 Graph Export — deterministic, no LLM calls.
 
-Builds a self-contained vis.js HTML visualization from the vault's wikilink
-graph. Works with both CLI and FS backends: triggers the driver index via
-graph_snapshot(), then reads _graph / _unresolved_links / _notes directly
+Builds a self-contained 3d-force-graph HTML visualization from the vault's
+wikilink graph. Works with both CLI and FS backends: triggers the driver index
+via graph_snapshot(), then reads _graph / _unresolved_links / _notes directly
 to avoid O(N) subprocess calls on the CLI backend.
 
 Community detection via networkx.algorithms.community.louvain_communities
@@ -19,25 +19,23 @@ import httpx
 
 logger = logging.getLogger(__name__)
 
-_VIS_JS_URL  = "https://cdn.jsdelivr.net/npm/vis-network@9.1.6/standalone/umd/vis-network.min.js"
-_VIS_CSS_URL = "https://cdn.jsdelivr.net/npm/vis-network@9.1.6/styles/vis-network.min.css"
+_VIS_JS_URL  = "https://cdn.jsdelivr.net/npm/3d-force-graph@1.80.0/dist/3d-force-graph.min.js"
 
 
 def _fetch(url: str) -> str:
     return httpx.get(url, timeout=30).raise_for_status().text
 
 
-def _fetch_vis_assets() -> tuple[str, str]:
-    """Fetch vis.js and its CSS. Raises RuntimeError with a clear message on failure."""
+def _fetch_lib_js() -> str:
+    """Fetch 3d-force-graph from CDN. Raises RuntimeError with a clear message on failure."""
     try:
-        logger.info("graph_export: fetching vis.js from CDN…")
-        js  = _fetch(_VIS_JS_URL)
-        css = _fetch(_VIS_CSS_URL)
-        logger.info("graph_export: vis.js fetched (%.0f KB).", len(js) / 1024)
-        return js, css
+        logger.info("graph_export: fetching 3d-force-graph from CDN…")
+        js = _fetch(_VIS_JS_URL)
+        logger.info("graph_export: 3d-force-graph fetched (%.0f KB).", len(js) / 1024)
+        return js
     except Exception as exc:
         raise RuntimeError(
-            f"graph_export: failed to fetch vis.js from CDN — {exc}\n"
+            f"graph_export: failed to fetch 3d-force-graph from CDN — {exc}\n"
             "Check your internet connection and try again."
         ) from exc
 
@@ -66,7 +64,7 @@ def _infer_type(path: str) -> str:
 
 
 def build_graph_data(folder: str = "") -> tuple[list[dict], list[dict]]:
-    """Build vis.js node and edge lists from the driver's internal nx.DiGraph.
+    """Build node and edge lists from the driver's internal nx.DiGraph.
 
     Calls driver.graph_snapshot() once to populate _graph, _notes, and
     _unresolved_links, then reads them directly. This avoids O(N) subprocess
@@ -228,13 +226,12 @@ def render_html(
     nodes: list[dict],
     edges: list[dict],
     title: str = "Silica Knowledge Graph",
-    vis_js: str = "",
-    vis_css: str = "",
+    lib_js: str = "",
 ) -> str:
-    """Produce a fully self-contained vis.js HTML string.
+    """Produce a fully self-contained 3d-force-graph HTML string.
 
-    Pass vis_js/vis_css to embed them inline (truly offline-capable).
-    If omitted, CDN links are used as a fallback.
+    Pass lib_js to embed the bundle inline (truly offline-capable).
+    If omitted, CDN link is used as a fallback.
     """
     nodes_json = json.dumps(nodes, ensure_ascii=False)
     edges_json = json.dumps(edges, ensure_ascii=False)
@@ -269,8 +266,7 @@ def render_html(
   <meta charset="utf-8">
   <meta name="viewport" content="width=device-width, initial-scale=1">
   <title>{title}</title>
-  {f'<style>{vis_css}</style>' if vis_css else '<link rel="stylesheet" href="' + _VIS_CSS_URL + '">'}
-  {f'<script>{vis_js}</script>' if vis_js else '<script src="' + _VIS_JS_URL + '"></script>'}
+  {f'<script>{lib_js}</script>' if lib_js else '<script src="' + _VIS_JS_URL + '"></script>'}
   <style>
     *{{box-sizing:border-box;margin:0;padding:0}}
     body{{display:flex;height:100vh;font-family:-apple-system,BlinkMacSystemFont,"Segoe UI",sans-serif;
@@ -355,7 +351,7 @@ def render_html(
     </div>
   </div>
 
-  <div class="btn" onclick="network.fit({{animation:true}})">&#8862; Fit graph</div>
+  <div class="btn" onclick="Graph.zoomToFit(400)">&#8862; Fit graph</div>
 </div>
 
 <div id="graph-wrap"><div id="graph"></div></div>
@@ -389,43 +385,36 @@ RAW_EDGES.forEach(e => {{
   inDeg[e.to]   = (inDeg[e.to]   || 0) + 1;
 }});
 
-const nodesDS = new vis.DataSet(RAW_NODES);
-const edgesDS = new vis.DataSet(RAW_EDGES);
-
-const network = new vis.Network(
-  document.getElementById("graph"),
-  {{ nodes: nodesDS, edges: edgesDS }},
-  {{
-    physics: {{
-      stabilization: {{ iterations: 200, updateInterval: 30, fit: true }},
-      barnesHut: {{ gravitationalConstant: -8000, springLength: 120,
-                    springConstant: 0.025, damping: 0.15 }},
-      minVelocity: 0.75,
-    }},
-    interaction: {{ hover: true, tooltipDelay: 200,
-                    hideEdgesOnDrag: true, hideEdgesOnZoom: true }},
-    nodes: {{ shape: "dot", borderWidth: 1.5,
-              shadow: {{ enabled: true, size: 6, color: "rgba(0,0,0,0.4)" }} }},
-    edges: {{ smooth: {{ type: "continuous" }}, selectionWidth: 2 }},
-  }}
-);
-
 let activeCommunity = -2;
 let showExtracted = true;
 let showAmbiguous = false;
 let searchQuery = "";
 
+const Graph = new ForceGraph3D(document.getElementById("graph"))
+  .backgroundColor("#0f0f1a")
+  .graphData({{ nodes: RAW_NODES, links: RAW_EDGES }})
+  .linkSource("from").linkTarget("to")
+  .nodeLabel("label").nodeVal("size")
+  .nodeColor(n => (n.color && n.color.background) || "#888")
+  .linkColor(l => (l.color && l.color.color) || "#4a9eff")
+  .linkWidth(l => l.width || 1)
+  .linkDirectionalArrowLength(l => l.type === "AMBIGUOUS" ? 2.5 : 3.5)
+  .linkDirectionalArrowRelPos(1)
+  .nodeVisibility(n => !n._hidden)
+  .linkVisibility(l => !l._hidden);
+
 function applyFilters() {{
-  nodesDS.update(RAW_NODES.map(n => ({{
-    id: n.id,
-    hidden: (activeCommunity !== -2 && n.group !== activeCommunity) ||
-            (!!searchQuery && !n.label.toLowerCase().includes(searchQuery))
-  }})));
-  edgesDS.update(RAW_EDGES.map(e => ({{
-    id: e.id,
-    hidden: (e.type === "EXTRACTED" && !showExtracted) ||
-            (e.type === "AMBIGUOUS" && !showAmbiguous)
-  }})));
+  RAW_NODES.forEach(n => {{
+    n._hidden = (activeCommunity !== -2 && n.group !== activeCommunity) ||
+                (!!searchQuery && !n.label.toLowerCase().includes(searchQuery));
+  }});
+  RAW_EDGES.forEach(e => {{
+    e._hidden = (e.type === "EXTRACTED" && !showExtracted) ||
+                (e.type === "AMBIGUOUS" && !showAmbiguous);
+  }});
+  // Re-pass the current accessor to force a visibility refresh without resetting the physics layout
+  Graph.nodeVisibility(Graph.nodeVisibility());
+  Graph.linkVisibility(Graph.linkVisibility());
 }}
 
 function updateEdgeFilter() {{
@@ -449,19 +438,14 @@ function onSearch(q) {{
   applyFilters();
 }}
 
-network.on("click", params => {{
-  if (!params.nodes.length) {{ closeDrawer(); return; }}
-  const nodeId = params.nodes[0];
-  const node = RAW_NODES.find(n => n.id === nodeId);
-  if (!node) return;
-
+Graph.onNodeClick(node => {{
   document.getElementById("drawer-title").textContent = node.label;
   document.getElementById("drawer-path").textContent  = node.path || "(ghost node)";
   const commText = (Number.isInteger(node.group) && node.group >= 0)
     ? ` · cluster ${{node.group}}` : "";
   document.getElementById("drawer-meta").textContent = `${{node.type}}${{commText}}`;
-  document.getElementById("drawer-out").textContent = outDeg[nodeId] || 0;
-  document.getElementById("drawer-in").textContent  = inDeg[nodeId]  || 0;
+  document.getElementById("drawer-out").textContent = outDeg[node.id] || 0;
+  document.getElementById("drawer-in").textContent  = inDeg[node.id]  || 0;
 
   const tagsSection = document.getElementById("drawer-tags-section");
   const tags = node.tags || [];
@@ -475,6 +459,8 @@ network.on("click", params => {{
 
   document.getElementById("drawer").classList.add("open");
 }});
+
+Graph.onBackgroundClick(closeDrawer);
 
 function closeDrawer() {{
   document.getElementById("drawer").classList.remove("open");
@@ -497,8 +483,8 @@ def export_graph(
     """
     nodes, edges = build_graph_data(folder=folder)
     detect_communities(nodes, edges)
-    vis_js, vis_css = _fetch_vis_assets()
-    html = render_html(nodes, edges, title=title, vis_js=vis_js, vis_css=vis_css)
+    lib_js = _fetch_lib_js()
+    html = render_html(nodes, edges, title=title, lib_js=lib_js)
 
     out = Path(output_path)
     out.parent.mkdir(parents=True, exist_ok=True)
