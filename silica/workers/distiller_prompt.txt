@@ -106,6 +106,14 @@ When your task context contains a `## Related Notes (candidates)` section, it li
 - **`parent` field** (optional, `write` ops only): you MAY set `"parent"` to the title of one candidate note when that note is a genuine conceptual parent of the new spoke (e.g. "Reti Neurali" is a valid parent for "Backpropagation").  The parent MUST be the bare title (no path, no `[[...]]`) and MUST appear in the `## Related Notes (candidates)` list.  If no candidate is a meaningful parent, **omit `parent` entirely** — the system falls back to the hub automatically.  Never invent a parent not in the list.
 - Candidates marked `[graph-far]` are especially useful: they are semantically close but not yet linked, making them ideal `parent` targets or inline wikilink opportunities in your `snippet`.
 
+## Concept Keyphrases (for the knowledge graph)
+Every `write` and `patch` op SHOULD carry a `"concepts"` array: 3–8 normalized concept keyphrases naming the substantive ideas the note's `snippet`/`content` is actually about. These feed the vault's co-occurrence graph, which links notes that discuss the same concepts — so quality and normalization matter more than quantity.
+
+- **Normalize aggressively**: resolve synonyms and abbreviations to a single canonical form (`"ML"` → `"machine learning"`), prefer the noun phrase over verb/adjective forms (nominalization: `"optimizing gradients"` → `"gradient optimization"`), and clean up formula/symbol noise into a readable phrase (`"dL/dw"` → `"loss gradient"`).
+- Use the language of the note (Italian for distilled bodies) for natural-language concepts; keep established English technical terms as-is (`"backpropagation"`, `"transformer"`).
+- Keyphrases are short (1–4 words), lowercase unless a proper noun, and MUST be grounded in the note body — never invent concepts absent from the snippet.
+- Omit `concepts` for `skip` ops.
+
 ## Output Schema
 Respond with ONLY the JSON object below. No prose preamble. No markdown fences (no ```json). No trailing commentary after the closing brace.
 
@@ -163,6 +171,7 @@ Your JSON MUST contain `"main_thematic_axes"` (3–5 short strings naming the pi
       "path": "/abs/path/to/existing/Backpropagation.md",
       "source_basename": "Lezione 04.md",
       "linked_axis": "neural network training",
+      "concepts": ["backpropagation", "loss gradient", "regola della catena", "discesa del gradiente"],
       "snippet": "- Definizione formale: la backpropagation calcola il gradiente della funzione di perdita rispetto ai pesi tramite la regola della catena applicata ricorsivamente dallo strato di output verso l'input.\n- Formula del gradiente per il peso $w_{ij}^{(l)}$: $\\frac{\\partial \\mathcal{L}}{\\partial w_{ij}^{(l)}} = \\delta_j^{(l)} \\cdot a_i^{(l-1)}$"
     },
     {
@@ -173,6 +182,7 @@ Your JSON MUST contain `"main_thematic_axes"` (3–5 short strings naming the pi
       "source_basename": "Lezione 04.md",
       "hub": "{HUB_NAME}",
       "linked_axis": "gradient-based optimization",
+      "concepts": ["adam optimizer", "ottimizzazione stocastica", "momento adattivo", "RMSProp", "AdaGrad"],
       "snippet": "Adam (Adaptive Moment Estimation) è un algoritmo di ottimizzazione stocastica che combina i vantaggi di AdaGrad e RMSProp mantenendo medie mobili sia del gradiente (primo momento) sia del suo quadrato (secondo momento).\n\n- Iperparametri tipici: $\\beta_1 = 0.9$, $\\beta_2 = 0.999$, $\\epsilon = 10^{-8}$"
     },
     {

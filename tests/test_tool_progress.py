@@ -291,7 +291,7 @@ def test_llm_openrouter_include_reasoning(mock_completion):
         mock_completion.assert_called_with(
             model="openrouter/some-model",
             messages=messages,
-            max_tokens=8192,
+            max_tokens=256000,
             include_reasoning=True,
             timeout=120.0
         )
@@ -303,7 +303,7 @@ def test_llm_openrouter_include_reasoning(mock_completion):
         mock_completion.assert_called_with(
             model="openrouter/some-model",
             messages=messages,
-            max_tokens=8192,
+            max_tokens=256000,
             include_reasoning=True,
             timeout=120.0
         )

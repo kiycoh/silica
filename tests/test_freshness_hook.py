@@ -99,6 +99,24 @@ def test_best_effort_never_raises_on_read_failure(tmp_path):
     assert n == 0
 
 
+def test_op_concepts_flow_into_contribution(tmp_path):
+    """#9: an op's LLM concepts reinforce the note's co-occurrence contribution."""
+    store = CooccurStore(path=tmp_path / "c.json", lang="english")
+    op = Op(
+        op=OpType.write, heading="N", source_basename="inbox.md",
+        path="Concepts/N.md", snippet="x",
+        concepts=["quantum entanglement"],
+    )
+    n = _refresh_cooccurrence_for_ops(
+        [op], {"Concepts/N.md"},
+        read_body=lambda p: "alpha beta", lang="english", store=store,
+    )
+    assert n == 1
+    nodes = store.note_nodes("Concepts/N")
+    assert _en("quantum") in nodes
+    assert _en("entanglement") in nodes
+
+
 def test_helper_is_embedder_free():
     """The freshness helper is the stable leg: it must not pull in the embedder
     or provider stack, so it refreshes even when LM Studio is down."""

@@ -71,7 +71,7 @@ def call_llm(
     kwargs: dict = {
         "model": model,
         "messages": messages,
-        "max_tokens": max_tokens if max_tokens is not None else int(os.getenv("MAX_TOKENS", "8192")),
+        "max_tokens": max_tokens if max_tokens is not None else int(os.getenv("MAX_TOKENS", "256000")),
     }
     if tools:
         kwargs["tools"] = tools

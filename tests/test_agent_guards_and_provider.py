@@ -86,11 +86,12 @@ class TestAgentGuardsAndProvider(unittest.TestCase):
         self.assertEqual(resp.finish_reason, "length")
 
     @patch("silica.agent.providers.get_provider")
-    def test_run_distiller_fails_on_length(self, mock_get_provider):
+    def test_run_distiller_accepts_complete_output_at_length_limit(self, mock_get_provider):
+        # New contract (#1): finish_reason == "length" is no longer fatal by
+        # itself. When the emitted JSON is complete and parseable, use it.
         mock_provider = MagicMock()
         mock_get_provider.return_value = mock_provider
 
-        # Setup length finish reason
         mock_response = MagicMock()
         mock_response.finish_reason = "length"
         mock_response.text = '{"updates": []}'
@@ -99,9 +100,25 @@ class TestAgentGuardsAndProvider(unittest.TestCase):
         payload = {"schema_version": 1, "batches": []}
         res = run_distiller(payload=payload, target="TargetFolder")
 
-        # Verify it returns error dictionary
+        self.assertNotIn("error", res)
+        self.assertEqual(res["updates"], [])
+
+    @patch("silica.agent.providers.get_provider")
+    def test_run_distiller_errors_only_on_unrecoverable_truncation(self, mock_get_provider):
+        # A length-truncated response with no complete `updates` entry to
+        # salvage still surfaces an error.
+        mock_provider = MagicMock()
+        mock_get_provider.return_value = mock_provider
+
+        mock_response = MagicMock()
+        mock_response.finish_reason = "length"
+        mock_response.text = '{"updates": [{"heading": "Cut", "op": "wri'
+        mock_provider.call_llm.return_value = mock_response
+
+        payload = {"schema_version": 1, "batches": []}
+        res = run_distiller(payload=payload, target="TargetFolder")
+
         self.assertIn("error", res)
-        self.assertIn("maximum tokens limit", res["error"])
 
     def test_is_tool_failure(self):
         # Dict representation

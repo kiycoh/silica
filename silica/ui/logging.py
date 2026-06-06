@@ -97,8 +97,8 @@ FRIENDLY_TEMPLATES = {
         "Annulling changes (rollback) failed: {0}",
     "Enricher failed for task %d: %s":
         "Enrichment phase failed for task {0}: {1}",
-    "Distiller call hit maximum tokens limit (generation cut off)":
-        "Distiller call exceeded the maximum limit of allowed tokens",
+    "Distiller output truncated/malformed (%s); salvaged %d complete update(s) from the valid prefix — batch continues with partial set":
+        "Distiller output was cut off ({0}); recovered {1} complete note(s) and continued the batch",
     "Transient LLM error, retries exhausted: %s":
         "Transient LLM error, retries exhausted: {0}",
     "Permanent LLM or execution error: %s":

@@ -70,7 +70,7 @@ def _refine_note(config: Any, target_path: str, original: str) -> NoteContent:
         messages=[{"role": "user", "content": user_message}],
         tools=None,
         response_schema=NoteContent,
-        max_tokens=8192,
+        max_tokens=int(os.getenv("REFINE_MAX_TOKENS", os.getenv("MAX_TOKENS", "256000"))),
     )
     raw = response.text or ""
     try:

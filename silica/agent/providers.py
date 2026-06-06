@@ -60,7 +60,7 @@ class OpenAICompatibleProvider:
             kwargs["tools"] = tools
             kwargs["tool_choice"] = "auto"
             
-        kwargs["max_tokens"] = max_tokens if max_tokens is not None else int(os.getenv("MAX_TOKENS", "8192"))
+        kwargs["max_tokens"] = max_tokens if max_tokens is not None else int(os.getenv("MAX_TOKENS", "256000"))
 
         import time
 
