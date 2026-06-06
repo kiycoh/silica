@@ -230,4 +230,8 @@ We maintain a set of structural patterns and trade-offs documented as Architectu
 
 ## License
 
-Distributed under the APACHE 2.0 License. See [LICENSE](LICENSE) for more information.
+This project is licensed under the **PolyForm Noncommercial License 1.0.0**.
+
+You are free to use this software for noncommercial purposes (personal, educational, nonprofit). Commercial use is prohibited.
+
+See [LICENSE](LICENSE) for details.
