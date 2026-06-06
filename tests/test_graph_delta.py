@@ -246,3 +246,78 @@ def test_delta_report_json_serializable(delta_report, tmp_path):
     assert "autolink_candidates" in data
     assert isinstance(data["autolink_candidates"], list)
     assert dataclasses.asdict(delta_report)["stale_links"] == data["stale_links"]
+
+
+# ---------------------------------------------------------------------------
+# #8 cross-concept convergence  ->  S_(many_own)×other
+#
+# Paper (Marwitz et al. 2026, Table 2): the report section linking a candidate
+# to MANY of the researcher's own concepts had the highest "interesting" rate
+# (61.5%). Silica equivalent: an autolink candidate touching more god-node hubs
+# earns a higher `convergence` and must rank ahead of an equally-weighted but
+# single-hub candidate.
+# ---------------------------------------------------------------------------
+
+@pytest.fixture()
+def convergence_store(tmp_path):
+    st = CooccurStore(path=tmp_path / "conv.json", lang="english")
+    # Three hubs each carry a distinct concept PLUS a common "shared" concept.
+    st.upsert_note("H1", build_contribution("H1", "alpha shared"))
+    st.upsert_note("H2", build_contribution("H2", "beta shared"))
+    st.upsert_note("H3", build_contribution("H3", "gamma shared"))
+    # X co-mentions "shared" -> co-occurs with ALL three hubs (convergence 3).
+    st.upsert_note("X", build_contribution("X", "shared concept"))
+    # Y co-mentions only "alpha" -> co-occurs with H1 alone (convergence 1).
+    st.upsert_note("Y", build_contribution("Y", "alpha extra"))
+    return st
+
+
+def test_autolink_convergence_counts_hubs_and_drives_ranking(convergence_store):
+    import networkx as nx
+    from silica.kernel.graph_report import NodeStat, _compute_cooccur_delta
+
+    ids = ["H1", "H2", "H3", "X", "Y"]
+    G = nx.Graph()
+    G.add_nodes_from(ids)
+    G.add_edges_from([("H1", "H2"), ("H2", "H3")])  # hubs linked; X, Y isolated
+    node_label = {i: i for i in ids}
+
+    report = VaultReport(
+        generated_at="", scope="", totals={},
+        god_nodes=[
+            NodeStat(id="H1", label="H1", cluster=0, out_degree=1, in_degree=1, degree=2, pagerank=0.0),
+            NodeStat(id="H2", label="H2", cluster=0, out_degree=2, in_degree=2, degree=4, pagerank=0.0),
+            NodeStat(id="H3", label="H3", cluster=0, out_degree=1, in_degree=1, degree=2, pagerank=0.0),
+        ],
+        bridges=[], orphans=[], dangling=[], clusters=[],
+    )
+
+    al, _sl, _mh = _compute_cooccur_delta(
+        report, G, node_label, cooccur_store=convergence_store, k=20
+    )
+
+    x_cand = next(c for c in al if "X" in (c.source, c.target))
+    y_cand = next(c for c in al if "Y" in (c.source, c.target))
+
+    # X bridges into all three hub neighbourhoods; Y only into H1's.
+    assert x_cand.convergence == 3
+    assert y_cand.convergence == 1
+
+    # Convergence drives ranking: the multi-hub candidate sorts ahead.
+    x_idx = min(i for i, c in enumerate(al) if "X" in (c.source, c.target))
+    y_idx = next(i for i, c in enumerate(al) if "Y" in (c.source, c.target))
+    assert x_idx < y_idx
+
+
+def test_markdown_autolink_table_shows_convergence():
+    """The autolink table surfaces the #8 convergence (hub reach) column."""
+    r = VaultReport(
+        generated_at="", scope="", totals={}, god_nodes=[], bridges=[],
+        orphans=[], dangling=[], clusters=[],
+    )
+    r.autolink_candidates = [
+        AutolinkCandidate(source="A", target="B", weight=3.0, shared=["x"], convergence=2),
+    ]
+    md = to_markdown(r)
+    assert "Hubs" in md          # convergence column header
+    assert "| 2 |" in md         # the convergence value rendered

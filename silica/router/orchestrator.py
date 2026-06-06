@@ -66,6 +66,7 @@ def _refresh_cooccurrence_for_ops(
     from silica.kernel.cooccurrence import build_index as _cooccur_build
 
     notes: list[tuple[str, str, str]] = []
+    concepts_by_path: dict[str, list[str]] = {}
     seen: set[str] = set()
     for op in ops:
         path = op.touched_ref()
@@ -81,11 +82,16 @@ def _refresh_cooccurrence_for_ops(
         except Exception:
             continue
         notes.append((idx_path, stem, body))
+        # #9: forward LLM-extracted concept phrases to reinforce this note.
+        op_concepts = getattr(op, "concepts", None)
+        if op_concepts:
+            concepts_by_path[idx_path] = op_concepts
 
     if not notes:
         return 0
     try:
-        _cooccur_build(notes, store=store, lang=lang, force=True)
+        _cooccur_build(notes, store=store, lang=lang, force=True,
+                       concepts_by_path=concepts_by_path or None)
     except Exception as exc:
         logger.debug("WRITE: cooccur refresh skipped (%s)", exc)
         return 0
@@ -775,7 +781,8 @@ class InjectorFSM(BaseFSM[InjectorState]):
         recon_path = self._make_tmp(self.context["recon"])
         phase_conf = self._get_recipe_phase("payload")
         max_concepts = phase_conf.get("partition_if_over", 200)
-        res = silica_payload(recon_path, max_concepts=max_concepts)
+        max_bytes = int(os.getenv("DISTILLER_CHUNK_MAX_BYTES", str(30 * 1024)))
+        res = silica_payload(recon_path, max_concepts=max_concepts, max_bytes=max_bytes)
         if "error" in res:
             self._progress_note("payload", "payload", "failed", error=res["error"])
             raise RuntimeError(f"Payload failed: {res['error']}")

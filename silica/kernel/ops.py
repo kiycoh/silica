@@ -33,6 +33,7 @@ class Op(BaseModel):
     content: str | None = None          # full body (overwrite only)
     tags: list[str] | None = None
     related: list[str] | None = None
+    concepts: list[str] | None = None  # #9: normalized concept phrases for the co-occurrence graph
     reason: str | None = None           # skip reason / rejection note
     linked_axis: str | None = None      # thematic axis this concept belongs to (Layer 2)
     parent: str | None = None           # specific parent note (≠ run hub); None → falls back to hub

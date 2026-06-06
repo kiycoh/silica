@@ -91,19 +91,34 @@ def tokenize(text: str, lang: str = "english") -> list[list[tuple[str, str]]]:
     return out
 
 
-def build_contribution(name: str, body: str, lang: str = "english") -> dict[str, Any]:
+def build_contribution(
+    name: str,
+    body: str,
+    lang: str = "english",
+    concepts: list[str] | None = None,
+) -> dict[str, Any]:
     """Turn a note's text into its per-note co-occurrence contribution.
 
     Strips frontmatter + media, tokenizes per sentence, then for each token
     links it back to the previous `GAP - 1` tokens with a decaying weight:
         distance 1 -> 3 (narrative), distance 2 -> 2, distance 3 -> 1 (gap scan)
     Edges are directed earlier->later. Weights accumulate.
+
+    `concepts` (#9, Marwitz et al. 2026): optional LLM-extracted, normalized
+    concept phrases. Each is appended as its own sentence so its stems become
+    nodes and its words co-occur through the same window logic — reinforcing
+    LLM-validated concepts above rule-based body noise. `None`/`[]` leaves the
+    contribution byte-identical to a body-only build (graceful degradation).
     """
     from silica.kernel import frontmatter
     from silica.kernel.media import preprocess_text
 
     _data, _fm, body_only = frontmatter.split(body) if body else (None, "", "")
     text = f"{name}\n\n{preprocess_text(body_only)}"
+    if concepts:
+        concept_sentences = ". ".join(c.strip() for c in concepts if c and c.strip())
+        if concept_sentences:
+            text = f"{text}\n\n{concept_sentences}."
 
     node_surface_counts: dict[str, dict[str, int]] = {}
     edge_acc: dict[tuple[str, str], float] = {}
@@ -294,19 +309,27 @@ def build_index(
     store: CooccurStore | None = None,
     lang: str | None = None,
     force: bool = False,
+    concepts_by_path: dict[str, list[str]] | None = None,
 ) -> CooccurStore:
     """Build/refresh the co-occurrence store from (path, name, body) tuples.
 
     Mirrors embed.build_index. Incremental: skips notes already present unless
     `force`. Returns the saved store.
+
+    `concepts_by_path` (#9): optional map of note path -> LLM-extracted concept
+    phrases, forwarded into build_contribution to reinforce those concepts.
     """
     if store is None:
         store = CooccurStore(lang=lang or "english")
     use_lang = lang or store.lang
+    cmap = concepts_by_path or {}
     for path, name, body in notes:
         if not force and path in store.paths():
             continue
-        store.upsert_note(path, build_contribution(name, body, lang=use_lang))
+        store.upsert_note(
+            path,
+            build_contribution(name, body, lang=use_lang, concepts=cmap.get(path)),
+        )
     store.save()
     return store
 

@@ -267,3 +267,65 @@ def test_to_facts_byte_stable(synthetic_graph):
     f1.pop("totals", None)  # totals are deterministic, but keep the check focused
     f2.pop("totals", None)
     assert orjson.dumps(f1, option=orjson.OPT_SORT_KEYS) == orjson.dumps(f2, option=orjson.OPT_SORT_KEYS)
+
+
+# ---------------------------------------------------------------------------
+# _compute_missing_links — common_neighbors structural boost (paper #2)
+# ---------------------------------------------------------------------------
+
+def test_missing_links_common_neighbors_boosts_ranking(monkeypatch):
+    """Two candidates with equal cosine rank by shared-neighbor count.
+
+    Paper (Marwitz et al. 2026) Baseline uses sum_i A^2_u,i (2-length path
+    count) as a core feature. Silica equivalent: candidates sharing more
+    common neighbors with the source are likelier to form a real link and
+    must rank strictly higher than equally-similar but structurally-isolated
+    candidates.
+    """
+    import networkx as nx
+    from silica.kernel import graph_report as gr
+
+    # S reaches A through two shared neighbors (X, Y) and B through one (Z).
+    # Both A and B sit at shortest-path distance 2 from S (so both clear the
+    # d_prev > 1 gate), and both will be returned with identical cosine.
+    G = nx.Graph()
+    G.add_edges_from([
+        ("S", "X"), ("S", "Y"), ("S", "Z"),
+        ("A", "X"), ("A", "Y"),
+        ("B", "Z"),
+    ])
+
+    class _Store:
+        _notes: dict = {}
+
+        def __len__(self):
+            return 6
+
+        def get_vec(self, p):
+            return [1.0, 0.0] if p == "S" else None
+
+        def cosine_top_k(self, vec, k=10, exclude=None):
+            return [
+                {"path": "A", "score": 0.90},
+                {"path": "B", "score": 0.90},
+            ]
+
+    monkeypatch.setattr("silica.kernel.embed.EmbedStore", _Store)
+    monkeypatch.setattr("silica.agent.providers.get_embedder", lambda cfg: object())
+
+    report = VaultReport(
+        generated_at="x", scope="", totals={},
+        god_nodes=[NodeStat(id="S", label="S", cluster=0,
+                            out_degree=3, in_degree=0, degree=3, pagerank=0.0)],
+        bridges=[], orphans=[], dangling=[], clusters=[],
+    )
+
+    links = gr._compute_missing_links(report, G, tau=0.5, k=10)
+    by_target = {l.target: l for l in links}
+
+    assert "A" in by_target and "B" in by_target
+    # A shares 2 neighbors with S, B shares 1 → A must score strictly higher.
+    assert by_target["A"].cosine > by_target["B"].cosine
+    # …and the result list is ordered accordingly.
+    pairs = [(l.source, l.target) for l in links]
+    assert pairs.index(("S", "A")) < pairs.index(("S", "B"))

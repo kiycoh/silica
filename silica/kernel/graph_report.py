@@ -6,10 +6,21 @@ and the existing graph_export helpers. No LLM calls, no network access.
 Principle: "embeddings PROPOSE, graph DISPOSES" — the report is authoritative
 over vault structure; missing_links (embeddings) are clearly separated and
 labelled as proposed candidates.
+
+Paper-inspired signals (Marwitz et al., Nature Mach. Intell. 2026):
+  - common_neighbors: structural likelihood boost (2-length path count) so
+    proposed links sharing more neighbours with the source rank higher.
+  - d_prev: shortest path distance before a link is predicted, annotated per
+    MissingLink so downstream consumers can differentiate likely (d=2) from
+    novel (d≥3) candidates.
+  - Temporal decay: EmbedStore timestamps boost recent note pairs.
+  - Cosine-band filtering: autolink candidates semantically too similar or
+    too alien are suppressed when embeddings are available.
 """
 from __future__ import annotations
 
 import logging
+import time
 from dataclasses import dataclass, field
 from datetime import datetime, timezone
 from pathlib import Path
@@ -58,6 +69,7 @@ class MissingLink:          # PROPOSED — not authoritative
     source: str
     target: str
     cosine: float
+    d_prev: int = 0         # shortest path before prediction (0 = unreachable → highest novelty)
 
 
 @dataclass
@@ -75,6 +87,7 @@ class AutolinkCandidate:    # co-occurrence − wikilink: related in text, unlin
     target: str
     weight: float          # co-occurrence relatedness weight (higher = stronger)
     shared: list[str]      # directly shared concept labels (evidence)
+    convergence: int = 0   # #8: number of god-node hubs this pair connects to
 
 
 @dataclass
@@ -366,6 +379,12 @@ def _empty_report(scope: str = "") -> VaultReport:
     )
 
 
+# Temporal decay half-life: a note updated 30 days ago gets ~50% boost; at
+# 90 days the boost is negligible.  The constant is chosen so the recency
+# factor degrades smoothly without overwhelming the cosine signal.
+_RECENCY_HALFLIFE_DAYS = 30.0
+
+
 def _compute_missing_links(
     report: VaultReport,
     G_und: Any,
@@ -373,7 +392,18 @@ def _compute_missing_links(
     tau: float = 0.82,
     k: int = 10,
 ) -> list[MissingLink]:
-    """Propose missing links via embedding similarity (PROPOSED — not authoritative)."""
+    """Propose missing links via embedding similarity (PROPOSED — not authoritative).
+
+    Paper-inspired refinements (Marwitz et al. 2026):
+      - common_neighbors: a structural boost from the 2-length path count, the
+        paper's Baseline core feature — likelier links rank above structurally
+        isolated but equally-similar pairs.
+      - d_prev annotation: each result carries its shortest-path distance before
+        prediction. Only direct neighbours (d<=1) are hard-gated; d=2 candidates
+        (likely links) and d>=3 (novel, high creative value) both surface.
+      - Temporal decay: recent note pairs receive a modest cosine boost based on
+        EmbedStore timestamps, capturing the paper's velocity-of-growth signal.
+    """
     try:
         from silica.agent.providers import get_embedder
         from silica.config import CONFIG
@@ -388,6 +418,7 @@ def _compute_missing_links(
         logger.debug("graph_report: embeddings unavailable (%s)", exc)
         return []
 
+    now = time.time()
     god_paths = [n.id for n in report.god_nodes]
     results: list[MissingLink] = []
     seen: set[tuple[str, str]] = set()
@@ -395,7 +426,6 @@ def _compute_missing_links(
     for source in god_paths:
         vec = store.get_vec(source)
         if vec is None:
-            # try with .md stripped from path
             vec = store.get_vec(source.removesuffix(".md"))
         if vec is None:
             continue
@@ -411,17 +441,38 @@ def _compute_missing_links(
                 break  # results are sorted desc
             if tgt not in G_und or source not in G_und:
                 continue
-            # Skip if already adjacent or within 2 hops
+
+            # --- #7 d_prev: annotate instead of hard-gating at d<=2 ----------
             try:
-                path_len = nx.shortest_path_length(G_und, source, tgt)
-                if path_len <= 2:
-                    continue
-            except Exception:
-                pass  # no path → candidate is valid
+                d_prev = nx.shortest_path_length(G_und, source, tgt)
+            except nx.NetworkXNoPath:
+                d_prev = 0  # unreachable → highest novelty
+            if d_prev <= 1:
+                continue  # only skip direct neighbours
+
+            # --- #2 common_neighbors: structural-likelihood boost ------------
+            # Paper Baseline uses sum_i A^2_u,i (2-length path count) as a core
+            # feature; more shared neighbours → likelier real link. Mapped to
+            # [0, 1) for diminishing returns so it nudges the ranking without
+            # overwhelming the cosine signal.
+            cn = len(list(nx.common_neighbors(G_und, source, tgt)))
+            structural = cn / (1.0 + cn)
+
+            # --- #5 temporal decay: boost recent note pairs ------------------
+            ts_src = store._notes.get(source, {}).get("ts", 0)
+            ts_tgt = store._notes.get(tgt, {}).get("ts", 0)
+            age_days = max(0.0, (now - max(ts_src, ts_tgt)) / 86400.0)
+            recency = 2.0 ** (-age_days / _RECENCY_HALFLIFE_DAYS)  # [0, 1]
+            adjusted = score * (1.0 + 0.3 * structural) * (1.0 + 0.1 * recency)
+
             key = (min(source, tgt), max(source, tgt))
             if key not in seen:
                 seen.add(key)
-                results.append(MissingLink(source=source, target=tgt, cosine=round(score, 4)))
+                results.append(MissingLink(
+                    source=source, target=tgt,
+                    cosine=round(adjusted, 4),
+                    d_prev=d_prev,
+                ))
 
     results.sort(key=lambda m: (-m.cosine, m.source, m.target))
     return results[:k]
@@ -545,7 +596,58 @@ def _compute_cooccur_delta(
                 weight=round(float(weight), 2),
                 shared=_shared_labels(nid, tgt),
             ))
-    autolinks.sort(key=lambda a: (-a.weight, a.source, a.target))
+
+    # --- #6 cosine-band: filter trivially-similar or nonsensically-distant ---
+    # Paper (Marwitz 2026) S_own×other^filtered: removes pairs whose semantic
+    # similarity is too high (trivial, A2 in expert ratings) or too low
+    # (nonsensical, B in expert ratings). Best-effort: skipped silently when
+    # embeddings are unavailable.
+    try:
+        from silica.kernel.embed import EmbedStore, _cosine
+        _embed_store = EmbedStore()
+        if len(_embed_store) > 0:
+            _cos_hi = 0.92
+            _cos_lo = 0.35
+            filtered: list[AutolinkCandidate] = []
+            for a in autolinks:
+                v_src = _embed_store.get_vec(a.source)
+                v_tgt = _embed_store.get_vec(a.target)
+                if v_src and v_tgt:
+                    cos = _cosine(v_src, v_tgt)
+                    if cos > _cos_hi or cos < _cos_lo:
+                        continue  # too trivial or too alien
+                filtered.append(a)
+            autolinks = filtered
+    except Exception:
+        pass  # embeddings unavailable → no filtering, degrade gracefully
+
+    # --- #8 convergence: S_(many_own)×other --------------------------------
+    # Paper (Marwitz 2026, Table 2): the highest-interest section connects a
+    # candidate to MANY of the researcher's own concepts. Silica's "own
+    # concepts" are the god-node hubs; a candidate touching more hubs (either
+    # endpoint co-occurring with the hub, or being a hub itself) earns a higher
+    # convergence and is ranked by convergence × weight. Degrades to the prior
+    # weight-only ordering when there are no god nodes.
+    god_ids = [n.id for n in report.god_nodes]
+    if god_ids:
+        god_set = set(god_ids)
+        # expand=False: count only DIRECT concept overlap with the hub, so
+        # convergence measures genuine reach into distinct hubs rather than
+        # transitive bleed through a single shared concept.
+        god_related: dict[str, set[str]] = {}
+        for g in god_ids:
+            ranking = _cooccur_ranking(store, g, k=50, exclude=set(), scope=scope, expand=False)
+            god_related[g] = {p for p, _w in (ranking or [])}
+        for a in autolinks:
+            # The "other" endpoint(s) are those not themselves hubs; convergence
+            # counts how many distinct hubs that other concept reaches into.
+            others = [e for e in (a.source, a.target) if e not in god_set]
+            a.convergence = sum(
+                1 for g in god_ids
+                if any(o in god_related[g] for o in others)
+            )
+
+    autolinks.sort(key=lambda a: (-(a.convergence * a.weight), -a.weight, a.source, a.target))
     autolinks = autolinks[:k]
 
     # --- STALE: wikilinked but the two notes share no concepts --------------
@@ -668,12 +770,14 @@ def to_markdown(r: VaultReport, title: str = "Silica Vault Report") -> str:
     # Missing links (proposed)
     if r.missing_links:
         lines.append("## Proposed Missing Links _(embedding candidates — not authoritative)_")
-        lines.append("| Source | Target | Cosine |")
-        lines.append("|---|---|---|")
+        lines.append("| Source | Target | Cosine | d_prev | Novelty |")
+        lines.append("|---|---|---|---|---|")
         for ml in r.missing_links:
             src_label = ml.source.rsplit("/", 1)[-1].removesuffix(".md")
             tgt_label = ml.target.rsplit("/", 1)[-1].removesuffix(".md")
-            lines.append(f"| [[{src_label}]] | [[{tgt_label}]] | {ml.cosine} |")
+            novelty = "🔴 novel" if ml.d_prev == 0 or ml.d_prev >= 3 else "🟡 likely"
+            d_str = str(ml.d_prev) if ml.d_prev > 0 else "∞"
+            lines.append(f"| [[{src_label}]] | [[{tgt_label}]] | {ml.cosine} | {d_str} | {novelty} |")
         lines.append("")
 
     # Duplicate pairs (proposed)
@@ -688,11 +792,11 @@ def to_markdown(r: VaultReport, title: str = "Silica Vault Report") -> str:
 
     if r.autolink_candidates:
         lines.append("\n## Autolink Candidates _(co-occurrence − wikilink — not authoritative)_")
-        lines.append("| Source | Target | Weight | Shared Concepts |")
-        lines.append("|---|---|---|---|")
+        lines.append("| Source | Target | Weight | Hubs | Shared Concepts |")
+        lines.append("|---|---|---|---|---|")
         for a in r.autolink_candidates:
             shared = ", ".join(a.shared) if a.shared else "_(associative)_"
-            lines.append(f"| [[{_short(a.source)}]] | [[{_short(a.target)}]] | {a.weight} | {shared} |")
+            lines.append(f"| [[{_short(a.source)}]] | [[{_short(a.target)}]] | {a.weight} | {a.convergence} | {shared} |")
 
     if r.stale_links:
         lines.append("\n## Stale Links _(wikilink − co-occurrence — review)_")
@@ -782,7 +886,7 @@ def to_digest(report: VaultReport, *, max_items: int = 8) -> str:
 
     if report.missing_links:
         ml = ", ".join(
-            f"{m.source.rsplit('/',1)[-1].removesuffix('.md')}→{m.target.rsplit('/',1)[-1].removesuffix('.md')}(cos={m.cosine})"
+            f"{m.source.rsplit('/',1)[-1].removesuffix('.md')}→{m.target.rsplit('/',1)[-1].removesuffix('.md')}(cos={m.cosine},d={m.d_prev})"
             for m in report.missing_links[:max_items]
         )
         lines.append(f"PROPOSED  {ml}")

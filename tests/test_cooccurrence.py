@@ -264,3 +264,51 @@ def test_corrupt_index_loads_empty(tmp_path):
     idx.write_text("{ this is not valid json ")
     store = CooccurStore(path=idx)
     assert len(store) == 0
+
+
+# ---------------------------------------------------------------------------
+# #9 LLM concept augmentation — concepts reinforce the co-occurrence graph
+#
+# Paper (Marwitz et al. 2026, Table 1): LLM-extracted concept phrases beat
+# rule-based extraction (nominalization, formula cleanup, synonym resolution).
+# build_contribution accepts optional `concepts`; they enter the SAME tokenize
+# pipeline so their stems become nodes and their words co-occur, lifting
+# LLM-validated concepts above body noise. `concepts=None` is byte-identical to
+# today (graceful degradation).
+# ---------------------------------------------------------------------------
+
+def test_build_contribution_concepts_add_nodes_absent_from_body():
+    st = __import__("snowballstemmer").stemmer("english").stemWord
+    c = build_contribution("N", "alpha beta", concepts=["quantum entanglement"], lang="english")
+    assert st("quantum") in c["nodes"]
+    assert st("entanglement") in c["nodes"]
+
+
+def test_build_contribution_concepts_create_intra_concept_edge():
+    st = __import__("snowballstemmer").stemmer("english").stemWord
+    c = build_contribution("N", "alpha beta", concepts=["quantum entanglement"], lang="english")
+    # the two words of one concept are adjacent -> narrative weight 3
+    assert _edge_weight(c, st("quantum"), st("entanglement")) == 3
+
+
+def test_build_contribution_concepts_none_is_identical_to_today():
+    base = build_contribution("N", "alpha beta gamma", lang="english")
+    none = build_contribution("N", "alpha beta gamma", concepts=None, lang="english")
+    empty = build_contribution("N", "alpha beta gamma", concepts=[], lang="english")
+    assert none == base
+    assert empty == base
+
+
+def test_build_index_threads_concepts_by_path(tmp_path):
+    """#9: build_index forwards per-path LLM concepts into build_contribution."""
+    st = __import__("snowballstemmer").stemmer("english").stemWord
+    store = CooccurStore(path=tmp_path / "c.json", lang="english")
+    build_index(
+        [("Notes/A", "A", "alpha beta")],
+        store=store,
+        concepts_by_path={"Notes/A": ["quantum entanglement"]},
+        force=True,
+    )
+    nodes = store.note_nodes("Notes/A")
+    assert st("quantum") in nodes
+    assert st("entanglement") in nodes
