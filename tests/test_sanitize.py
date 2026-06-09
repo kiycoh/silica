@@ -3,6 +3,7 @@ from __future__ import annotations
 
 import pytest
 from silica.kernel.sanitize import _strip_md_ext, normalize_ops
+from silica.kernel.templates import slugify
 
 
 # ---------------------------------------------------------------------------
@@ -97,3 +98,35 @@ def test_normalize_ops_empty_list():
 
 def test_normalize_ops_non_list_passthrough():
     assert normalize_ops("not a list") == "not a list"  # type: ignore[arg-type]
+
+
+def test_normalize_ops_sanitizes_literal_newlines():
+    ops = [{
+        "op": "write",
+        "path": "notes/B.md",
+        "heading": "B",
+        "source_basename": "inbox.md",
+        "snippet": "Prose with a literal \\n here. ```python\nprint('code with \\n preserved')\n``` More prose with \\n."
+    }]
+    result = normalize_ops(ops)
+    expected_snippet = "Prose with a literal \n here. ```python\nprint('code with \\n preserved')\n``` More prose with \n."
+    assert result[0]["snippet"] == expected_snippet
+
+
+def test_normalize_ops_removes_trailing_literal_newlines():
+    ops = [{
+        "op": "write",
+        "path": "notes/B.md",
+        "heading": "B",
+        "source_basename": "inbox.md",
+        "snippet": "Some text.\\n"
+    }]
+    result = normalize_ops(ops)
+    assert result[0]["snippet"] == "Some text."
+
+
+def test_slugify_normalizes_whitespace():
+    assert slugify("Performance\nElement") == "Performance Element"
+    assert slugify("Performance\r\nElement  negli   agenti") == "Performance Element negli agenti"
+
+

@@ -11,7 +11,8 @@ from silica.kernel.frontmatter import clean_tag  # canonical; do not redefine
 
 def slugify(s: str) -> str:
     s = re.sub(r'[\\/:*?"<>|]', '', s)
-    return s.strip().replace('  ', ' ')  # keep spaces, Obsidian likes them
+    s = re.sub(r'\s+', ' ', s)  # normalise newlines, tabs, and multiple spaces to a single space
+    return s.strip()
 
 
 def template_spoke(heading: str, snippet: str, hub: str, title: str | None = None, tags: list[str] | None = None, related: list[str] | None = None, parent: str | None = None) -> str:

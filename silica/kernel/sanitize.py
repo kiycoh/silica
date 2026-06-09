@@ -38,7 +38,17 @@ def normalize_ops(ops: list) -> list:
 
         for field in ("snippet", "content"):
             if isinstance(op.get(field), str):
-                op[field] = _strip_md_ext(op[field])
+                val = op[field]
+                val = val.rstrip()
+                while val.endswith("\\n"):
+                    val = val[:-2].rstrip()
+                if "\\n" in val:
+                    parts = val.split("```")
+                    for i in range(len(parts)):
+                        if i % 2 == 0:  # prose part
+                            parts[i] = parts[i].replace("\\n", "\n")
+                    val = "```".join(parts)
+                op[field] = _strip_md_ext(val)
 
         if isinstance(op.get("related"), list):
             op["related"] = [
