@@ -1,0 +1,15 @@
+name: organizer
+inputs: [taxonomy, scope]
+gates:
+  move_failure_max: 0.10
+  graph_regression: forbid_new_orphans
+phases:
+  - { id: scan,      kind: mechanical }
+  - { id: classify,  kind: mechanical }
+  - { id: arbitrate, kind: semantic, best_effort: true }
+  - { id: plan,      kind: mechanical }
+  - { id: snapshot,  kind: txn }
+  - { id: move,      kind: mechanical }
+  - { id: lint,      kind: gate }
+  - { id: cleanup,   kind: mechanical, on_success_only: true }
+  - { id: rollback,  kind: txn, on_gate_fail: true }

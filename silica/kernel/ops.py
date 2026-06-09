@@ -20,6 +20,7 @@ class OpType(str, Enum):
     overwrite = "overwrite"  # rewrite whole note, preserve identity/history
     delete = "delete"        # only via wrapped tool + confirm
     skip = "skip"            # explicit no-op (excluded from gate denominator)
+    move = "move"            # relocate note (organize pipeline); DRIVER.move() updates wikilinks
 
 
 class Op(BaseModel):
@@ -37,12 +38,17 @@ class Op(BaseModel):
     reason: str | None = None           # skip reason / rejection note
     linked_axis: str | None = None      # thematic axis this concept belongs to (Layer 2)
     parent: str | None = None           # specific parent note (≠ run hub); None → falls back to hub
+    from_path: str | None = None        # move op: current vault-relative path
+    to_path: str | None = None          # move op: destination vault-relative path
 
     @model_validator(mode="after")
     def validate_path_required(self) -> Op:
         if self.op in (OpType.write, OpType.patch, OpType.overwrite, OpType.delete):
             if not self.path:
                 raise ValueError(f"path required for op '{self.op.value}'")
+        if self.op == OpType.move:
+            if not self.from_path or not self.to_path:
+                raise ValueError("move op requires both 'from_path' and 'to_path'")
         return self
 
     def touched_ref(self) -> str | None:
@@ -51,9 +57,14 @@ class Op(BaseModel):
         This is the ONLY authorised way for lint/snapshot to derive the
         note reference from an op. Using any other field (e.g. 'name') is a
         violation — 'name' does not exist on Op (closes B1).
+
+        For move ops, returns from_path (the note being relocated) so that
+        lint/snapshot can locate the note before the move executes.
         """
         if self.op in (OpType.write, OpType.patch, OpType.overwrite, OpType.delete):
             return self.path
+        if self.op == OpType.move:
+            return self.from_path
         return None
 
     def __getitem__(self, item: str) -> Any:
@@ -86,6 +97,7 @@ class InverseOpKind(str, Enum):
     delete_created = "delete_created"       # undo a write: delete the note that was created
     restore_version = "restore_version"     # undo a patch: history:restore to prior version
     recreate_deleted = "recreate_deleted"   # undo a delete: recreate with prior content
+    move_back = "move_back"                 # undo a move: DRIVER.move(to_path, from_path)
 
 
 class InverseOp(BaseModel):
@@ -93,6 +105,7 @@ class InverseOp(BaseModel):
     path: str
     version: int | None = None            # for restore_version
     prior_content: str | None = None      # for recreate_deleted
+    to_path: str | None = None            # for move_back: where the note was moved to
 
 
 class FailedOp(BaseModel):

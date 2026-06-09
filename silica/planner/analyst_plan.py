@@ -31,6 +31,8 @@ _IRREVERSIBLE = frozenset({
     "silica_delete",
     "silica_bulk_write",
     "silica_run_injector",
+    "silica_bulk_move",
+    "silica_run_organizer",
 })
 
 # Threshold for orphan "linkable" heuristic: an orphan goes to `auto` only

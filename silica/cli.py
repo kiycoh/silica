@@ -427,6 +427,66 @@ def _expand_workflow_shortcut(user_input: str) -> str | None:
 
         return f"A ledger for {cmd} has been created with {len(chunks)} chunk(s) across {len(paths)} note(s). Use `silica_ledger_next` to execute them."
 
+    if cmd == "/organize":
+        args = parts[1:]
+        intent_parts: list[str] = []
+        scope = ""
+        taxonomy_file = ""
+        apply_now = False
+
+        i = 0
+        while i < len(args):
+            arg = args[i]
+            if arg.startswith("--scope="):
+                scope = arg[len("--scope="):]
+            elif arg.startswith("--file="):
+                taxonomy_file = arg[len("--file="):]
+            elif arg in ("--apply",):
+                apply_now = True
+            elif not arg.startswith("-"):
+                intent_parts.append(arg)
+            i += 1
+
+        # Re-join intent (handles both quoted and unquoted multi-word)
+        intent = " ".join(intent_parts).strip('"\'')
+
+        if taxonomy_file:
+            # Skip taxonomy generation — use existing file
+            dry = "false" if apply_now else "true"
+            scope_str = f", scope={json.dumps(scope)}" if scope else ""
+            msg = (
+                f"Run the vault organizer using the existing taxonomy file {json.dumps(taxonomy_file)}.\n"
+                f"Call `silica_run_organizer` with taxonomy_path={json.dumps(taxonomy_file)}{scope_str}, "
+                f"dry_run={dry}.\n"
+            )
+            if not apply_now:
+                msg += (
+                    "Show the move plan to the user and ask for confirmation. "
+                    "If confirmed, call `silica_run_organizer` again with dry_run=false."
+                )
+        elif intent:
+            scope_str = f", scope={json.dumps(scope)}" if scope else ""
+            dry_note = (
+                "Then call `silica_run_organizer` with dry_run=true to preview the moves. "
+                "Show the plan to the user and ask for confirmation before executing."
+            ) if not apply_now else (
+                "Then call `silica_run_organizer` with dry_run=false to execute the moves."
+            )
+            msg = (
+                f"Organize the vault based on the user's intent: {json.dumps(intent)}.\n"
+                f"Step 1: Call `silica_generate_taxonomy` with user_intent={json.dumps(intent)}{scope_str}.\n"
+                f"Step 2: Show the generated taxonomy to the user and ask if it looks correct.\n"
+                f"Step 3: {dry_note}"
+            )
+        else:
+            msg = (
+                "Help me organize my vault. "
+                "Ask me to describe how I want to group my notes, "
+                "then call `silica_generate_taxonomy` with my answer, "
+                "show me the taxonomy, and run `silica_run_organizer` with dry_run=true to preview."
+            )
+        return msg
+
     return None
 
 

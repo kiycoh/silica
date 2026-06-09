@@ -35,6 +35,18 @@ COMMANDS: tuple[Command, ...] = (
         examples=("/inject Inbox/note.md --target=Concepts/AI",),
         home_pin=True,
     ),
+    Command(
+        name="/organize",
+        group="workflow",
+        usage='"<intent>" [--scope=FOLDER] [--file=taxonomy.yaml] [--apply]',
+        summary="classify and reorganize vault notes according to a taxonomy",
+        examples=(
+            '/organize "put AI notes in Concepts/AI, cooking notes in Life"',
+            "/organize --file=_silica/taxonomy.yaml --apply",
+            "/organize --scope=Inbox",
+        ),
+        home_pin=True,
+    ),
     # Direct — immediate, no LLM round-trip
     Command(
         name="/status",

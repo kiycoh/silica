@@ -176,9 +176,16 @@ class ValidateOpsArgs(BaseModel):
     payload_paths: list[str] = Field(default_factory=list, description="Paths to the original payload JSON files")
     target_dir: str = Field(default="", description="Target folder in the vault")
     hub: str = Field(default="", description="Hub note name")
+    future_ref_whitelist: list[str] = Field(default_factory=list, description="Optional whitelist of future reference note names")
 
 @tool(ValidateOpsArgs, cls="composed")
-def silica_validate_ops(ops_json_path: str, payload_paths: list[str] | None = None, target_dir: str = "", hub: str = "") -> dict[str, Any]:
+def silica_validate_ops(
+    ops_json_path: str,
+    payload_paths: list[str] | None = None,
+    target_dir: str = "",
+    hub: str = "",
+    future_ref_whitelist: list[str] | None = None,
+) -> dict[str, Any]:
     """Pre-write gate: checks structural validity and applies rejection threshold (10%).
 
     C4: After validation, OVERWRITES ops_json_path with the coerced + deduped
@@ -206,7 +213,12 @@ def silica_validate_ops(ops_json_path: str, payload_paths: list[str] | None = No
 
     cleared_parents: list[dict] = []
     validated_ops, rejected_ops = validate_operations(
-        ops, payloads, target_dir, hub=hub, cleared_parents_out=cleared_parents
+        ops,
+        payloads,
+        target_dir,
+        hub=hub,
+        cleared_parents_out=cleared_parents,
+        future_ref_whitelist=future_ref_whitelist,
     )
 
     total = len(ops)
@@ -1199,4 +1211,192 @@ def silica_enrich_batch(note_paths: list[str], cancel_token: Any = None) -> dict
     res["notes"] = len(items)
     return res
 
+
+# ---------------------------------------------------------------------------
+# silica_generate_taxonomy
+# ---------------------------------------------------------------------------
+
+class GenerateTaxonomyArgs(BaseModel):
+    user_intent: str = Field(description="Natural-language description of how the user wants to organize their vault")
+    scope: str = Field(
+        default="",
+        description="Vault-relative subfolder to restrict taxonomy generation and scanning to",
+    )
+    save_path: str = Field(
+        default="",
+        description=(
+            "Vault-relative path where the taxonomy YAML should be written. "
+            "Defaults to '_silica/taxonomy.yaml' inside the configured vault."
+        ),
+    )
+
+@tool(GenerateTaxonomyArgs, cls="composed")
+def silica_generate_taxonomy(user_intent: str, scope: str = "", save_path: str = "") -> dict[str, Any]:
+    """Generate a taxonomy YAML from a natural-language organization intent.
+
+    Uses the LLM to translate the user's description into a structured
+    FolderRule list, validates it with Pydantic, and writes it to disk
+    at _silica/taxonomy.yaml (or the specified path).
+
+    Returns the validated taxonomy dict and the path it was written to.
+    The user should review the output before running silica_run_organizer.
+    """
+    from pathlib import Path
+
+    from silica.agent.llm import call_llm
+    from silica.config import CONFIG
+    from silica.kernel.sanitize import parse_json
+    from silica.kernel.taxonomy import (
+        TAXONOMY_GENERATION_PROMPT,
+        Taxonomy,
+        default_taxonomy_path,
+    )
+    from silica.driver import DRIVER
+
+    note_titles: list[str] = []
+    try:
+        refs = DRIVER.list_files(scope or "")
+        note_titles = [
+            Path(ref.path or ref.name).stem
+            for ref in refs
+            if (ref.path or ref.name).endswith(".md")
+        ]
+    except Exception as exc:
+        import logging
+        logging.getLogger(__name__).warning("silica_generate_taxonomy: failed to list files for scope %s: %s", scope, exc)
+
+    # Format the titles clearly (e.g., max 400 titles to prevent prompt bloat)
+    titles_summary = "\n".join(f"- {t}" for t in note_titles[:400])
+    if len(note_titles) > 400:
+        titles_summary += f"\n- ... and {len(note_titles) - 400} more notes."
+
+    system_prompt = "You are an expert knowledge manager. Follow the user instructions exactly."
+    user_msg = TAXONOMY_GENERATION_PROMPT.format(
+        user_intent=user_intent,
+        scope=scope or "Entire Vault",
+        note_titles=titles_summary or "(No notes found in scope)",
+    )
+
+    try:
+        response = call_llm(
+            model=CONFIG.model,
+            messages=[
+                {"role": "system", "content": system_prompt},
+                {"role": "user", "content": user_msg},
+            ],
+            tools=None,
+        )
+        raw = (response.text or "").strip()
+    except Exception as exc:
+        return {"error": f"LLM call failed: {exc}"}
+
+    # The LLM is instructed to return raw YAML; try yaml.safe_load first,
+    # then fall back to parse_json for robustness.
+    import yaml as _yaml
+
+    taxonomy_dict: dict | None = None
+    try:
+        taxonomy_dict = _yaml.safe_load(raw)
+    except Exception:
+        pass
+
+    if not isinstance(taxonomy_dict, dict):
+        parsed, _ = parse_json(raw, strict=False)
+        if isinstance(parsed, dict):
+            taxonomy_dict = parsed
+        else:
+            return {"error": f"LLM returned unparseable output: {raw[:300]}"}
+
+    try:
+        taxonomy = Taxonomy.from_dict(taxonomy_dict)
+    except Exception as exc:
+        return {"error": f"Taxonomy validation failed: {exc}", "raw": taxonomy_dict}
+
+    if save_path:
+        dest = Path(save_path)
+        if not dest.is_absolute() and CONFIG.vault_path:
+            dest = Path(CONFIG.vault_path) / dest
+    else:
+        dest = default_taxonomy_path()
+    try:
+        taxonomy.to_yaml(dest)
+    except Exception as exc:
+        return {"error": f"Failed to write taxonomy to {dest}: {exc}"}
+
+    return {
+        "success": True,
+        "taxonomy_path": str(dest),
+        "taxonomy": taxonomy.model_dump(),
+        "rules_count": len(taxonomy.rules),
+    }
+
+
+# ---------------------------------------------------------------------------
+# silica_run_organizer
+# ---------------------------------------------------------------------------
+
+class RunOrganizerArgs(BaseModel):
+    taxonomy_path: str = Field(
+        default="",
+        description="Path to the taxonomy YAML file. Defaults to '_silica/taxonomy.yaml' in the vault.",
+    )
+    scope: str = Field(
+        default="",
+        description="Vault-relative subfolder to restrict organization to (empty = vault-wide)",
+    )
+    dry_run: bool = Field(
+        default=True,
+        description=(
+            "If True (default), compute and return the move plan without executing any moves. "
+            "Set to False to actually move notes."
+        ),
+    )
+    llm_arbiter: bool = Field(
+        default=True,
+        description="If True, use the LLM to classify borderline notes (ambiguous band)",
+    )
+
+@tool(RunOrganizerArgs, cls="composed")
+def silica_run_organizer(
+    taxonomy_path: str = "",
+    scope: str = "",
+    dry_run: bool = True,
+    llm_arbiter: bool = True,
+) -> dict[str, Any]:
+    """Execute the /organize pipeline — classify vault notes and move them to taxonomy folders.
+
+    Phase 1 (dry_run=True): returns a plan showing which notes would move and where.
+    Phase 2 (dry_run=False): executes the moves via DRIVER.move() (graph-safe, wikilinks updated).
+
+    The pipeline runs the OrganizeFSM which:
+      1. SCAN   — lists notes in scope
+      2. CLASSIFY — L1 co-occurrence matching (zero LLM cost)
+      3. ARBITRATE — LLM arbiter for borderline notes (optional)
+      4. PLAN   — generates MoveOps for notes that need relocation
+      5. SNAPSHOT — captures pre-move state for rollback
+      6. MOVE   — executes DRIVER.move() calls
+      7. LINT   — graph regression gate
+      8. CLEANUP — ledger commit
+
+    Rollback is automatic if the LINT gate fails.
+    """
+    from silica.kernel.taxonomy import load_taxonomy
+    from silica.router.organize_fsm import OrganizerFSM
+
+    taxonomy = load_taxonomy(taxonomy_path or None)
+    if not taxonomy.rules:
+        return {
+            "error": (
+                "Taxonomy has no rules. Run silica_generate_taxonomy first or "
+                "create _silica/taxonomy.yaml manually."
+            )
+        }
+
+    fsm = OrganizerFSM(
+        taxonomy=taxonomy,
+        scope=scope,
+        dry_run=dry_run,
+        llm_arbiter=llm_arbiter,
+    )
+    return fsm.run()
 
