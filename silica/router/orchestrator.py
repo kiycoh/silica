@@ -523,10 +523,14 @@ class InjectorFSM(BaseFSM[InjectorState]):
             canonical = self._source_canonical_for(inbox_file)
             self._file_canonicals.append(canonical)
             try:
-                content_bytes = open(inbox_file, "rb").read()
+                content_bytes = DRIVER.read_note(inbox_file).content.encode("utf-8")
                 content_hash = hashlib.sha256(content_bytes).hexdigest()
-            except OSError:
-                content_hash = ""
+            except Exception:
+                try:
+                    content_bytes = open(inbox_file, "rb").read()
+                    content_hash = hashlib.sha256(content_bytes).hexdigest()
+                except OSError:
+                    content_hash = ""
             self._file_content_hashes.append(content_hash)
             if not ledger.is_committed(canonical, content_hash=content_hash):
                 all_committed = False
@@ -1579,8 +1583,16 @@ class InjectorFSM(BaseFSM[InjectorState]):
                     "Continuing with %d committed op(s).",
                     len(result.failed), len(result.committed),
                 )
+                # Mark failed/deferred ops as skip so subsequent phases (lint, autolink, backlink, cleanup, etc.) skip them
+                failed_paths = {r.path for r in result.failed}
+                for op in ops:
+                    if op.touched_ref() in failed_paths:
+                        op.op = OpType.skip
+                        op.reason = "Deferred because write/lint failed"
+                from silica.kernel.ops_io import dump_ops
+                dump_ops(self._chunk_ctx["ops_path"], ops)
             except Exception as _de:
-                logger.debug("WRITE: deferred save failed (non-fatal): %s", _de)
+                logger.debug("WRITE: deferred save/update failed (non-fatal): %s", _de)
             self.context["has_partial_failure"] = True
 
         if not result.committed and result.failed:
@@ -1659,7 +1671,10 @@ class InjectorFSM(BaseFSM[InjectorState]):
         except Exception as _me:
             logger.debug("WRITE: manifest update failed (non-fatal): %s", _me)
 
-        self._progress_note(self._chunk_task_id("write"), "write", "done")
+        if not result.committed and result.failed:
+            pass
+        else:
+            self._progress_note(self._chunk_task_id("write"), "write", "done")
         self._transition_success()
 
     def _handle_hub_update(self) -> None:
@@ -2083,9 +2098,22 @@ class InjectorFSM(BaseFSM[InjectorState]):
                 from silica.kernel.graph_diff import check_graph_regression
                 
                 created_paths = self._txn.created_paths if self._txn else []
-                deferred_stems = frozenset(self._chunk_ctx.get("deferred_stems", []))
+                deferred_stems = set(self._chunk_ctx.get("deferred_stems", []))
+                try:
+                    from silica.kernel.templates import slugify
+                    for chunk in getattr(self, "_chunks", []):
+                        for batch in chunk.get("batches", []):
+                            for concept in batch.get("concepts", []):
+                                name = concept.get("name")
+                                if name:
+                                    stem = os.path.splitext(os.path.basename(name))[0].lower()
+                                    deferred_stems.add(stem)
+                                    deferred_stems.add(slugify(stem))
+                except Exception as _ce:
+                    logger.debug("Failed to extract run concept stems for graph check: %s", _ce)
+
                 success, errors = check_graph_regression(
-                    self._pre_graph, post_graph, created_paths, deferred_stems
+                    self._pre_graph, post_graph, created_paths, frozenset(deferred_stems)
                 )
 
                 if CONFIG.verbose:

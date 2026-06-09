@@ -771,8 +771,8 @@ def test_fsm_create_settle_timeout_rollback(
 
     # Check that cleanup is not called (inbox not moved — chunk had a failure)
     mock_cleanup.assert_not_called()
-    # Check that restore (rollback) was called
-    mock_restore.assert_called_once()
+    # Check that restore (rollback) was not called globally since the failed note write was self-atomic
+    mock_restore.assert_not_called()
 
 
 # ---------------------------------------------------------------------------
