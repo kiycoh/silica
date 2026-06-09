@@ -10,6 +10,17 @@ _MD_EXT_WIKILINK_RE = re.compile(
 # Characters illegal in filesystem filenames
 _ILLEGAL_FILENAME_CHARS_RE = re.compile(r'[/\\:*?"<>|]')
 
+# Degenerate run: 5+ consecutive identical characters (same char, not newline)
+_DEGENERATE_RUN_RE = re.compile(r'([^\n])\1{4,}')
+
+
+def strip_degenerate_runs(text: str) -> str:
+    """Collapse runs of 5+ identical characters to a single instance.
+
+    Lines are preserved; only in-line repetitions are collapsed.
+    """
+    return _DEGENERATE_RUN_RE.sub(r'\1', text)
+
 
 def _strip_md_ext(text: str) -> str:
     """Remove .md extension from inside wikilinks: [[Note.md]] → [[Note]]."""
@@ -48,6 +59,7 @@ def normalize_ops(ops: list) -> list:
                         if i % 2 == 0:  # prose part
                             parts[i] = parts[i].replace("\\n", "\n")
                     val = "```".join(parts)
+                val = strip_degenerate_runs(val)
                 op[field] = _strip_md_ext(val)
 
         if isinstance(op.get("related"), list):

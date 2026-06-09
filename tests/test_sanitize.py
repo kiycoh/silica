@@ -130,3 +130,52 @@ def test_slugify_normalizes_whitespace():
     assert slugify("Performance\r\nElement  negli   agenti") == "Performance Element negli agenti"
 
 
+# ---------------------------------------------------------------------------
+# strip_degenerate_runs — collapses 5+ identical consecutive chars to 1
+# ---------------------------------------------------------------------------
+
+from silica.kernel.sanitize import strip_degenerate_runs
+
+
+def test_strip_degenerate_slash_run():
+    assert strip_degenerate_runs("/////") == "/"
+
+
+def test_strip_degenerate_alpha_run():
+    assert strip_degenerate_runs("aaaaa") == "a"
+
+
+def test_strip_mixed_text_with_run():
+    assert strip_degenerate_runs("some ///// text") == "some / text"
+
+
+def test_strip_does_not_remove_line():
+    result = strip_degenerate_runs("/////")
+    assert result != ""
+
+
+def test_strip_run_of_exactly_4_unchanged():
+    assert strip_degenerate_runs("////") == "////"
+
+
+def test_strip_multiple_different_runs():
+    assert strip_degenerate_runs("aaaaa bbbbb") == "a b"
+
+
+def test_strip_run_in_middle_of_word():
+    assert strip_degenerate_runs("hellooooo world") == "hello world"
+
+
+def test_strip_newline_not_collapsed():
+    text = "line1\nline2"
+    assert strip_degenerate_runs(text) == "line1\nline2"
+
+
+def test_strip_degenerate_normalized_in_ops():
+    ops = [{"op": "write", "path": "Dir/A.md", "heading": "A",
+            "source_basename": "inbox.md",
+            "content": "Noise: /////\nReal content here."}]
+    result = normalize_ops(ops)
+    assert "/" in result[0]["content"]
+    assert "/////" not in result[0]["content"]
+
