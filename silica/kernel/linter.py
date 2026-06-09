@@ -1,10 +1,30 @@
 import argparse
+import datetime
 import json
 import os
 import sys
 from pathlib import Path
 from silica.kernel import ofm, frontmatter
 from silica.driver import DRIVER
+
+
+def check_expires_at(data: dict) -> list[str]:
+    """Return warnings for `expires_at` frontmatter violations.
+
+    Returns a list with at most one warning string:
+    - empty list if the field is absent, None, or a future/today date
+    - one-element list if the date is past or unparseable
+    """
+    raw = (data or {}).get("expires_at")
+    if raw is None:
+        return []
+    try:
+        expires = datetime.date.fromisoformat(str(raw))
+    except (ValueError, TypeError):
+        return [f"expires_at '{raw}' is invalid (expected ISO 8601 date)"]
+    if expires < datetime.date.today():
+        return [f"Note expired on {raw}"]
+    return []
 
 
 def validate_note(path, hub, op_type=None):
@@ -22,6 +42,8 @@ def validate_note(path, hub, op_type=None):
         data, _, _ = frontmatter.split(content)
         if data is None:
             errors.append("Missing or invalid frontmatter")
+        else:
+            warnings += check_expires_at(data)
 
         # hub wikilink: required for spoke write/patch; NOT for hub-index/reformat/merge overwrites
         if op_type != "overwrite" and hub and not ofm.has_wikilink(content, hub):
