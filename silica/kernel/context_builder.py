@@ -48,3 +48,33 @@ def build_context(
         parts.append(f"## Checkpoint: {checkpoint_id}\n" + payload_str)
 
     return "\n\n".join(parts)
+
+
+def build_segmented_context(
+    checkpoint_id: str,
+    payload: dict | str | None = None,
+    ledger_digest: str | None = None,
+    substrate: str | None = None,
+    static_profile: str | None = None,
+) -> str:
+    """Return a formatted context string with static profile separated from dynamic run context.
+
+    Static profile (vault config, style preferences) is emitted first under
+    `## Vault Profile`, followed by the dynamic sections produced by build_context.
+    When no static_profile is supplied the output is identical to build_context.
+    """
+    parts: list[str] = []
+
+    if static_profile and static_profile.strip():
+        parts.append("## Vault Profile\n" + static_profile.strip())
+
+    dynamic = build_context(
+        checkpoint_id=checkpoint_id,
+        payload=payload,
+        ledger_digest=ledger_digest,
+        substrate=substrate,
+    )
+    if dynamic:
+        parts.append(dynamic)
+
+    return "\n\n".join(parts)
