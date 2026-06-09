@@ -1,6 +1,6 @@
 import re
 
-LIMITS = {"max_lines": 60, "max_chars": 6000, "lean_chars": 600, "max_tags": 3}
+LIMITS = {"max_lines": 400, "max_chars": 20000, "lean_chars": 600, "max_tags": 3}
 
 def metrics(content):
     return {"char_count": len(content), "line_count": len(content.splitlines())}

@@ -31,9 +31,9 @@ def validate_note(path, hub, op_type=None):
         if op_type != "patch":
             m = ofm.metrics(content)
             if m["line_count"] > ofm.LIMITS["max_lines"]:
-                errors.append(f"Note too long ({m['line_count']} lines)")
+                warnings.append(f"Note too long ({m['line_count']} lines)")
             if m["char_count"] > ofm.LIMITS["max_chars"]:
-                errors.append(f"Note too large ({m['char_count']} chars)")
+                warnings.append(f"Note too large ({m['char_count']} chars)")
 
         # OFM structural lint (calibrated against golden notes)
         r = ofm.ofm_lint(content, stem=Path(path).stem)

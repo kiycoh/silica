@@ -29,9 +29,9 @@ def test_refiner_full_flow(mock_call_llm, tmp_path):
     silica.driver._driver = None  # Reset lazy singleton
     
     # Note 1: Monolith (over limits and >= 2 H2 headings)
-    # limit is max_chars=6000 or max_lines=60. We can write 65 lines to trigger max_lines.
+    # limit is max_chars=20000 or max_lines=400. We can write 405 lines to trigger max_lines.
     monolith_content = "---\nAI: false\n---\n# Monolith\n\n" + "\n".join(f"## Section {i}\nContent {i}" for i in range(3))
-    monolith_lines = monolith_content + "\n" * 60
+    monolith_lines = monolith_content + "\n" * 400
     monolith_path = folder / "monolith.md"
     monolith_path.write_text(monolith_lines, encoding="utf-8")
     
