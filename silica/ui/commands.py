@@ -86,6 +86,12 @@ COMMANDS: tuple[Command, ...] = (
         summary="undo the last patch on a note",
     ),
     Command(
+        name="/review",
+        group="direct",
+        usage="[--flush=HASH]",
+        summary="inspect the async review queue (deferred ops)",
+    ),
+    Command(
         name="/revert",
         group="direct",
         usage="[run-id]",

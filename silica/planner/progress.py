@@ -427,6 +427,14 @@ class ProgressLedger:
                 parts.append(sep)
                 parts.append(section)
 
+        try:
+            from silica.kernel.deferred import get_deferred_store
+            depth = get_deferred_store().queue_depth()
+            if depth > 0:
+                parts.append(f"REVIEW QUEUE: {depth} bundle(s) pending — run /review to inspect")
+        except Exception:
+            pass
+
         return "\n".join(parts)
 
     # ------------------------------------------------------------------

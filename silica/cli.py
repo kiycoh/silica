@@ -257,6 +257,32 @@ def _handle_direct_shortcut(raw_input: str, messages: list[dict]) -> bool:
         )
         return True
 
+    if cmd == "/review":
+        from silica.kernel.deferred import get_deferred_store
+        store = get_deferred_store()
+        flush_hash = next((p[len("--flush="):] for p in parts[1:] if p.startswith("--flush=")), None)
+        if flush_hash:
+            removed = store.remove(flush_hash)
+            if removed:
+                CONSOLE.print(f"  Flushed bundle [bold]{flush_hash[:12]}[/] from review queue.")
+            else:
+                CONSOLE.print(f"  [yellow]No bundle with hash {flush_hash[:12]} found.[/]")
+            return True
+        items = store.list_all()
+        if not items:
+            CONSOLE.print("  Review queue is empty.")
+        else:
+            CONSOLE.print(f"  [bold]Review queue — {len(items)} bundle(s):[/]")
+            for item in items:
+                import datetime as _dt
+                ts = _dt.datetime.fromtimestamp(item["timestamp"]).strftime("%Y-%m-%d %H:%M")
+                CONSOLE.print(
+                    f"  · [bold]{item['content_hash'][:12]}[/]  {item['source_path']}  "
+                    f"({item['rejected_count']} op(s))  {ts}"
+                )
+            CONSOLE.print("  Use [bold]/review --flush=<hash>[/] to discard a bundle.")
+        return True
+
     if cmd == "/dedup":
         positional = [p for p in parts[1:] if not p.startswith("-")]
         folder = " ".join(positional)

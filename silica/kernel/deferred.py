@@ -82,6 +82,10 @@ class DeferredStore:
                 pass
         return result
 
+    def queue_depth(self) -> int:
+        """Return the number of pending bundles in the deferred store."""
+        return sum(1 for _ in self._dir.glob("*.json"))
+
     def remove(self, content_hash: str) -> bool:
         p = self._bundle_path(content_hash)
         if p.exists():
