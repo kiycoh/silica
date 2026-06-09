@@ -20,10 +20,12 @@ def validate_operations(
     target_dir: str,
     hub: str | None = None,
     cleared_parents_out: list | None = None,
+    future_ref_whitelist: list[str] | None = None,
 ) -> tuple[list[Op], list[Rejection]]:
     """Validates operations against payloads and target_dir using DRIVER."""
     from silica.kernel.ops_io import parse_ops
-    ops = parse_ops(ops)
+    ops_parsed = parse_ops(ops)
+    ops = [op.model_copy(deep=True) for op in ops_parsed]
 
     # Sanitize filesystem-illegal characters (e.g. ':') from path filenames.
     # When a write op carries a `title` field, rebuild the path from title so
@@ -90,25 +92,7 @@ def validate_operations(
                 _existence_cache[norm] = False
         return _existence_cache[norm]
 
-    # 1. Coerce write <-> patch and enforce default hub fallback
-    if not hub and target_dir:
-        hub = os.path.basename(target_dir.rstrip("/\\"))
-
-    for op in ops:
-        if op.op in (OpType.write, OpType.patch, OpType.overwrite) and hub:
-            op.hub = hub
-            
-        if op.op == OpType.write and op.path and path_exists(op.path):
-            op.op = OpType.patch
-        elif op.op == OpType.patch and op.path and not path_exists(op.path):
-            if has_payloads:
-                expected_path = expected_collision_paths.get((op.source_basename, op.heading))
-                if not expected_path or os.path.abspath(op.path) == os.path.abspath(expected_path):
-                    op.op = OpType.write
-            else:
-                op.op = OpType.write
-
-    # 2. Global deduplication
+    # 1. Global deduplication (executed before coercion to ensure correct richest op type determination)
     path_groups: dict[str, list[Op]] = {}
     for op in ops:
         path = op.touched_ref()
@@ -132,6 +116,26 @@ def validate_operations(
                     richest_op.op = OpType.overwrite
                 else:
                     richest_op.op = OpType.write
+
+    # 2. Coerce write <-> patch and enforce default hub fallback
+    if not hub and target_dir:
+        hub = os.path.basename(target_dir.rstrip("/\\"))
+
+    for op in ops:
+        if op.op == OpType.skip:
+            continue
+        if op.op in (OpType.write, OpType.patch, OpType.overwrite) and hub:
+            op.hub = hub
+            
+        if op.op == OpType.write and op.path and path_exists(op.path):
+            op.op = OpType.patch
+        elif op.op == OpType.patch and op.path and not path_exists(op.path):
+            if has_payloads:
+                expected_path = expected_collision_paths.get((op.source_basename, op.heading))
+                if not expected_path or os.path.abspath(op.path) == os.path.abspath(expected_path):
+                    op.op = OpType.write
+            else:
+                op.op = OpType.write
 
     # Pre-compute note stems created in this run so parent validation can allow
     # forward references to notes being written in the same batch.
@@ -315,9 +319,8 @@ def validate_operations(
     if hub_ops:
         validated_ops = hub_ops + validated_ops
 
-    # 4. Prospective link check: patch/overwrite ops must not introduce wikilinks that
-    # cannot be resolved either in the current vault or within this batch's write ops.
-    # write ops are exempt — their outbound links may be intentional forward references.
+    # 4. Prospective link check: write/patch/overwrite ops must not introduce wikilinks that
+    # cannot be resolved either in the current vault, within this batch's write ops, or the future_ref_whitelist.
     batch_created_names: set[str] = {
         os.path.splitext(os.path.basename(op.path))[0].lower()
         for op in validated_ops
@@ -325,6 +328,7 @@ def validate_operations(
     }
 
     _link_resolve_cache: dict[str, bool] = {}
+    whitelist_lower = {w.lower() for w in (future_ref_whitelist or [])}
 
     def _link_resolves(target: str) -> bool:
         stem = target.removesuffix(".md")
@@ -332,6 +336,9 @@ def validate_operations(
         if key in _link_resolve_cache:
             return _link_resolve_cache[key]
         if key in batch_created_names:
+            _link_resolve_cache[key] = True
+            return True
+        if key in whitelist_lower:
             _link_resolve_cache[key] = True
             return True
         if "/" in stem:
@@ -344,7 +351,7 @@ def validate_operations(
 
     prospective_valid: list[Op] = []
     for op in validated_ops:
-        if op.op not in (OpType.patch, OpType.overwrite):
+        if op.op not in (OpType.write, OpType.patch, OpType.overwrite):
             prospective_valid.append(op)
             continue
         text = op.snippet or op.content or ""

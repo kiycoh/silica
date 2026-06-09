@@ -42,8 +42,8 @@ class _ReadSideEffect:
 # Test: write ops are exempt from the link check
 # ---------------------------------------------------------------------------
 
-def test_write_op_forward_reference_exempt():
-    """write ops with unresolvable links must not be rejected."""
+def test_write_op_forward_reference_non_exempt_rejected():
+    """write ops with unresolvable links must be rejected now."""
     ops = [
         {
             "op": "write",
@@ -58,8 +58,9 @@ def test_write_op_forward_reference_exempt():
          patch("silica.kernel.validate.DRIVER.search_names", return_value=[]):
         validated, rejected = validate_operations(ops, [], "Concepts")
 
-    assert not rejected
-    assert any(op["heading"] == "Neural Network" for op in validated)
+    assert len(rejected) == 1
+    assert "Vanishing Gradient" in rejected[0].reason
+    assert not any(op.get("heading") == "Neural Network" for op in validated)
 
 
 # ---------------------------------------------------------------------------
@@ -222,3 +223,72 @@ def test_patch_op_link_to_auto_hub_resolves():
     # hub auto-op is a write whose path includes "Concepts.md",
     # so "concepts" enters batch_created_names and resolves the link.
     assert not rejected
+
+
+# ---------------------------------------------------------------------------
+# Test: write ops with links in future_ref_whitelist are accepted
+# ---------------------------------------------------------------------------
+
+def test_write_op_whitelist_link_accepted():
+    """write ops with links in future_ref_whitelist must be accepted."""
+    ops = [
+        {
+            "op": "write",
+            "path": "Concepts/Neural Network.md",
+            "heading": "Neural Network",
+            "source_basename": "inbox.md",
+            "snippet": "See [[Vanishing Gradient]] and [[Backpropagation]].",
+        }
+    ]
+    read_mock = _ReadSideEffect(known=set())
+    with patch("silica.kernel.validate.DRIVER.read_note", side_effect=read_mock), \
+         patch("silica.kernel.validate.DRIVER.search_names", return_value=[]):
+        validated, rejected = validate_operations(
+            ops, [], "Concepts", future_ref_whitelist=["Vanishing Gradient", "Backpropagation"]
+        )
+
+    assert not rejected
+    assert any(op.get("heading") == "Neural Network" for op in validated)
+
+
+# ---------------------------------------------------------------------------
+# Test: deduplication happens before coercion, avoiding incorrect reject
+# ---------------------------------------------------------------------------
+
+def test_deduplication_before_coercion_prevents_unnecessary_rejection():
+    """Duplicate ops for an existing file should not fail validation after coercion.
+    
+    If two write/patch ops to the same existing path are processed:
+    1. Deduplication skips the redundant op, keeping the richest one as 'write' (if write/overwrite was in group).
+    2. Coercion converts it to 'patch' because the path exists.
+    3. It is validated successfully rather than rejected as a duplicate write error.
+    """
+    ops = [
+        {
+            "op": "write",
+            "path": "Concepts/Existing Note.md",
+            "heading": "Existing Note",
+            "source_basename": "inbox.md",
+            "snippet": "A short snippet.",
+        },
+        {
+            "op": "write",
+            "path": "Concepts/Existing Note.md",
+            "heading": "Existing Note",
+            "source_basename": "inbox.md",
+            "snippet": "A much longer and richer snippet with more content.",
+        }
+    ]
+    # Path exists in vault
+    read_mock = _ReadSideEffect(known={"Existing Note"})
+    
+    with patch("silica.kernel.validate.DRIVER.read_note", side_effect=read_mock), \
+         patch("silica.kernel.validate.DRIVER.search_names", return_value=[]):
+        validated, rejected = validate_operations(ops, [], "Concepts")
+
+    assert not rejected
+    # The list contains the auto-created hub note operation first, then the deduplicated note operation.
+    assert len(validated) == 2
+    assert validated[0].heading == "Concepts"
+    assert validated[1].op == "patch"
+    assert "much longer" in validated[1].snippet
