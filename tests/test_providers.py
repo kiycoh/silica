@@ -238,3 +238,72 @@ def test_streaming_path_usage_empty_when_no_usage_chunk():
 
     resp = provider.call_llm([{"role": "user", "content": "hi"}])
     assert resp.usage == {}, f"Expected empty usage dict, got: {resp.usage}"
+
+
+@patch("openai.OpenAI")
+@patch("time.sleep", return_value=None)
+def test_call_llm_retries_on_rate_limit(mock_sleep, mock_openai_cls):
+    import openai
+    # Setup mock client
+    mock_client = MagicMock()
+    mock_openai_cls.return_value = mock_client
+
+    # First attempt raises RateLimitError, second attempt succeeds.
+    mock_chunk = MagicMock()
+    mock_chunk.choices = [MagicMock()]
+    mock_chunk.choices[0].delta.content = "Success after rate limit retry"
+    mock_chunk.choices[0].delta.tool_calls = None
+    mock_chunk.choices[0].finish_reason = "stop"
+    mock_chunk.usage = None
+    success_stream = [mock_chunk]
+
+    # Set up side effect to fail once with 429 then succeed
+    mock_client.chat.completions.create.side_effect = [
+        openai.RateLimitError(
+            message="Rate limit hit",
+            response=MagicMock(status_code=429),
+            body={}
+        ),
+        success_stream,
+    ]
+
+    provider = OpenAICompatibleProvider(base_url="http://dummy", api_key="dummy", model="test-model")
+    response = provider.call_llm(
+        messages=[{"role": "user", "content": "hi"}]
+    )
+
+    assert mock_client.chat.completions.create.call_count == 2
+    assert response.text == "Success after rate limit retry"
+    assert mock_sleep.call_count == 1
+
+
+@patch("openai.OpenAI")
+@patch("time.sleep", return_value=None)
+def test_call_llm_structured_rate_limit_propagates_without_fallback(mock_sleep, mock_openai_cls):
+    import openai
+    # Setup mock client
+    mock_client = MagicMock()
+    mock_openai_cls.return_value = mock_client
+
+    # structured parse raises RateLimitError on all attempts
+    mock_client.beta.chat.completions.parse.side_effect = openai.RateLimitError(
+        message="Rate limit hit in parse",
+        response=MagicMock(status_code=429),
+        body={}
+    )
+
+    provider = OpenAICompatibleProvider(base_url="http://dummy", api_key="dummy", model="test-model")
+    
+    # We expect the RateLimitError to propagate out of call_llm because it is raised on all 3 attempts
+    import pytest
+    with pytest.raises(openai.RateLimitError):
+        provider.call_llm(
+            messages=[{"role": "user", "content": "hi"}],
+            response_schema=SchemaModel
+        )
+
+    # Verifies it tried 3 times (with sleep) and never called chat.completions.create (non-structured fallback)
+    assert mock_client.beta.chat.completions.parse.call_count == 3
+    assert mock_client.chat.completions.create.call_count == 0
+    assert mock_sleep.call_count == 2
+

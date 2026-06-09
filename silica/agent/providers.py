@@ -110,11 +110,27 @@ class OpenAICompatibleProvider:
                         reasoning=getattr(message, "reasoning_content", None),
                         finish_reason=finish_reason,
                     )
-                except (openai.APITimeoutError, openai.APIConnectionError):
-                    # Re-raise transient/network errors to be retried in the outer loop
+                except (openai.APITimeoutError, openai.APIConnectionError, openai.RateLimitError):
+                    # Re-raise transient/network/rate-limit errors to be retried in the outer loop
                     raise
                 except Exception as e:
-                    logger.warning("Constrained decoding failed, falling back to non-structured: %s", e)
+                    logger.warning("Constrained decoding failed: %s", e)
+                    # If the error is due to truncation/parsing failure, try to salvage the partial content
+                    completion = getattr(e, "completion", None)
+                    if completion and completion.choices:
+                        msg = completion.choices[0].message
+                        content_str = msg.content or ""
+                        finish_reason = getattr(completion.choices[0], "finish_reason", None)
+                        if content_str:
+                            logger.info("Extracted partial response text (len=%d) from parsing error.", len(content_str))
+                            return LLMResponse(
+                                text=content_str,
+                                tool_calls=[],
+                                assistant_message={"role": "assistant", "content": content_str},
+                                usage=dict(completion.usage) if getattr(completion, "usage", None) else {},
+                                finish_reason=finish_reason or "length",
+                            )
+                    logger.warning("No partial content salvageable, falling back to non-structured")
 
             # Non-structured path: stream so the httpx read-timeout acts as a
             # per-chunk inactivity watchdog rather than a total-body deadline.
@@ -190,9 +206,9 @@ class OpenAICompatibleProvider:
         for attempt in range(1, max_attempts + 1):
             try:
                 return _execute_call()
-            except (openai.APITimeoutError, openai.APIConnectionError) as e:
+            except (openai.APITimeoutError, openai.APIConnectionError, openai.RateLimitError) as e:
                 logger.warning(
-                    "LLM API network error or timeout (attempt %d/%d): %s",
+                    "LLM API network error, timeout, or rate limit (attempt %d/%d): %s",
                     attempt,
                     max_attempts,
                     e
