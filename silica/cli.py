@@ -91,6 +91,54 @@ def _setup_logging(debug: bool = False) -> None:
     logging.getLogger("markdown_it").setLevel(logging.WARNING)
 
 
+def resolve_repo_mode_vault(cwd, vault_env: str, docs_exists_ok: bool):
+    """Pure resolver for repo-mode vault selection (testable, no I/O prompts).
+
+    Returns the vault path string to adopt, or None to leave config unchanged.
+    - Explicit SILICA_VAULT (vault_env truthy) always wins → None.
+    - Not inside a git repo → None.
+    - docs/ exists → return it.
+    - docs/ missing → return it only if docs_exists_ok (caller already
+      confirmed creation); otherwise None.
+    """
+    from pathlib import Path
+    from silica.kernel import gitstate
+
+    if vault_env.strip():
+        return None
+    root = gitstate.find_repo_root(cwd)
+    if root is None:
+        return None
+    docs = Path(root) / "docs"
+    if docs.is_dir():
+        return str(docs)
+    if docs_exists_ok:
+        return str(docs)
+    return None
+
+
+def _activate_repo_mode() -> None:
+    """Side-effecting wrapper: prompts to create docs/ if missing, then sets
+    CONFIG.vault_path. Called once at CLI startup."""
+    from pathlib import Path
+    from silica.kernel import gitstate
+
+    if CONFIG.vault_path.strip():
+        return  # explicit vault wins
+    root = gitstate.find_repo_root(Path.cwd())
+    if root is None:
+        return
+    docs = Path(root) / "docs"
+    if not docs.is_dir():
+        CONSOLE.print(f"  Git repo detected at [bold]{root}[/] but no [bold]docs/[/] folder.")
+        answer = input("  Create docs/ and manage it as the Silica vault? [y/N] ").strip().lower()
+        if answer not in ("y", "yes"):
+            return
+        docs.mkdir(parents=True, exist_ok=True)
+    CONFIG.vault_path = str(docs)
+    CONSOLE.print(f"  Repo mode: vault = [bold]{docs}[/]")
+
+
 def _handle_direct_shortcut(raw_input: str, messages: list[dict]) -> bool:
     """Execute read-only commands directly without an LLM round-trip.
 
@@ -571,6 +619,7 @@ def _handle_slash_command(cmd: str, messages: list[dict]) -> bool:
 
 def main():
     """Entry point for the `silica` CLI command."""
+    _activate_repo_mode()
     debug_mode = "--verbose" in sys.argv or "-v" in sys.argv or CONFIG.debug_logging
     _setup_logging(debug=debug_mode)
 
@@ -578,6 +627,7 @@ def main():
 
     session = build_session()
     messages: list[dict] = [{"role": "system", "content": SYSTEM_PROMPT}]
+    _update_context_tokens(messages)
 
     from silica.agent.progress import make_progress_callback
     callback = make_progress_callback()
@@ -586,7 +636,7 @@ def main():
         try:
             user_input = session.prompt(prompt_text(), bottom_toolbar=bottom_toolbar)
         except (EOFError, KeyboardInterrupt):
-            print("\n  Goodbye.")
+            print("\n  (_  _)。˚")
             break
 
         user_input = user_input.strip()
@@ -610,12 +660,13 @@ def main():
                 print_home()
                 messages.clear()
                 messages.append({"role": "system", "content": SYSTEM_PROMPT})
+                _update_context_tokens(messages)
                 session = build_session()
                 continue
 
             should_continue = _handle_slash_command(user_input, messages)
             if not should_continue:
-                print("  Goodbye.")
+                print("  (_  _)。˚")
                 break
             continue
 
