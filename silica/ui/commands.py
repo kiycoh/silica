@@ -117,6 +117,18 @@ COMMANDS: tuple[Command, ...] = (
         summary="enrich note semantics (sub-agent)",
         home_pin=True,
     ),
+    Command(
+        name="/stale",
+        group="direct",
+        usage="",
+        summary="list notes whose documents: paths have new commits since code_ref",
+    ),
+    Command(
+        name="/document",
+        group="direct",
+        usage="<repo-relative-source-path>",
+        summary="stage a sanitized doc stub from a source file into Inbox/",
+    ),
     # System
     Command(
         name="/help",
