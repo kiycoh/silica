@@ -435,6 +435,17 @@ class ProgressLedger:
         except Exception:
             pass
 
+        try:
+            from silica.config import CONFIG
+            from silica.kernel import codedocs
+            if CONFIG.vault_path:
+                from pathlib import Path
+                n = codedocs.stale_count(Path(CONFIG.vault_path))
+                if n > 0:
+                    parts.append(f"STALE DOCS: {n} note/path pair(s) — run /stale to inspect")
+        except Exception:
+            pass
+
         return "\n".join(parts)
 
     # ------------------------------------------------------------------

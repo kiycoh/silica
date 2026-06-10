@@ -267,6 +267,46 @@ def _handle_direct_shortcut(raw_input: str, messages: list[dict]) -> bool:
             CONSOLE.print(result)
         return True
 
+    if cmd == "/stale":
+        from pathlib import Path
+        from silica.kernel import codedocs
+        vault = CONFIG.vault_path
+        if not vault:
+            CONSOLE.print("  No vault configured; /stale needs a docs/ vault in a git repo.")
+            return True
+        stale = codedocs.stale_docs(Path(vault))
+        if not stale:
+            CONSOLE.print("  No stale docs — every documents: note matches its code_ref.")
+            return True
+        CONSOLE.print(f"  [bold]Stale docs — {len(stale)} note/path pair(s):[/]")
+        for sd in stale:
+            n = len(sd.intervening)
+            CONSOLE.print(
+                f"  · [bold]{sd.note_path}[/] documents [bold]{sd.code_path}[/] "
+                f"— {n} new commit(s) since {sd.recorded_ref[:8]}"
+            )
+            for c in sd.intervening[:3]:
+                CONSOLE.print(f"      {c.sha[:8]}  {c.subject}")
+        CONSOLE.print("  Run [bold]/document <path>[/] to regenerate, or edit and re-badge.")
+        return True
+
+    if cmd == "/document":
+        positional = [p for p in parts[1:] if not p.startswith("-")]
+        target = " ".join(positional)
+        if not target:
+            CONSOLE.print("  Usage: /document <repo-relative-source-path>")
+            return True
+        result = TOOLS["silica_document"].run(path=target)
+        try:
+            parsed = json.loads(result)
+            if parsed.get("status") == "ok":
+                CONSOLE.print(f"  Staged [bold]{parsed['note_path']}[/] (code_ref {parsed['code_ref'][:8]}). Refine via the inbox.")
+            else:
+                CONSOLE.print(f"  [yellow]{parsed.get('message', 'failed')}[/]")
+        except Exception:
+            CONSOLE.print(result)
+        return True
+
     if cmd == "/undo":
         from silica.driver import DRIVER
         from silica.kernel.checkpoints import get_checkpoint_store
