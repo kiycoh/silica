@@ -27,6 +27,24 @@ def check_expires_at(data: dict) -> list[str]:
     return []
 
 
+def check_documents_paths(data: dict, repo_root=None) -> list[str]:
+    """Return a warning per `documents:` path that no longer exists on disk.
+
+    Non-blocking — same class as a broken wikilink. `repo_root` is the base the
+    repo-relative paths resolve against; when None, no check is performed.
+    """
+    raw = (data or {}).get("documents")
+    if not raw or repo_root is None:
+        return []
+    paths = [raw] if isinstance(raw, str) else list(raw)
+    root = Path(repo_root)
+    warnings = []
+    for rel in paths:
+        if not (root / str(rel)).exists():
+            warnings.append(f"documents: path '{rel}' no longer exists")
+    return warnings
+
+
 def validate_note(path, hub, op_type=None):
     """Validate a single note.
 
@@ -44,6 +62,8 @@ def validate_note(path, hub, op_type=None):
             errors.append("Missing or invalid frontmatter")
         else:
             warnings += check_expires_at(data)
+            from silica.kernel import gitstate
+            warnings += check_documents_paths(data, repo_root=gitstate.find_repo_root(path))
 
         # hub wikilink: required for spoke write/patch; NOT for hub-index/reformat/merge overwrites
         if op_type != "overwrite" and hub and not ofm.has_wikilink(content, hub):
