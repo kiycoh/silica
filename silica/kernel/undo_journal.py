@@ -62,8 +62,11 @@ class UndoJournalStore:
 
     def last_active_run(self) -> str | None:
         row = self._conn.execute(
-            "SELECT run_id FROM runs WHERE reverted_at IS NULL "
-            "ORDER BY started_at DESC, rowid DESC LIMIT 1"
+            """
+            SELECT r.run_id FROM runs r WHERE r.reverted_at IS NULL
+            AND EXISTS (SELECT 1 FROM inverses i WHERE i.run_id = r.run_id)
+            ORDER BY r.started_at DESC, r.rowid DESC LIMIT 1
+            """
         ).fetchone()
         return row["run_id"] if row else None
 

@@ -29,7 +29,9 @@ def test_start_record_and_lifo_read(tmp_path):
 def test_last_active_run_ignores_reverted(tmp_path):
     store = UndoJournalStore(tmp_path / "j.db")
     r1 = store.start_run("one")
+    store.record(r1, _inv("a.md"), post_hash="ha")
     r2 = store.start_run("two")
+    store.record(r2, _inv("b.md"), post_hash="hb")
     assert store.last_active_run() == r2
     store.mark_reverted(r2)
     assert store.last_active_run() == r1

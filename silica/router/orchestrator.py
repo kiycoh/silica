@@ -512,9 +512,6 @@ class InjectorFSM(BaseFSM[InjectorState]):
         from silica.kernel.ledger import get_ledger
         ledger = get_ledger()
 
-        from silica.kernel.undo_journal import get_undo_journal
-        self._undo_run_id = get_undo_journal().start_run(source=self.inbox_file)
-
         # Compute per-file canonicals and content hashes; track committed status
         self._file_canonicals = []
         self._file_content_hashes = []
@@ -548,6 +545,10 @@ class InjectorFSM(BaseFSM[InjectorState]):
         if all_committed:
             self.context["final_status"] = "already_ingested"
             return self.context
+
+        # Only open a journal run when the pipeline will actually execute writes.
+        from silica.kernel.undo_journal import get_undo_journal
+        self._undo_run_id = get_undo_journal().start_run(source=self.inbox_file)
 
         self.state = InjectorState.RECON
         return self._run_loop()
