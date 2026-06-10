@@ -85,3 +85,38 @@ def test_commits_since_lists_intervening(tmp_path):
     commits = gitstate.commits_since(tmp_path, base, "src/m.py")
     subjects = [c.subject for c in commits]
     assert subjects == ["c3", "c2"]  # newest-first, base excluded
+
+
+def test_commit_docs_commits_only_vault_paths(tmp_path):
+    _init_repo(tmp_path)
+    _commit(tmp_path, "README.md", "r\n", "seed")  # give repo a HEAD
+    vault = tmp_path / "docs"
+    vault.mkdir()
+    (vault / "note.md").write_text("hello\n", encoding="utf-8")
+    sha = gitstate.commit_docs(
+        tmp_path, vault, [vault / "note.md"], "silica: write 1 note"
+    )
+    assert sha == gitstate.head_ref(tmp_path)
+    log = subprocess.run(
+        ["git", "log", "-1", "--format=%s"], cwd=tmp_path,
+        capture_output=True, text=True,
+    )
+    assert log.stdout.strip() == "silica: write 1 note"
+
+
+def test_commit_docs_refuses_path_outside_vault(tmp_path):
+    _init_repo(tmp_path)
+    _commit(tmp_path, "README.md", "r\n", "seed")
+    vault = tmp_path / "docs"
+    vault.mkdir()
+    outside = tmp_path / "src.py"
+    outside.write_text("danger\n", encoding="utf-8")
+    sha = gitstate.commit_docs(tmp_path, vault, [outside], "should refuse")
+    assert sha is None  # path outside vault → no commit
+
+
+def test_commit_docs_none_without_git(tmp_path):
+    vault = tmp_path / "docs"
+    vault.mkdir()
+    (vault / "n.md").write_text("x", encoding="utf-8")
+    assert gitstate.commit_docs(tmp_path, vault, [vault / "n.md"], "m") is None
