@@ -98,6 +98,52 @@ def _refresh_cooccurrence_for_ops(
     return len(notes)
 
 
+def _commit_docs_for_ops(
+    ops: list,
+    committed_paths: set,
+    *,
+    vault: str,
+    git_commit: str,
+) -> str | None:
+    """Commit touched vault paths for write/patch ops to git.
+
+    Git safety net behind SILICA_GIT_COMMIT=auto: an additive snapshot on top
+    of the undo journal (ADR-0002), never a replacement. Best-effort: no git
+    binary, vault outside a repo, nothing staged, or any subprocess failure all
+    yield None and never raise. Commits ONLY vault paths — the out-of-vault
+    guard lives inside gitstate.commit_docs, so a bug cannot commit source files.
+    """
+    from silica.kernel import gitstate
+    from pathlib import Path as _Path
+
+    if git_commit != "auto" or not vault:
+        return None
+
+    seen: set[str] = set()
+    abs_paths: list[_Path] = []
+    for op in ops:
+        path = op.touched_ref()
+        if op.op not in (OpType.write, OpType.patch) or not path:
+            continue
+        if path not in committed_paths or path in seen:
+            continue
+        seen.add(path)
+        abs_paths.append(_Path(vault) / path)
+
+    if not abs_paths:
+        return None
+
+    try:
+        root = gitstate.find_repo_root(vault)
+        if root is None:
+            return None
+        n = len(abs_paths)
+        return gitstate.commit_docs(root, vault, abs_paths, f"silica: write {n} note(s)")
+    except Exception as _ge:
+        logger.debug("WRITE: git auto-commit skipped (%s)", _ge)
+        return None
+
+
 def _inject_graph_ctx(chunk: dict, vault_ctx: dict) -> dict:
     """Return a shallow-enriched copy of chunk with graph_context added to concepts.
 
@@ -1671,6 +1717,15 @@ class InjectorFSM(BaseFSM[InjectorState]):
             )
         except Exception as _me:
             logger.debug("WRITE: manifest update failed (non-fatal): %s", _me)
+
+        # Git safety net (SILICA_GIT_COMMIT=auto): snapshot the write batch.
+        try:
+            _commit_docs_for_ops(
+                ops, committed_paths,
+                vault=CONFIG.vault_path, git_commit=CONFIG.git_commit,
+            )
+        except Exception as _ge:
+            logger.debug("WRITE: git auto-commit skipped (%s)", _ge)
 
         if not result.committed and result.failed:
             pass
