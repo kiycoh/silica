@@ -75,3 +75,28 @@ def test_stale_docs_unknown_ref_not_stale(tmp_path):
     vault.mkdir()
     _write_note(vault, "m.md", ["src/m.py"], None)  # no code_ref
     assert codedocs.stale_docs(vault, repo_root=tmp_path) == []
+
+
+def test_rebadge_updates_code_ref(tmp_path):
+    _init_repo(tmp_path)
+    ref0 = _commit(tmp_path, "src/m.py", "v1\n", "c1")
+    vault = tmp_path / "docs"
+    vault.mkdir()
+    _write_note(vault, "m.md", ["src/m.py"], ref0)
+    new_ref = _commit(tmp_path, "src/m.py", "v2\n", "c2")
+
+    returned = codedocs.rebadge(vault, "m.md", repo_root=tmp_path)
+    assert returned == new_ref
+
+    from silica.kernel import frontmatter
+    data, _, _ = frontmatter.split((vault / "m.md").read_text(encoding="utf-8"))
+    assert data["code_ref"] == new_ref
+    # after rebadge the note is no longer stale
+    assert codedocs.stale_docs(vault, repo_root=tmp_path) == []
+
+
+def test_stale_count_zero_without_git(tmp_path):
+    vault = tmp_path / "docs"
+    vault.mkdir()
+    (vault / "m.md").write_text("---\ndocuments:\n  - x.py\ncode_ref: abc\n---\n\nb\n", encoding="utf-8")
+    assert codedocs.stale_count(vault) == 0  # not a repo → soft zero
