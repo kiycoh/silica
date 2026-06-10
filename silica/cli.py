@@ -98,8 +98,8 @@ def resolve_repo_mode_vault(cwd, vault_env: str, docs_exists_ok: bool):
     Returns the vault path string to adopt, or None to leave config unchanged.
     - Explicit SILICA_VAULT (vault_env truthy) always wins → None.
     - Not inside a git repo → None.
-    - docs/ exists → return it.
-    - docs/ missing → return it only if docs_exists_ok (caller already
+    - docs/silica/ exists → return it.
+    - docs/silica/ missing → return it only if docs_exists_ok (caller already
       confirmed creation); otherwise None.
     """
     from pathlib import Path
@@ -110,17 +110,17 @@ def resolve_repo_mode_vault(cwd, vault_env: str, docs_exists_ok: bool):
     root = gitstate.find_repo_root(cwd)
     if root is None:
         return None
-    docs = Path(root) / "docs"
-    if docs.is_dir():
-        return str(docs)
+    vault_dir = Path(root) / "docs" / "silica"
+    if vault_dir.is_dir():
+        return str(vault_dir)
     if docs_exists_ok:
-        return str(docs)
+        return str(vault_dir)
     return None
 
 
 def _activate_repo_mode() -> None:
-    """Side-effecting wrapper: prompts to create docs/ if missing, then sets
-    CONFIG.vault_path. Called once at CLI startup."""
+    """Side-effecting wrapper: prompts to create docs/silica/ if missing, then
+    sets CONFIG.vault_path. Called once at CLI startup."""
     from pathlib import Path
     from silica.kernel import gitstate
 
@@ -129,15 +129,15 @@ def _activate_repo_mode() -> None:
     root = gitstate.find_repo_root(Path.cwd())
     if root is None:
         return
-    docs = Path(root) / "docs"
-    if not docs.is_dir():
-        CONSOLE.print(f"  Git repo detected at [bold]{root}[/] but no [bold]docs/[/] folder.")
-        answer = input("  Create docs/ and manage it as the Silica vault? [y/N] ").strip().lower()
+    vault_dir = Path(root) / "docs" / "silica"
+    if not vault_dir.is_dir():
+        CONSOLE.print(f"  Git repo detected at [bold]{root}[/] but no [bold]docs/silica/[/] folder.")
+        answer = input("  Create docs/silica/ and manage it as the Silica vault? [y/N] ").strip().lower()
         if answer not in ("y", "yes"):
             return
-        docs.mkdir(parents=True, exist_ok=True)
-    CONFIG.vault_path = str(docs)
-    CONSOLE.print(f"  Repo mode: vault = [bold]{docs}[/]")
+        vault_dir.mkdir(parents=True, exist_ok=True)
+    CONFIG.vault_path = str(vault_dir)
+    CONSOLE.print(f"  Repo mode: vault = [bold]{vault_dir}[/]")
 
 
 def _handle_direct_shortcut(raw_input: str, messages: list[dict]) -> bool:
