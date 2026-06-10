@@ -1,0 +1,8 @@
+# silica/domains/codebase.yaml — Domain Pack for documenting a code repository.
+# Overlay over injector.yaml (overrides recipe KEYS only; gates + per-phase
+# params). See ADR-0005. Codebase docs are conservative: reject less content
+# silently, prefer smaller batches for dense source.
+gates:
+  rejection_rate_max: 0.05
+phases:
+  - { id: payload, partition_if_over: 4 }
