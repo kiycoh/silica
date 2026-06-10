@@ -24,6 +24,7 @@ def test_cli_clear_command():
          patch("silica.cli.CONSOLE") as mock_console, \
          patch("silica.cli.print_home") as mock_home, \
          patch("silica.cli._setup_logging"), \
+         patch("silica.cli._update_context_tokens") as mock_update, \
          patch("sys.argv", ["silica"]):
 
         main()
@@ -32,5 +33,6 @@ def test_cli_clear_command():
         assert mock_home.call_count == 2  # Initial + after clear
         assert mock_console.clear.call_count == 1
         assert mock_build_session.call_count == 2
+        assert mock_update.call_count == 2  # Startup + after clear
         mock_session_1.prompt.assert_called_once()
         mock_session_2.prompt.assert_called_once()
