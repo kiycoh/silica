@@ -236,6 +236,14 @@ class SilicaConfig:
         default_factory=lambda: os.getenv("SILICA_DOMAIN") or None
     )
 
+    # Git commit safety net for docs/ writes. "off" (default) → never commit;
+    # "auto" → after each write batch, commit the touched docs/ paths with a
+    # structured message. Additive to the undo journal (ADR-0002), never a
+    # replacement. Only takes effect when the vault sits inside a git repo.
+    git_commit: Literal["off", "auto"] = field(
+        default_factory=lambda: os.getenv("SILICA_GIT_COMMIT", "off")  # type: ignore
+    )
+
     @property
     def verbose(self) -> bool:
         return self.debug_logging
