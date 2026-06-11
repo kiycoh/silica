@@ -1,25 +1,23 @@
-"""silica_delegate — fan a list of worker tasks out to parallel workers.
+"""silica_delegate — fan a list of worker tasks out through the capability seam.
 
-Built on delegate() (ThreadPoolExecutor). delegate() hard-stops at >10 tasks, so
-this tool chunks internally into waves of <=10; the real concurrency ceiling is
-the global worker semaphore inside run_worker, not the pool size. Returns
-aggregated results in submission order plus a status summary.
+Each task becomes a WorkItem (kind = profile name) dispatched by
+``run_subagent_batch``: the same registry, dispatch, and consumer loop used for
+every other background behaviour. Concurrency is bounded by the pool size (cap
+10, the historical fan-out limit) plus the global worker semaphore inside
+run_worker. Returns aggregated results in submission order plus a status
+summary.
 """
 from __future__ import annotations
-
-from typing import Any
 
 from pydantic import BaseModel, Field
 
 from silica.tools import tool
-from silica.config import CONFIG
-from silica.agent.delegate import delegate
-from silica.workers.profile import WorkerTask, WorkerResult
-from silica.workers.runtime import run_worker
-import silica.workers.profiles_builtin  # noqa: F401  (registers built-in profiles)
+from silica.planner.workqueue import WorkItem
+from silica.agent.subagent import run_subagent_batch
+import silica.capabilities  # noqa: F401  (registers capabilities incl. worker profiles)
 
 
-_WAVE = 10  # delegate() hard cap
+_MAX_WORKERS = 10  # historical delegate() fan-out cap
 
 
 class DelegateArgs(BaseModel):
@@ -27,40 +25,35 @@ class DelegateArgs(BaseModel):
     tasks: list[dict] = Field(
         description="List of {goal: str, inputs: dict} task specs for the workers"
     )
-    max_workers: int = Field(default=7, description="Parallel workers per wave (cap 10)")
-
-
-def _result_to_dict(r: WorkerResult) -> dict:
-    return {"status": r.status, "output": r.output, "detail": r.detail}
+    max_workers: int = Field(default=7, description="Parallel workers (cap 10)")
 
 
 @tool(DelegateArgs, cls="composed")
 def silica_delegate(profile: str, tasks: list[dict], max_workers: int = 7) -> dict:
     """Fan a list of worker tasks out to parallel workers; return aggregated results.
 
-    Each task is {goal, inputs}. Tasks beyond 10 are processed in successive waves
-    (delegate() caps a single fan-out at 10). Concurrency is bounded globally by
-    the worker semaphore. Returns {"results": [...], "summary": {status: count}}.
+    Each task is {goal, inputs}. Dispatch goes through the CAPABILITIES seam
+    (kind = profile), so an unknown profile yields status='skipped' per task.
+    Returns {"results": [...], "summary": {status: count}}.
     """
     if not tasks:
         return {"results": [], "summary": {}}
 
-    def run_one(spec: dict) -> dict:
-        task = WorkerTask(
-            profile=profile,
-            goal=spec.get("goal", ""),
-            inputs=spec.get("inputs", {}) or {},
+    items = [
+        WorkItem(
+            kind=profile,
+            target_path="",
+            context={
+                "goal": spec.get("goal", ""),
+                "inputs": spec.get("inputs", {}) or {},
+            },
+            reason="silica_delegate",
         )
-        return _result_to_dict(run_worker(task, config=CONFIG))
+        for spec in tasks
+    ]
+    batch = run_subagent_batch(items, max_workers=min(max_workers, _MAX_WORKERS))
 
-    results: list[dict] = []
-    for start in range(0, len(tasks), _WAVE):
-        wave = tasks[start : start + _WAVE]
-        results.extend(delegate(wave, run_one, max_workers=min(max_workers, _WAVE)))
-
-    summary: dict[str, int] = {}
-    for r in results:
-        s = r.get("status", "ok")
-        summary[s] = summary.get(s, 0) + 1
-
-    return {"results": results, "summary": summary}
+    # Keep the historical return shape: per-task dicts without the (empty)
+    # target field, in submission order.
+    results = [{k: v for k, v in r.items() if k != "target"} for r in batch["results"]]
+    return {"results": results, "summary": batch["summary"]}
