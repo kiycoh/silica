@@ -159,6 +159,9 @@ CLAUDE.md
 /.claude
 /memory
 
+# Vault data (personal)
+_silica/
+
 # DB
 ruvector.db
 agentdb.rvf

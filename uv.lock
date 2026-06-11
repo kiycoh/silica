@@ -1950,6 +1950,7 @@ dependencies = [
     { name = "pyyaml" },
     { name = "rich" },
     { name = "snowballstemmer" },
+    { name = "stop-words" },
 ]
 
 [package.optional-dependencies]
@@ -1975,6 +1976,7 @@ requires-dist = [
     { name = "pyyaml", specifier = ">=6.0" },
     { name = "rich" },
     { name = "snowballstemmer" },
+    { name = "stop-words", specifier = ">=2025.11.4" },
 ]
 provides-extras = ["dev"]
 
@@ -1994,6 +1996,15 @@ source = { registry = "https://pypi.org/simple" }
 sdist = { url = "https://files.pythonhosted.org/packages/43/f8/0a71edf031f03c40db17503cb8ca78a69a171254e568e7db241b0ab57ea1/snowballstemmer-3.1.1.tar.gz", hash = "sha256:e07bbc54a0d798fe6010a12398422e62a8bfbba95c394fd0956ef58cb4d3e260", size = 123314, upload-time = "2026-06-03T00:56:40.194Z" }
 wheels = [
     { url = "https://files.pythonhosted.org/packages/4c/07/2ebca9b11fb9be7340a818d8d6f63feaebb146be2c4afbd6061701d6df6e/snowballstemmer-3.1.1-py3-none-any.whl", hash = "sha256:7e207fa178741da09cdee59d3ecec3827ad5f92b1fc5c9ff3755b639f71f5752", size = 104164, upload-time = "2026-06-03T00:56:38.614Z" },
+]
+
+[[package]]
+name = "stop-words"
+version = "2025.11.4"
+source = { registry = "https://pypi.org/simple" }
+sdist = { url = "https://files.pythonhosted.org/packages/b7/cb/27ee3d3e0b7b1169269e83331c075b2dd3c4bcc1a005821174c32a273dc4/stop_words-2025.11.4.tar.gz", hash = "sha256:0459072b54b11e43a6fb4c5b05bda87d2accfc4f14c1697974f3739af0f7b43d", size = 68622, upload-time = "2025-11-03T21:07:42.359Z" }
+wheels = [
+    { url = "https://files.pythonhosted.org/packages/fc/f5/992d668d21590ed39c6a9d1c62220e9b4b086a165e15fcb7580764cc7ceb/stop_words-2025.11.4-py3-none-any.whl", hash = "sha256:b3fc0722e42b722a9350aad59a8ba5850085a5b45a4ba9de390b4f5c4b86df25", size = 59496, upload-time = "2025-11-03T21:07:41.14Z" },
 ]
 
 [[package]]

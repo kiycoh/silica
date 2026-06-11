@@ -23,6 +23,7 @@ dependencies = [
   "openai",
   "numpy>=2.4.6",
   "snowballstemmer",
+  "stop-words>=2025.11.4",
 ]
 
 [project.optional-dependencies]
