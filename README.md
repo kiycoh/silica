@@ -198,7 +198,7 @@ Run the ingestion pipeline from inside the REPL:
 | :--- | :--- | :--- |
 | `/report` | `[folder] [--top-k=N] [--embeddings]` | Structural audit of the vault → steering loop |
 | `/inject` | `<file...> --target=DIR [--hub=H]` | Import a note into the vault via the Injector FSM |
-| `/organize` | `"<intent>" [--scope=FOLDER] [--file=taxonomy.yaml] [--apply]` | Classify and reorganize vault notes according to a taxonomy |
+| `/organize` | `"<intent>" [--scope=FOLDER] [--file=taxonomy.yaml] [--merge] [--move-uncategorized] [--apply]` | Classify and reorganize vault notes according to a taxonomy |
 
 **Direct** — immediate, no LLM round-trip:
 

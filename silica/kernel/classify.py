@@ -66,6 +66,28 @@ def _note_title(note_path: str) -> str:
     return os.path.splitext(os.path.basename(note_path))[0]
 
 
+def _read_body(note_path: str) -> str | None:
+    """Read a note's body (frontmatter stripped) via the driver; None on failure."""
+    try:
+        from silica.driver import DRIVER
+        from silica.kernel import frontmatter
+        nc = DRIVER.read_note(note_path)
+        _data, _fm, body = frontmatter.split(nc.content)
+        return body
+    except Exception:
+        return None
+
+
+def _stems_from_body(body: str, lang: str) -> dict[str, int]:
+    """Tokenize a note body into {stem: count} (same pipeline as the cooccur index)."""
+    from silica.kernel.cooccurrence import tokenize
+    counts: dict[str, int] = {}
+    for sentence in tokenize(body, lang=lang):
+        for stem, _surface in sentence:
+            counts[stem] = counts.get(stem, 0) + 1
+    return counts
+
+
 def _extract_year(val: Any) -> int | None:
     """Robustly extract a 4-digit year from a value."""
     if not val:
@@ -304,6 +326,7 @@ def classify_notes(
     tau_low: float = _DEFAULT_TAU_LOW,
     lang: str | None = None,
     props_map: dict[str, dict] | None = None,
+    move_uncategorized: bool = False,
 ) -> list[Classification]:
     """Classify notes against taxonomy rules.
 
@@ -317,6 +340,9 @@ def classify_notes(
         tau_low:       notes with score < tau_low go straight to uncategorized.
         lang:          stemmer language; defaults to CooccurStore.lang or "english".
         props_map:     optional map of note_path -> properties dict for testing.
+        move_uncategorized: if False (default), notes that match no rule stay
+                       where they are (needs_move=False) instead of being
+                       collected into taxonomy.uncategorized.
 
     Returns:
         One Classification per note_path (same order).
@@ -330,7 +356,7 @@ def classify_notes(
                 target_folder=taxonomy.uncategorized,
                 confidence=0.0,
                 evidence="uncategorized",
-                needs_move=_current_folder(p) != taxonomy.uncategorized,
+                needs_move=move_uncategorized and _current_folder(p) != taxonomy.uncategorized,
                 title=_note_title(p),
             )
             for p in note_paths
@@ -364,6 +390,14 @@ def classify_notes(
             if not concept_stems:
                 # Try without subpath prefix
                 concept_stems = cooccur_store.note_nodes(title)
+
+        # Fallback: note absent from the index (or no index at all) — tokenize
+        # the body on the fly so classification never depends on index freshness.
+        cached_body: str | None = None
+        if not concept_stems:
+            cached_body = _read_body(note_path)
+            if cached_body:
+                concept_stems = _stems_from_body(cached_body, effective_lang)
 
         # Retrieve note properties
         props = {}
@@ -400,7 +434,7 @@ def classify_notes(
                 target_folder=taxonomy.uncategorized,
                 confidence=best_score,
                 evidence="uncategorized",
-                needs_move=current_folder != taxonomy.uncategorized,
+                needs_move=move_uncategorized and current_folder != taxonomy.uncategorized,
                 title=title,
             ))
         else:
@@ -417,16 +451,10 @@ def classify_notes(
             )
             ambiguous_indices.append(len(results))
             results.append(placeholder)
-            # Collect snippet for LLM context: read first 300 chars of note body
-            snippet = ""
-            try:
-                from silica.driver import DRIVER
-                nc = DRIVER.read_note(note_path)
-                from silica.kernel import frontmatter
-                _data, _fm, body = frontmatter.split(nc.content)
-                snippet = body[:300]
-            except Exception:
-                pass
+            # Collect snippet for LLM context: first 300 chars of note body
+            if cached_body is None:
+                cached_body = _read_body(note_path)
+            snippet = (cached_body or "")[:300]
             ambiguous.append((note_path, snippet, taxonomy.rules))
 
     # --- L2 pass (LLM arbiter) ---
@@ -446,7 +474,10 @@ def classify_notes(
                 target_folder=chosen_folder,
                 confidence=1.0,
                 evidence="llm",
-                needs_move=current != chosen_folder,
+                needs_move=(
+                    current != chosen_folder
+                    and (move_uncategorized or chosen_folder != taxonomy.uncategorized)
+                ),
                 title=c.title,
                 rule_themes=c.rule_themes,
             )

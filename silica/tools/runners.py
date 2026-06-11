@@ -311,14 +311,27 @@ class GenerateTaxonomyArgs(BaseModel):
             "Defaults to '_silica/taxonomy.yaml' inside the configured vault."
         ),
     )
+    merge: bool = Field(
+        default=False,
+        description=(
+            "If True, feed the existing taxonomy to the LLM as standing rules and "
+            "update it incrementally instead of regenerating it from scratch."
+        ),
+    )
 
 @tool(GenerateTaxonomyArgs, cls="composed")
-def silica_generate_taxonomy(user_intent: str, scope: str = "", save_path: str = "") -> dict[str, Any]:
+def silica_generate_taxonomy(
+    user_intent: str, scope: str = "", save_path: str = "", merge: bool = False
+) -> dict[str, Any]:
     """Generate a taxonomy YAML from a natural-language organization intent.
 
     Uses the LLM to translate the user's description into a structured
     FolderRule list, validates it with Pydantic, and writes it to disk
     at _silica/taxonomy.yaml (or the specified path).
+
+    With merge=True the existing taxonomy (if any) is treated as standing
+    directives: the LLM preserves its rules and only adds/updates what the
+    new intent requires.
 
     Returns the validated taxonomy dict and the path it was written to.
     The user should review the output before running silica_run_organizer.
@@ -330,10 +343,19 @@ def silica_generate_taxonomy(user_intent: str, scope: str = "", save_path: str =
     from silica.kernel.sanitize import parse_json
     from silica.kernel.taxonomy import (
         TAXONOMY_GENERATION_PROMPT,
+        TAXONOMY_MERGE_BLOCK,
         Taxonomy,
         default_taxonomy_path,
     )
     from silica.driver import DRIVER
+
+    # Resolve the destination first — merge mode reads the current file from there.
+    if save_path:
+        dest = Path(save_path)
+        if not dest.is_absolute() and CONFIG.vault_path:
+            dest = Path(CONFIG.vault_path) / dest
+    else:
+        dest = default_taxonomy_path()
 
     note_titles: list[str] = []
     try:
@@ -358,6 +380,23 @@ def silica_generate_taxonomy(user_intent: str, scope: str = "", save_path: str =
         scope=scope or "Entire Vault",
         note_titles=titles_summary or "(No notes found in scope)",
     )
+
+    if merge and dest.exists():
+        try:
+            existing = Taxonomy.from_yaml(dest)
+        except Exception as exc:
+            import logging
+            logging.getLogger(__name__).warning(
+                "silica_generate_taxonomy: cannot parse existing taxonomy at %s (%s) — generating from scratch",
+                dest, exc,
+            )
+            existing = None
+        if existing is not None and existing.rules:
+            import yaml as _y
+            existing_yaml = _y.dump(
+                existing.model_dump(), allow_unicode=True, sort_keys=False, default_flow_style=False
+            )
+            user_msg += TAXONOMY_MERGE_BLOCK.format(existing_yaml=existing_yaml)
 
     try:
         response = call_llm(
@@ -394,12 +433,6 @@ def silica_generate_taxonomy(user_intent: str, scope: str = "", save_path: str =
     except Exception as exc:
         return {"error": f"Taxonomy validation failed: {exc}", "raw": taxonomy_dict}
 
-    if save_path:
-        dest = Path(save_path)
-        if not dest.is_absolute() and CONFIG.vault_path:
-            dest = Path(CONFIG.vault_path) / dest
-    else:
-        dest = default_taxonomy_path()
     try:
         taxonomy.to_yaml(dest)
     except Exception as exc:
@@ -433,6 +466,13 @@ class RunOrganizerArgs(BaseModel):
         default=True,
         description="If True, use the LLM to classify borderline notes (ambiguous band)",
     )
+    move_uncategorized: bool = Field(
+        default=False,
+        description=(
+            "If True, notes matching no taxonomy rule are moved to the uncategorized "
+            "folder. Default False: unmatched notes stay where they are."
+        ),
+    )
 
 @tool(RunOrganizerArgs, cls="composed")
 def silica_run_organizer(
@@ -440,6 +480,7 @@ def silica_run_organizer(
     scope: str = "",
     dry_run: bool = True,
     llm_arbiter: bool = True,
+    move_uncategorized: bool = False,
 ) -> dict[str, Any]:
     """Execute the /organize pipeline — classify vault notes and move them to taxonomy folders.
 
@@ -475,5 +516,6 @@ def silica_run_organizer(
         scope=scope,
         dry_run=dry_run,
         llm_arbiter=llm_arbiter,
+        move_uncategorized=move_uncategorized,
     )
     return fsm.run()

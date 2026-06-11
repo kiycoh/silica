@@ -208,7 +208,7 @@ Given their natural-language intent and the list of actual note titles present i
 
 Rules for generation:
 1. Each folder must be a valid vault-relative path (use forward slashes, no leading slash).
-2. If the user intent specifies organizing a specific subfolder/input folder (e.g. "organizza la cartella Agenti Autonomi") or a scope is provided, set scope to that folder name (e.g. scope: "Agenti Autonomi") and ensure all rule folders (and uncategorized) are subfolders under that scope (e.g. "Agenti Autonomi/DeepSeek").
+2. If the user intent specifies organizing a specific subfolder/input folder (e.g. "organize the Research Notes folder") or a scope is provided, set scope to that folder name (e.g. scope: "Research Notes") and ensure all rule folders (and uncategorized) are subfolders under that scope (e.g. "Research Notes/DeepSeek").
 3. themes: a list of 3-8 specific semantic labels for that folder.
 4. keywords: a list of 1-5 exact terms that unambiguously signal membership.
 5. metadata_filters: a list of filters if the user intent specifies constraints on metadata (e.g., date, year, tags, etc.). Each filter has:
@@ -220,7 +220,7 @@ Rules for generation:
        - key: "date"
          operator: "year_equals"
          value: 2026
-6. Include an 'uncategorized' fallback folder for notes that match nothing. If scope is set, uncategorized should be inside the scope (e.g. "Agenti Autonomi/Uncategorized").
+6. Include an 'uncategorized' fallback folder for notes that match nothing. If scope is set, uncategorized should be inside the scope (e.g. "Research Notes/Uncategorized").
 7. Keep the list of rules minimal and non-overlapping.
 8. Align the rules and keywords with the actual note titles provided. Create folders, themes, and keywords that cover the diverse topics represented by the notes (e.g., if you see notes about BDI, FIPA-ACL, GAIA, robotics, neural networks, or coordination, create corresponding folders and keywords for them).
 
@@ -251,4 +251,17 @@ Scope: {scope}
 
 Actual note titles in scope:
 {note_titles}
+"""
+
+
+TAXONOMY_MERGE_BLOCK = """\
+
+Existing taxonomy (the user's current standing rules):
+{existing_yaml}
+
+Merge instructions:
+1. Treat the existing rules as standing directives: preserve them unless the new user intent explicitly contradicts or refines them.
+2. Add or modify only what the new intent requires; do not drop, rename, or reword unrelated folders, themes, or keywords.
+3. Keep the existing 'scope' and 'uncategorized' values unless the new intent overrides them.
+4. Return the COMPLETE merged taxonomy (existing rules + changes), not a delta.
 """

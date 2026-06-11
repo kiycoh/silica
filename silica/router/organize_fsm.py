@@ -54,11 +54,13 @@ class OrganizerFSM(BaseFSM[OrganizerState]):
         scope: str = "",
         dry_run: bool = True,
         llm_arbiter: bool = True,
+        move_uncategorized: bool = False,
     ) -> None:
         self.taxonomy = taxonomy
         self.scope = scope
         self.dry_run = dry_run
         self.llm_arbiter = llm_arbiter
+        self.move_uncategorized = move_uncategorized
 
         self.state = OrganizerState.INIT
         self.context: dict[str, Any] = {
@@ -189,6 +191,7 @@ class OrganizerFSM(BaseFSM[OrganizerState]):
             self.taxonomy,
             cooccur_store=cooccur_store,
             llm_arbiter=False,   # L2 handled separately in ARBITRATE
+            move_uncategorized=self.move_uncategorized,
         )
 
         logger.info(
@@ -265,7 +268,10 @@ class OrganizerFSM(BaseFSM[OrganizerState]):
                 target_folder=chosen,
                 confidence=1.0,
                 evidence="llm",
-                needs_move=c.current_folder != chosen,
+                needs_move=(
+                    c.current_folder != chosen
+                    and (self.move_uncategorized or chosen != self.taxonomy.uncategorized)
+                ),
                 title=c.title,
                 rule_themes=c.rule_themes,
             )

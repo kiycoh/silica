@@ -1,0 +1,54 @@
+# Silica taxonomy example
+#
+# Copy this file to <vault>/_silica/taxonomy.yaml and customise it.
+# Silica uses this file when running /organize to assign notes to folders.
+#
+# Schema fields (all optional except `rules`):
+#   version:        int   — schema version, always 1
+#   scope:          str   — restrict classification to this vault subfolder
+#                           (empty string = vault-wide)
+#   uncategorized:  str   — fallback folder for notes that match no rule
+#   rules:          list  — one entry per destination folder (see below)
+#
+# Each rule entry supports:
+#   folder:           str        — vault-relative destination path (forward slashes, no leading slash)
+#   themes:           list[str]  — 3–8 semantic labels for concept-level matching
+#   keywords:         list[str]  — exact terms whose presence in the note title boosts score
+#   description:      str        — human-readable label (used in LLM prompts)
+#   metadata_filters: list       — optional frontmatter constraints, each with:
+#                                    key:      property name (e.g. "date", "tags")
+#                                    operator: "equals" | "contains" | "year_equals" |
+#                                              "year_greater_than" | "year_less_than"
+#                                    value:    value to compare against
+
+version: 1
+scope: ""
+uncategorized: "Uncategorized"
+
+rules:
+  - folder: "Concepts/AI"
+    themes: ["machine learning", "deep learning", "transformers", "neural networks"]
+    keywords: ["LLM", "GPT", "embedding"]
+    description: "AI and machine-learning concepts"
+    metadata_filters: []
+
+  - folder: "Projects"
+    themes: ["project", "initiative", "milestone", "deliverable", "sprint"]
+    keywords: ["project", "roadmap", "deadline"]
+    description: "Active work and ongoing initiatives"
+    metadata_filters: []
+
+  - folder: "Reference"
+    themes: ["reference", "evergreen", "definition", "documentation", "guide"]
+    keywords: ["how-to", "reference", "glossary"]
+    description: "Stable factual material and evergreen notes"
+    metadata_filters: []
+
+  - folder: "Archive/2024"
+    themes: ["document", "record", "note"]
+    keywords: []
+    description: "Notes created in 2024"
+    metadata_filters:
+      - key: "date"
+        operator: "year_equals"
+        value: 2024

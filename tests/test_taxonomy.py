@@ -218,3 +218,78 @@ class TestGenerateTaxonomyTool:
             assert "taxonomy" in res
             assert res["success"] is True
             assert save_file.exists()
+
+    def test_silica_generate_taxonomy_merge_includes_existing(self, tmp_path):
+        from unittest.mock import MagicMock, patch
+        from silica.tools.composed import silica_generate_taxonomy
+
+        save_file = tmp_path / "taxonomy.yaml"
+        Taxonomy(
+            rules=[FolderRule(folder="Aziende/X", themes=["pratiche"], keywords=["acme"])],
+            uncategorized="Misc",
+        ).to_yaml(save_file)
+
+        with patch("silica.agent.llm.call_llm") as mock_call_llm, \
+             patch("silica.driver.DRIVER") as mock_driver:
+            mock_driver.list_files.return_value = []
+
+            mock_response = MagicMock()
+            mock_response.text = textwrap.dedent("""\
+                version: 1
+                uncategorized: "Misc"
+                rules:
+                  - folder: "Aziende/X"
+                    themes: ["pratiche"]
+                    keywords: ["acme"]
+                  - folder: "Commesse/2026"
+                    themes: ["commesse"]
+                    keywords: []
+            """)
+            mock_call_llm.return_value = mock_response
+
+            res = silica_generate_taxonomy(
+                user_intent="organizza per anno di commissione",
+                save_path=str(save_file),
+                merge=True,
+            )
+
+        user_content = mock_call_llm.call_args[1]["messages"][1]["content"]
+        # The existing taxonomy and the merge directives must reach the LLM
+        assert "Merge instructions" in user_content
+        assert "Aziende/X" in user_content
+
+        assert res["success"] is True
+        assert res["rules_count"] == 2
+
+    def test_silica_generate_taxonomy_merge_without_existing_file(self, tmp_path):
+        """merge=True with no existing taxonomy behaves like a plain generation."""
+        from unittest.mock import MagicMock, patch
+        from silica.tools.composed import silica_generate_taxonomy
+
+        save_file = tmp_path / "taxonomy.yaml"  # does not exist yet
+
+        with patch("silica.agent.llm.call_llm") as mock_call_llm, \
+             patch("silica.driver.DRIVER") as mock_driver:
+            mock_driver.list_files.return_value = []
+
+            mock_response = MagicMock()
+            mock_response.text = textwrap.dedent("""\
+                version: 1
+                uncategorized: "Misc"
+                rules:
+                  - folder: "Aziende/X"
+                    themes: ["pratiche"]
+                    keywords: ["acme"]
+            """)
+            mock_call_llm.return_value = mock_response
+
+            res = silica_generate_taxonomy(
+                user_intent="metti le pratiche di Acme in Aziende/X",
+                save_path=str(save_file),
+                merge=True,
+            )
+
+        user_content = mock_call_llm.call_args[1]["messages"][1]["content"]
+        assert "Merge instructions" not in user_content
+        assert res["success"] is True
+        assert save_file.exists()

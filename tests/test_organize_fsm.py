@@ -199,6 +199,69 @@ class TestClassifyNotes:
             )
             assert results[0].target_folder == "Archive/2026"
 
+    def test_uncategorized_stays_put_by_default(self, simple_taxonomy: Taxonomy):
+        """A note matching no rule keeps its place — no move toward uncategorized."""
+        with patch("silica.driver.DRIVER"):
+            results = classify_notes(
+                ["Inbox/random-note.md"],
+                simple_taxonomy,
+                cooccur_store=None,
+                llm_arbiter=False,
+            )
+        c = results[0]
+        assert c.target_folder == "Misc"
+        assert not c.needs_move
+
+    def test_move_uncategorized_opt_in(self, simple_taxonomy: Taxonomy):
+        """With move_uncategorized=True the legacy collect-into-uncategorized behavior returns."""
+        with patch("silica.driver.DRIVER"):
+            results = classify_notes(
+                ["Inbox/random-note.md"],
+                simple_taxonomy,
+                cooccur_store=None,
+                llm_arbiter=False,
+                move_uncategorized=True,
+            )
+        c = results[0]
+        assert c.target_folder == "Misc"
+        assert c.needs_move
+
+    def test_body_fallback_when_index_empty(self, simple_taxonomy: Taxonomy):
+        """A note absent from the cooccur index is classified by tokenizing its body."""
+        mock_driver = MagicMock()
+        mock_driver.read_note.return_value = MagicMock(
+            content=(
+                "Machine learning and deep learning. "
+                "Machine learning models. "
+                "Machine learning everywhere."
+            )
+        )
+        with patch("silica.driver.DRIVER", mock_driver):
+            results = classify_notes(
+                ["untitled-note.md"],
+                simple_taxonomy,
+                cooccur_store=None,    # no index → body tokenization fallback
+                llm_arbiter=False,
+            )
+        c = results[0]
+        assert c.target_folder == "Concepts/AI"
+        assert c.evidence == "cooccur"
+
+    def test_body_fallback_read_failure_degrades_to_uncategorized(self, simple_taxonomy: Taxonomy):
+        """If the body can't be read either, the note degrades to uncategorized in place."""
+        mock_driver = MagicMock()
+        mock_driver.read_note.side_effect = RuntimeError("vault unreachable")
+        with patch("silica.driver.DRIVER", mock_driver):
+            results = classify_notes(
+                ["untitled-note.md"],
+                simple_taxonomy,
+                cooccur_store=None,
+                llm_arbiter=False,
+            )
+        c = results[0]
+        assert c.target_folder == "Misc"
+        assert not c.needs_move
+
     def test_metadata_filter_case_insensitivity(self):
         from silica.kernel.taxonomy import FolderRule, Taxonomy, MetadataFilter
         tax = Taxonomy(
@@ -279,6 +342,39 @@ class TestOrganizerFSMDryRun:
         mock_driver.move.assert_not_called()
         assert "plan_summary" in result
 
+
+    def test_dry_run_uncategorized_stays_put(self, taxonomy: Taxonomy):
+        """Unmatched notes produce no planned moves by default."""
+        from silica.router.organize_fsm import OrganizerFSM
+
+        mock_refs = [MagicMock(path="xyzabc-completely-unrelated.md", name="xyzabc")]
+
+        with patch("silica.router.organize_fsm.DRIVER") as mock_driver, \
+             patch("silica.driver.DRIVER"):
+            mock_driver.list_files.return_value = mock_refs
+
+            fsm = OrganizerFSM(taxonomy=taxonomy, dry_run=True, llm_arbiter=False)
+            result = fsm.run()
+
+        assert result["plan_summary"]["moves_planned"] == 0
+
+    def test_dry_run_move_uncategorized_opt_in(self, taxonomy: Taxonomy):
+        """With move_uncategorized=True the unmatched note is planned into Misc."""
+        from silica.router.organize_fsm import OrganizerFSM
+
+        mock_refs = [MagicMock(path="xyzabc-completely-unrelated.md", name="xyzabc")]
+
+        with patch("silica.router.organize_fsm.DRIVER") as mock_driver, \
+             patch("silica.driver.DRIVER"):
+            mock_driver.list_files.return_value = mock_refs
+
+            fsm = OrganizerFSM(
+                taxonomy=taxonomy, dry_run=True, llm_arbiter=False, move_uncategorized=True
+            )
+            result = fsm.run()
+
+        assert result["plan_summary"]["moves_planned"] == 1
+        assert result["plan_summary"]["plan"][0]["to"] == "Misc/xyzabc-completely-unrelated.md"
 
     def test_fsm_scan_error_transitions_to_error(self, taxonomy: Taxonomy):
         from silica.router.organize_fsm import OrganizerFSM, OrganizerState
