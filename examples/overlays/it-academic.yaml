@@ -1,0 +1,174 @@
+# Italian academic domain overlay.
+# Install by copying to <vault>/_silica/overlay.yaml
+#
+# Contains the complete Italian-academic vocabulary previously hardcoded in
+# silica/kernel/recon.py, including Italian function words, course-metadata
+# structural headings, and Italian-specific noise patterns.
+
+extends_default: true
+
+stopwords:
+  # Italian function words (prepositions, articles, conjunctions, pronouns)
+  - di
+  - da
+  - in
+  - con
+  - su
+  - per
+  - tra
+  - fra
+  - a
+  - e
+  - o
+  - ma
+  - se
+  - anche
+  - come
+  - il
+  - lo
+  - la
+  - i
+  - gli
+  - le
+  - un
+  - uno
+  - una
+  - del
+  - dello
+  - della
+  - dei
+  - degli
+  - delle
+  - al
+  - allo
+  - alla
+  - ai
+  - agli
+  - alle
+  - dal
+  - dallo
+  - dalla
+  - dagli
+  - dalle
+  - nel
+  - nello
+  - nella
+  - nei
+  - negli
+  - nelle
+  - sul
+  - sullo
+  - sulla
+  - sui
+  - sugli
+  - sulle
+  - che
+  - chi
+  - cui
+  - quando
+  - dove
+  - cosa
+  - quale
+  - quali
+  - questo
+  - questa
+  - questi
+  - queste
+  - quello
+  - quella
+  - quelli
+  - quelle
+  - mio
+  - tuo
+  - suo
+  - nostro
+  - vostro
+  - loro
+  - altro
+  # Italian academic structural terms
+  - parte
+  - testo
+  - esame
+  - contenuti
+  - libri
+  - unipa
+  - anno
+  - corso
+  - appunti
+  - lezione
+  - capitolo
+  - studio
+  - domande
+  - risposte
+  - esercizio
+  - esercizi
+  - tema
+  - temi
+  - prof
+  - professore
+  - docente
+  - università
+  - universita
+  - sito
+  - web
+  - link
+  - online
+  - slide
+  - slides
+  - presentazione
+  - pagine
+  - pagina
+  - riferimenti
+  - argomenti
+  - riassunto
+  # Generic concept-name terms with no discriminating power
+  # (Italian equivalents of English structural-academic terms in DEFAULT_OVERLAY)
+  - sistema
+  - sistemi
+  - modello
+  - modelli
+  - metodo
+  - metodi
+  - approccio
+  - approcci
+  - tecnica
+  - tecniche
+  - tipo
+  - tipi
+  - struttura
+  - strutture
+  - concetto
+  - concetti
+  - introduzione
+  - definizione
+  - analisi
+  - descrizione
+  - base
+  - fondamento
+  - fondamenti
+  - principio
+  - principi
+  # Course-metadata structural headings (not content concepts)
+  - didattico
+  - didattica
+  - didattici
+  - didattiche
+  - materiale didattico
+  - materiale di studio
+  - materiale del corso
+  - obiettivi
+  - prerequisiti
+  - modalità
+  - valutazione
+  - calendario
+
+noise_patterns:
+  # Italian structural headings
+  - '^(Capitolo|Lezione|Esercizio)\b[:\s]'
+  - '^(Riassunto|Argomenti|Riferimenti|Obiettivi|Prerequisiti|Calendario)\s*$'
+  - '^Materiale\b'
+  # Continued-slide markers (Italian)
+  - '\((continua|segue)\)\s*$'
+  - '^(continua|segue)\b'
+  # Italian "What is" variant
+  - "^Cos'?\xE8\\b"

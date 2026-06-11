@@ -27,6 +27,17 @@ def _isolate_cooccurrence_index(tmp_path, monkeypatch: pytest.MonkeyPatch) -> No
     monkeypatch.setattr(cooc_mod, "_INDEX_PATH", tmp_path / "cooccurrence_index.json")
 
 
+@pytest.fixture(autouse=True)
+def _reset_overlay_cache() -> None:
+    """Reset the module-level overlay cache before every test.
+
+    Prevents a test that calls get_active_overlay() (or monkeypatches the vault
+    path) from polluting the cached result seen by subsequent tests.
+    """
+    import silica.kernel.overlay as overlay_mod
+    overlay_mod.reset_overlay_cache()
+
+
 @pytest.fixture(scope="session")
 def synthetic_vault() -> Path:
     """Return the path to the synthetic test vault, building it if needed.
