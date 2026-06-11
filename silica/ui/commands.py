@@ -124,6 +124,12 @@ COMMANDS: tuple[Command, ...] = (
         summary="list notes whose documents: paths have new commits since code_ref",
     ),
     Command(
+        name="/plans",
+        group="direct",
+        usage="",
+        summary="list plans/ notes grouped by status: (todo|in-progress|blocked|done)",
+    ),
+    Command(
         name="/document",
         group="direct",
         usage="<repo-relative-source-path>",

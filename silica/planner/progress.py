@@ -446,6 +446,18 @@ class ProgressLedger:
         except Exception:
             pass
 
+        try:
+            from silica.config import CONFIG
+            from silica.kernel import plans
+            if CONFIG.vault_path:
+                from pathlib import Path
+                counts = plans.status_counts(Path(CONFIG.vault_path))
+                if counts:
+                    summary = ", ".join(f"{n} {s}" for s, n in sorted(counts.items()))
+                    parts.append(f"PLANS: {summary} — run /plans to inspect")
+        except Exception:
+            pass
+
         return "\n".join(parts)
 
     # ------------------------------------------------------------------

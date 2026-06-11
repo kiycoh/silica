@@ -45,6 +45,21 @@ def check_documents_paths(data: dict, repo_root=None) -> list[str]:
     return warnings
 
 
+def check_plan_status(data: dict) -> list[str]:
+    """Return a warning if `status:` is present but outside the plan enum.
+
+    Non-blocking — absent status returns []. Enum mirrors plans.VALID_STATUS.
+    """
+    raw = (data or {}).get("status")
+    if raw is None:
+        return []
+    from silica.kernel.plans import VALID_STATUS
+    status = str(raw).strip()
+    if status not in VALID_STATUS:
+        return [f"status '{raw}' is not a valid plan status ({sorted(VALID_STATUS)})"]
+    return []
+
+
 def validate_note(path, hub, op_type=None):
     """Validate a single note.
 
@@ -64,6 +79,7 @@ def validate_note(path, hub, op_type=None):
             warnings += check_expires_at(data)
             from silica.kernel import gitstate
             warnings += check_documents_paths(data, repo_root=gitstate.find_repo_root(path))
+            warnings += check_plan_status(data)
 
         # hub wikilink: required for spoke write/patch; NOT for hub-index/reformat/merge overwrites
         if op_type != "overwrite" and hub and not ofm.has_wikilink(content, hub):
