@@ -16,6 +16,9 @@
 - [Use Cases](#use-cases)
 - [Configuration](#configuration)
 - [Quick Start](#quick-start)
+  - [Installation](#installation)
+  - [Setup](#setup)
+  - [Execution](#execution)
   - [REPL Commands](#repl-commands)
   - [System Tools](#system-tools)
 - [Directory Structure](#directory-structure)
@@ -50,7 +53,7 @@ Silica is designed for:
 
 ## Architecture
 
-Silica is structured in a five-layer stack (L0 to L4) from low-level application drivers to high-level declarative workflows. The architecture coordinates two execution paradigms over a shared core toolset. For a deep-dive breakdown, flow diagrams, and codebase directory topology, see [docs/silica_architecture.md](docs/silica_architecture.md).
+Silica is structured in a five-layer stack (L0 to L4) from low-level application drivers to high-level declarative workflows. The architecture coordinates two execution paradigms over a shared core toolset; the diagrams below are the architecture reference.
 
 ### System Layers (L0–L4)
 
@@ -133,15 +136,18 @@ Configure the agent via environment variables (e.g., in a `.env` file):
 
 | Variable | Default | Description |
 | :--- | :--- | :--- |
-| `SILICA_PROVIDER` | `lmstudio` | LLM API provider (`lmstudio`, `openai`, `openrouter`, etc.) |
-| `SILICA_MODEL` | `""` | Chat LLM model identifier |
-| `SILICA_EMBEDDING_MODEL` | `qwen3-embedding-8b` | Embedding model identifier |
+| `SILICA_MODEL` | *(none — set via `silica init`)* | Chat LLM model identifier |
+| `SILICA_PROVIDER` | derived from model prefix, else `lmstudio` | Chat provider preset: `lmstudio` or `openrouter` |
+| `OPENROUTER_API_KEY` | *(none)* | Required when the provider is `openrouter` |
+| `SILICA_VAULT` | *(unset — repo mode: `docs/silica/` of the current git repo)* | Vault path for the `fs` backend and context |
+| `SILICA_BACKEND` | `cli` | `cli` (live Obsidian desktop via CDP) or `fs` (headless filesystem) |
+| `SILICA_EMBEDDING_MODEL` | `qwen3-embedding-4b` | Embedding model identifier |
 | `SILICA_EMBEDDING_BASE_URL` | `http://localhost:1234/v1` | Embedding API endpoint |
 | `SILICA_EMBEDDING_API_KEY` | `lm-studio` | Embedding API key |
 | `SILICA_SIM_THRESHOLD_HIGH` | `0.85` | Similarity threshold for merging/patching notes |
 | `SILICA_SIM_THRESHOLD_LOW` | `0.65` | Similarity threshold for creating new notes |
 | `SILICA_BANNER_STYLE` | `wordmark` | CLI banner format (`wordmark`, `minimal`) |
-| `SILICA_DEBUG_LOGGING` | `False` | Enables verbose debug outputs |
+| `SILICA_VERBOSE` | `False` | Enables verbose debug outputs |
 
 ---
 
@@ -156,28 +162,64 @@ cd silica-agent
 uv pip install -e .
 ```
 
+### Setup
+
+Run the interactive wizard — it writes your `.env` (vault, backend, chat provider, embeddings) and finishes with a diagnostic report:
+
+```bash
+uv run silica init
+```
+
+Re-check the environment at any time:
+
+```bash
+uv run silica doctor
+```
+
 ### Execution
-To start the interactive REPL:
+
+Start the interactive REPL:
 
 ```bash
 uv run silica
 ```
 
-To run a pipeline recipe directly (e.g., ingestion):
+Run the ingestion pipeline from inside the REPL:
 
-```bash
-uv run python -m silica.router.orchestrator --recipe injector --inbox ./inbox
+```
+/inject Inbox/note.md --target=Concepts/AI
 ```
 
 ### REPL Commands
-When running the interactive session, the following slash commands are available:
-* `/clear` — Clears terminal state and resets session history.
-* `/verbose` — Toggles verbose output and debug logging level.
-* `/thinking` — Toggles display of reasoning blocks.
-* `/model` — Displays the active LLM.
-* `/tools` — Lists registered Obsidian tools.
-* `/help` — Displays command help.
-* `/exit` or `/quit` — Exits the session.
+
+**Workflow** — agent-directed:
+
+| Command | Usage | Description |
+| :--- | :--- | :--- |
+| `/report` | `[folder] [--top-k=N] [--embeddings]` | Structural audit of the vault → steering loop |
+| `/inject` | `<file...> --target=DIR [--hub=H]` | Import a note into the vault via the Injector FSM |
+| `/organize` | `"<intent>" [--scope=FOLDER] [--file=taxonomy.yaml] [--apply]` | Classify and reorganize vault notes according to a taxonomy |
+
+**Direct** — immediate, no LLM round-trip:
+
+| Command | Usage | Description |
+| :--- | :--- | :--- |
+| `/status` | `[run_id]` | Progress digest of the last run |
+| `/embed` | `[folder] [--force]` | Build/update the embedding index |
+| `/cooccur` | `[folder] [--force]` | Build/update the co-occurrence index (no embedder needed) |
+| `/graph` | `[out.html] [folder]` | Export the knowledge graph |
+| `/find` | `<query> [--k=N]` | Semantic search |
+| `/undo` | `[note-path]` | Undo the last patch on a note |
+| `/review` | `[--flush=HASH]` | Inspect the async review queue (deferred ops) |
+| `/revert` | `[run-id]` | Revert a whole injection (per-run, LIFO) |
+| `/dedup` | `[folder]` | Deduplicate notes (sub-agent) |
+| `/refine` | `[folder]` | Enrich and normalize notes (sub-agent) |
+| `/enrich` | `[folder]` | Enrich note semantics (sub-agent) |
+| `/stale` | | List notes whose `documents:` paths have new commits since `code_ref` |
+| `/plans` | | List `plans/` notes grouped by `status:` |
+| `/document` | `<repo-relative-source-path>` | Stage a sanitized doc stub from a source file into `Inbox/` |
+
+**System:** `/help` · `/model` · `/tools` · `/clear` · `/verbose` · `/thinking` · `/exit`
 
 ### System Tools
 * **`silica_run_injector`**: Runs the end-to-end ingestion pipeline with transaction rollbacks.
@@ -194,9 +236,9 @@ When running the interactive session, the following slash commands are available
 ```
 silica-agent/
 ├── pyproject.toml              # Dependencies & entry points
-├── docs/                       # Project design charters
 ├── silica/
 │   ├── cli.py                  # CLI / REPL interface entry point
+│   ├── onboarding/             # `silica init` wizard + `silica doctor` checks
 │   ├── agent/                  # LLM integration and REPL agent loop
 │   ├── driver/                 # L0: Obsidian bridge and filesystem driver
 │   ├── kernel/                 # L1: Deterministic parsers, linters, and autolinkers
@@ -204,7 +246,8 @@ silica-agent/
 │   ├── router/                 # L3: FSM recipe runner
 │   ├── recipes/                # L4: YAML pipeline blueprints
 │   ├── tools/                  # Registered composed tools
-│   └── workers/                # L2: Cogitative prompts and workers
+│   ├── ui/                     # Console rendering and command registry
+│   └── workers/                # L2: Cognitive prompts and workers
 └── tests/                      # Testing suite
 ```
 

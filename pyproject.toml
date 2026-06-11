@@ -6,7 +6,7 @@ build-backend = "setuptools.build_meta"
 name = "silica"
 version = "0.2.1"
 description = "Obsidian-native agentic CLI — vault curation with quality gates"
-readme = "SILICA.md"
+readme = "README.md"
 requires-python = ">=3.11"
 license = { text = "Apache-2.0" }
 dependencies = [
