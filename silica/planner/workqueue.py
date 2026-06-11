@@ -13,11 +13,10 @@ Concurrency safety has two layers:
      sub-agents (and any lease-aware writer).  Both the Injector and the pool run
      as threads in one process, so an in-process lock registry is sufficient.
 
-WorkItem kinds:
-  "dedup"  — a borderline pair: append the candidate concept's unique info into an
-             existing (larger) note.  context: {candidate, match_path, score, ...}
-  "refine" — a freshly committed note flagged by lint: restyle without info loss.
-  "orphan" — a note left orphaned by the graph gate: connect it.
+WorkItem kinds are owned by the capability registry — see
+silica/capabilities/__init__.py (CAPABILITIES), the single dispatch table for
+background work. tests/test_capability_seam.py enforces that every kind
+produced anywhere has a registered capability.
 """
 from __future__ import annotations
 

@@ -192,29 +192,8 @@ class Coordinator:
         )
 
     def _consume(self, wq: Any) -> None:
-        """One consumer thread: claim → handle → complete until the queue closes.
+        """One consumer thread — delegates to the shared ``consume`` loop in
+        silica/agent/subagent.py (the same engine ad-hoc batches run on)."""
+        from silica.agent.subagent import BoundedSubAgent, consume
 
-        Blocks at OS level on ``wq.claim()`` — no polling.  The sentinel
-        injected by ``wq.close()`` cascades through all consumers so they
-        all wake and exit cleanly.  ``_stop`` is checked after each item so
-        a producer crash causes pending items to be marked cancelled rather
-        than dispatched to the sub-agent.
-        """
-        from silica.agent.subagent import BoundedSubAgent
-        from silica.agent.bus import BUS
-        from silica.agent.events import WorkCancelledEvent
-
-        agent = BoundedSubAgent(self.config)
-        while True:
-            item = wq.claim()           # blocks; no timeout, no polling
-            if item is None:
-                return                  # sentinel received — queue fully drained
-            if self._stop.is_set() or item.cancel_token.is_set():
-                wq.complete(item, "cancelled")
-                BUS.publish(
-                    "work/cancelled",
-                    WorkCancelledEvent(item.id, item.kind, "pre_handle"),
-                )
-                continue
-            res = agent.handle(item)
-            wq.complete(item, res.get("status", "done"), res)
+        consume(wq, BoundedSubAgent(self.config), self._stop)
