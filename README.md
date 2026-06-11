@@ -139,7 +139,7 @@ Configure the agent via environment variables (e.g., in a `.env` file):
 | `SILICA_MODEL` | *(none — set via `silica init`)* | Chat LLM model identifier |
 | `SILICA_PROVIDER` | derived from model prefix, else `lmstudio` | Chat provider preset: `lmstudio` or `openrouter` |
 | `OPENROUTER_API_KEY` | *(none)* | Required when the provider is `openrouter` |
-| `SILICA_VAULT` | *(unset — repo mode: `docs/silica/` of the current git repo)* | Vault path for the `fs` backend and context |
+| `SILICA_VAULT` | *(unset — repo mode: `.silica/` of the current git repo)* | Vault path for the `fs` backend and context |
 | `SILICA_BACKEND` | `cli` | `cli` (live Obsidian desktop via CDP) or `fs` (headless filesystem) |
 | `SILICA_EMBEDDING_MODEL` | `qwen3-embedding-4b` | Embedding model identifier |
 | `SILICA_EMBEDDING_BASE_URL` | `http://localhost:1234/v1` | Embedding API endpoint |
@@ -187,7 +187,7 @@ uv run silica
 Run the ingestion pipeline from inside the REPL:
 
 ```
-/inject Inbox/note.md --target=Concepts/AI
+/ingest Inbox/note.md --target=Concepts/AI
 ```
 
 ### REPL Commands
@@ -197,7 +197,7 @@ Run the ingestion pipeline from inside the REPL:
 | Command | Usage | Description |
 | :--- | :--- | :--- |
 | `/report` | `[folder] [--top-k=N] [--embeddings]` | Structural audit of the vault → steering loop |
-| `/inject` | `<file...> --target=DIR [--hub=H]` | Import a note into the vault via the Injector FSM |
+| `/ingest` | `<file...> [--target=DIR] [--hub=H]` | Bring files in: notes via Injector FSM, code as skeleton stubs |
 | `/organize` | `"<intent>" [--scope=FOLDER] [--file=taxonomy.yaml] [--merge] [--move-uncategorized] [--apply]` | Classify and reorganize vault notes according to a taxonomy |
 
 **Direct** — immediate, no LLM round-trip:
@@ -217,9 +217,9 @@ Run the ingestion pipeline from inside the REPL:
 | `/enrich` | `[folder]` | Enrich note semantics (sub-agent) |
 | `/stale` | | List notes whose `documents:` paths have new commits since `code_ref` |
 | `/plans` | | List `plans/` notes grouped by `status:` |
-| `/document` | `<repo-relative-source-path>` | Stage a sanitized doc stub from a source file into `Inbox/` |
 
-**System:** `/help` · `/model` · `/tools` · `/clear` · `/verbose` · `/thinking` · `/exit`
+
+**System:** `/help` · `/model` · `/tools` · `/clear` · `/verbose` · `/thinking` · `/vault` `[path]` (show or switch the active vault for this session) · `/exit`
 
 ### System Tools
 * **`silica_run_injector`**: Runs the end-to-end ingestion pipeline with transaction rollbacks.

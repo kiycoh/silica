@@ -9,6 +9,7 @@ from __future__ import annotations
 import json
 import logging
 import sys
+from typing import NamedTuple
 
 from rich.markdown import Markdown
 
@@ -93,14 +94,52 @@ def _setup_logging(debug: bool = False) -> None:
     logging.getLogger("markdown_it").setLevel(logging.WARNING)
 
 
+class VaultTarget(NamedTuple):
+    """Outcome of resolving a runtime ``/vault <arg>`` switch.
+
+    ``vault`` is the absolute path to adopt (None on error). ``created`` is
+    True when the codebase has no ``.silica/`` yet and the caller must mkdir it.
+    ``error`` carries a human-readable message when the arg cannot be adopted.
+    """
+    vault: str | None
+    created: bool
+    error: str | None
+
+
+def resolve_vault_switch(arg: str) -> VaultTarget:
+    """Resolve a ``/vault <arg>`` target, codebase-aware (pure, read-only I/O).
+
+    Mirrors the startup repo-mode rule for the runtime command: if ``arg`` lives
+    inside a git repo, the vault is that repo's ``.silica/`` (memory node) rather
+    than the repo root itself — created on demand. A path that is already a
+    ``.silica`` dir, or any plain (non-codebase) directory, is adopted verbatim.
+    """
+    from pathlib import Path
+    from silica.kernel import gitstate
+
+    target = Path(arg).expanduser()
+    # An explicit .silica dir is already a vault root — adopt it verbatim.
+    if target.is_dir() and target.name == ".silica":
+        return VaultTarget(str(target.resolve()), False, None)
+    # Codebase? Adopt <repo>/.silica, creating it on demand.
+    repo = gitstate.find_repo_root(target) if target.exists() else None
+    if repo is not None:
+        silica_dir = repo / ".silica"
+        return VaultTarget(str(silica_dir), not silica_dir.is_dir(), None)
+    # Plain directory → literal vault (preserves pre-codebase behaviour).
+    if target.is_dir():
+        return VaultTarget(str(target.resolve()), False, None)
+    return VaultTarget(None, False, f"Not a directory: {arg}")
+
+
 def resolve_repo_mode_vault(cwd, vault_env: str, docs_exists_ok: bool):
     """Pure resolver for repo-mode vault selection (testable, no I/O prompts).
 
     Returns the vault path string to adopt, or None to leave config unchanged.
     - Explicit SILICA_VAULT (vault_env truthy) always wins → None.
     - Not inside a git repo → None.
-    - docs/silica/ exists → return it.
-    - docs/silica/ missing → return it only if docs_exists_ok (caller already
+    - .silica/ exists → return it.
+    - .silica/ missing → return it only if docs_exists_ok (caller already
       confirmed creation); otherwise None.
     """
     from pathlib import Path
@@ -111,7 +150,7 @@ def resolve_repo_mode_vault(cwd, vault_env: str, docs_exists_ok: bool):
     root = gitstate.find_repo_root(cwd)
     if root is None:
         return None
-    vault_dir = Path(root) / "docs" / "silica"
+    vault_dir = Path(root) / ".silica"
     if vault_dir.is_dir():
         return str(vault_dir)
     if docs_exists_ok:
@@ -120,7 +159,7 @@ def resolve_repo_mode_vault(cwd, vault_env: str, docs_exists_ok: bool):
 
 
 def _activate_repo_mode() -> None:
-    """Side-effecting wrapper: prompts to create docs/silica/ if missing, then
+    """Side-effecting wrapper: prompts to create .silica/ if missing, then
     sets CONFIG.vault_path. Called once at CLI startup."""
     from pathlib import Path
     from silica.kernel import gitstate
@@ -130,10 +169,10 @@ def _activate_repo_mode() -> None:
     root = gitstate.find_repo_root(Path.cwd())
     if root is None:
         return
-    vault_dir = Path(root) / "docs" / "silica"
+    vault_dir = Path(root) / ".silica"
     if not vault_dir.is_dir():
-        CONSOLE.print(f"  Git repo detected at [bold]{root}[/] but no [bold]docs/silica/[/] folder.")
-        answer = input("  Create docs/silica/ and manage it as the Silica vault? [y/N] ").strip().lower()
+        CONSOLE.print(f"  Git repo detected at [bold]{root}[/] but no [bold].silica/[/] folder.")
+        answer = input("  Create .silica/ and manage it as the Silica vault? [y/N] ").strip().lower()
         if answer not in ("y", "yes"):
             return
         vault_dir.mkdir(parents=True, exist_ok=True)
@@ -162,6 +201,41 @@ def _handle_direct_shortcut(raw_input: str, messages: list[dict]) -> bool:
     if not parts:
         return False
     cmd = parts[0].lower()
+
+    if cmd == "/vault":
+        from pathlib import Path
+        from silica.driver import reset_driver
+
+        arg = " ".join(parts[1:]).strip()
+        if arg:
+            target = resolve_vault_switch(arg)
+            if target.error:
+                CONSOLE.print(f"  [red]{target.error}[/]")
+                return True
+            if target.created:
+                Path(target.vault).mkdir(parents=True, exist_ok=True)
+                CONSOLE.print(
+                    f"  Codebase detected — created [bold]{target.vault}[/] "
+                    "as the session vault (memory node)."
+                )
+            resolved = target.vault
+            CONFIG.vault_path = resolved
+            reset_driver()
+            from silica.kernel.overlay import reset_overlay_cache
+            reset_overlay_cache()  # overlay is vault-scoped; don't serve the old vault's
+            CONSOLE.print(f"  Vault → [bold]{resolved}[/] (backend: {CONFIG.backend})")
+            CONSOLE.print(
+                "  [yellow]Embed/co-occurrence indexes are global and now stale "
+                "for this vault — run /embed --force and /cooccur --force.[/]"
+            )
+            return True
+        vault = CONFIG.vault_path or "(not configured)"
+        CONSOLE.print(f"  Vault:   [bold]{vault}[/]")
+        CONSOLE.print(f"  Backend: {CONFIG.backend}")
+        if CONFIG.vault_path:
+            count = len(list(Path(CONFIG.vault_path).rglob("*.md")))
+            CONSOLE.print(f"  Notes:   {count}")
+        return True
 
     if cmd == "/status":
         run_id = parts[1] if len(parts) > 1 else ""
@@ -274,7 +348,7 @@ def _handle_direct_shortcut(raw_input: str, messages: list[dict]) -> bool:
         from silica.kernel import codedocs
         vault = CONFIG.vault_path
         if not vault:
-            CONSOLE.print("  No vault configured; /stale needs a docs/ vault in a git repo.")
+            CONSOLE.print("  No vault configured; /stale needs a .silica vault in a git repo.")
             return True
         stale = codedocs.stale_docs(Path(vault))
         if not stale:
@@ -289,7 +363,7 @@ def _handle_direct_shortcut(raw_input: str, messages: list[dict]) -> bool:
             )
             for c in sd.intervening[:3]:
                 CONSOLE.print(f"      {c.sha[:8]}  {c.subject}")
-        CONSOLE.print("  Run [bold]/document <path>[/] to regenerate, or edit and re-badge.")
+        CONSOLE.print("  Run [bold]/ingest <path>[/] to regenerate, or edit and re-badge.")
         return True
 
     if cmd == "/plans":
@@ -299,7 +373,7 @@ def _handle_direct_shortcut(raw_input: str, messages: list[dict]) -> bool:
 
         from silica.kernel import plans as plans_mod
         if not CONFIG.vault_path:
-            CONSOLE.print("  No vault configured; /plans needs a docs/silica vault.")
+            CONSOLE.print("  No vault configured; /plans needs a .silica vault.")
             return True
         vault = Path(CONFIG.vault_path)
         counts = plans_mod.status_counts(vault)
@@ -313,23 +387,6 @@ def _handle_direct_shortcut(raw_input: str, messages: list[dict]) -> bool:
             # escape() keeps the literal [status] bracket from being parsed as
             # rich markup (otherwise [todo] is swallowed as an unknown tag).
             CONSOLE.print(f"    {escape(f'[{status}] {note_path.stem}')}")
-        return True
-
-    if cmd == "/document":
-        positional = [p for p in parts[1:] if not p.startswith("-")]
-        target = " ".join(positional)
-        if not target:
-            CONSOLE.print("  Usage: /document <repo-relative-source-path>")
-            return True
-        result = TOOLS["silica_document"].run(path=target)
-        try:
-            parsed = json.loads(result)
-            if parsed.get("status") == "ok":
-                CONSOLE.print(f"  Staged [bold]{parsed['note_path']}[/] (code_ref {parsed['code_ref'][:8]}). Refine via the inbox.")
-            else:
-                CONSOLE.print(f"  [yellow]{parsed.get('message', 'failed')}[/]")
-        except Exception:
-            CONSOLE.print(result)
         return True
 
     if cmd == "/undo":
@@ -419,7 +476,7 @@ def _handle_direct_shortcut(raw_input: str, messages: list[dict]) -> bool:
 
 
 def _expand_workflow_shortcut(user_input: str) -> str | None:
-    """Expand workflow shortcuts (e.g. /report, /inject) into agent-directed messages.
+    """Expand workflow shortcuts (e.g. /report, /ingest) into agent-directed messages.
 
     Returns the expanded message string, or None if the input is not a
     recognised shortcut. Expanded messages flow through the normal agentic
@@ -427,15 +484,15 @@ def _expand_workflow_shortcut(user_input: str) -> str | None:
 
     Syntax:
         /report [folder] [--top-k=N] [--embeddings]
-        /inject <file...> --target=DIR [--hub=H]
+        /ingest <file...> [--target=DIR] [--hub=H]
 
     Examples:
         /report
         /report Concepts/ML
         /report --top-k=15 --embeddings
         /report Inbox --embeddings
-        /inject Inbox/notes.md --target=Concepts/AI
-        /inject Inbox/a.md Inbox/b.md --target=Concepts/AI --hub=AI
+        /ingest Inbox/notes.md --target=Concepts/AI
+        /ingest silica/cli.py
     """
     parts = user_input.strip().split()
     if not parts:
@@ -443,9 +500,9 @@ def _expand_workflow_shortcut(user_input: str) -> str | None:
 
     cmd = parts[0].lower()
 
-    if cmd == "/inject":
+    if cmd == "/ingest":
         args = parts[1:]
-        inbox_files: list[str] = []
+        files: list[str] = []
         target_dir = ""
         hub = ""
         for arg in args:
@@ -454,14 +511,40 @@ def _expand_workflow_shortcut(user_input: str) -> str | None:
             elif arg.startswith("--hub="):
                 hub = arg[len("--hub="):]
             elif not arg.startswith("-"):
-                inbox_files.append(arg)  # preserve original case
-        if not inbox_files:
-            return "Error: /inject requires at least one file path. Usage: /inject <file...> --target=DIR"
+                files.append(arg)  # preserve original case
+        if not files:
+            return "Error: /ingest requires at least one file path. Usage: /ingest <file...> [--target=DIR]"
+
+        from silica.kernel import codeast
+        from silica.tools import TOOLS
+
+        md_files = [f for f in files if f.lower().endswith((".md", ".txt"))]
+        code_files = [f for f in files if f not in md_files and codeast.language_for(f) is not None]
+        skipped = [f for f in files if f not in md_files and f not in code_files]
+
+        for f in skipped:
+            CONSOLE.print(f"  [yellow]Skipped {f}: unsupported file type.[/]")
+        for f in code_files:
+            result = TOOLS["silica_document"].run(path=f)
+            try:
+                parsed = json.loads(result)
+            except Exception:
+                parsed = {}
+            if parsed.get("status") == "ok":
+                CONSOLE.print(
+                    f"  Staged [bold]{parsed['note_path']}[/] "
+                    f"(code_ref {parsed.get('code_ref', '')[:8]}). Refine via the inbox."
+                )
+            else:
+                CONSOLE.print(f"  [yellow]{f}: {parsed.get('message', result)}[/]")
+
+        if not md_files:
+            return ""  # fully handled inline — sentinel: nothing for the agent
         if not target_dir:
-            return "Error: /inject requires --target=DIR. Usage: /inject <file...> --target=DIR"
-        files_json = json.dumps(inbox_files)
+            return "Error: /ingest of notes requires --target=DIR. Usage: /ingest <file...> --target=DIR"
+        files_json = json.dumps(md_files)
         msg = (
-            f"Run the Injector pipeline for {len(inbox_files)} file(s).\n"
+            f"Run the Injector pipeline for {len(md_files)} file(s).\n"
             f"Call `silica_run_injector` with "
             f"inbox_files={files_json}, target_dir={json.dumps(target_dir)}"
         )
@@ -754,9 +837,11 @@ def main():
         if user_input.startswith("/") and _handle_direct_shortcut(user_input, messages):
             continue
 
-        # Expand workflow shortcuts (/report, /inject etc.) into agent-directed messages
+        # Expand workflow shortcuts (/report, /ingest etc.) into agent-directed messages
         expanded = _expand_workflow_shortcut(user_input)
         if expanded is not None:
+            if not expanded:
+                continue  # shortcut fully handled inline (e.g. /ingest of code files)
             user_input = expanded
 
         # Handle slash commands

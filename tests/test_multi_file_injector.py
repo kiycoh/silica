@@ -507,50 +507,50 @@ class TestT6DirectShortcuts:
 
 
 # ---------------------------------------------------------------------------
-# T7 — /inject agent-directed shortcut
+# T7 — /ingest agent-directed shortcut
 # ---------------------------------------------------------------------------
 
-class TestT7InjectShortcut:
+class TestT7IngestShortcut:
     def _expand(self, cmd: str) -> str | None:
         from silica.cli import _expand_workflow_shortcut
         return _expand_workflow_shortcut(cmd)
 
-    def test_inject_single_file(self):
-        msg = self._expand("/inject Inbox/a.md --target=Concepts/AI")
+    def test_ingest_single_file(self):
+        msg = self._expand("/ingest Inbox/a.md --target=Concepts/AI")
         assert msg is not None
         assert "Inbox/a.md" in msg
         assert "Concepts/AI" in msg
         assert "silica_run_injector" in msg
 
-    def test_inject_multi_file(self):
-        msg = self._expand("/inject Inbox/a.md Inbox/b.md --target=Concepts/AI")
+    def test_ingest_multi_file(self):
+        msg = self._expand("/ingest Inbox/a.md Inbox/b.md --target=Concepts/AI")
         assert msg is not None
         assert "Inbox/a.md" in msg
         assert "Inbox/b.md" in msg
         assert "Concepts/AI" in msg
 
-    def test_inject_with_hub(self):
-        msg = self._expand("/inject Inbox/a.md --target=Concepts/AI --hub=AI")
+    def test_ingest_with_hub(self):
+        msg = self._expand("/ingest Inbox/a.md --target=Concepts/AI --hub=AI")
         assert msg is not None
         assert "AI" in msg
 
-    def test_inject_missing_target_returns_error(self):
-        msg = self._expand("/inject Inbox/a.md")
+    def test_ingest_missing_target_returns_error(self):
+        msg = self._expand("/ingest Inbox/a.md")
         assert msg is not None
         assert "Error" in msg or "--target" in msg
 
-    def test_inject_missing_files_returns_error(self):
-        msg = self._expand("/inject --target=Concepts/AI")
+    def test_ingest_missing_files_returns_error(self):
+        msg = self._expand("/ingest --target=Concepts/AI")
         assert msg is not None
         assert "Error" in msg or "file" in msg.lower()
 
-    def test_inject_case_preserved_in_paths(self):
+    def test_ingest_case_preserved_in_paths(self):
         """File paths must preserve their original casing."""
-        msg = self._expand("/inject Inbox/MyNote.md --target=Concepts/AI")
+        msg = self._expand("/ingest Inbox/MyNote.md --target=Concepts/AI")
         assert "MyNote.md" in msg
 
-    def test_report_still_works_after_inject_added(self):
-        """/report shortcut is unaffected by /inject addition."""
+    def test_report_still_works_after_ingest_added(self):
+        """/report shortcut is unaffected by /ingest addition."""
         msg = self._expand("/report Concepts/ML")
         assert msg is not None
         assert "silica_vault_report" in msg
@@ -561,9 +561,9 @@ class TestT7InjectShortcut:
 # ---------------------------------------------------------------------------
 
 class TestT8Help:
-    def test_help_lists_inject(self):
+    def test_help_lists_ingest(self):
         from silica.ui.commands import command_names
-        assert "/inject" in command_names()
+        assert "/ingest" in command_names()
 
     def test_help_lists_direct_commands(self):
         from silica.ui.commands import COMMANDS

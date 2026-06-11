@@ -28,11 +28,14 @@ COMMANDS: tuple[Command, ...] = (
         home_pin=True,
     ),
     Command(
-        name="/inject",
+        name="/ingest",
         group="workflow",
-        usage="<file...> --target=DIR [--hub=H]",
-        summary="import a note into the vault via Injector FSM",
-        examples=("/inject Inbox/note.md --target=Concepts/AI",),
+        usage="<file...> [--target=DIR] [--hub=H]",
+        summary="bring files in: notes via Injector FSM, code as skeleton stubs",
+        examples=(
+            "/ingest Inbox/note.md --target=Concepts/AI",
+            "/ingest silica/cli.py",
+        ),
         home_pin=True,
     ),
     Command(
@@ -43,7 +46,7 @@ COMMANDS: tuple[Command, ...] = (
         examples=(
             '/organize "put AI notes in Concepts/AI, cooking notes in Life"',
             '/organize "archive Acme docs under Clients/Acme" --merge',
-            "/organize --file=_silica/taxonomy.yaml --apply",
+            "/organize --file=taxonomy.yaml --apply",
             "/organize --scope=Inbox",
         ),
         home_pin=True,
@@ -130,13 +133,13 @@ COMMANDS: tuple[Command, ...] = (
         usage="",
         summary="list plans/ notes grouped by status: (todo|in-progress|blocked|done)",
     ),
-    Command(
-        name="/document",
-        group="direct",
-        usage="<repo-relative-source-path>",
-        summary="stage a sanitized doc stub from a source file into Inbox/",
-    ),
     # System
+    Command(
+        name="/vault",
+        group="system",
+        usage="[path]",
+        summary="show the active vault, or switch to another for this session",
+    ),
     Command(
         name="/help",
         group="system",
