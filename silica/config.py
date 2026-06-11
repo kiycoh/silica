@@ -28,14 +28,12 @@ load_dotenv(_dotenv_path, override=False)
 class SilicaConfig:
     """Runtime configuration singleton."""
 
-    # LLM provider — litellm model string.
-    # Examples: "openrouter/anthropic/claude-sonnet-4-20250514",
-    #           "anthropic/claude-sonnet-4-20250514",
-    #           "openai/gpt-4o"
+    # LLM provider — litellm model string. Empty by default (fail-fast):
+    # the REPL points the user to `silica init` instead of assuming a
+    # hosted model whose API key was never mentioned.
+    # Examples: "openrouter/anthropic/claude-sonnet-4-20250514", "qwen3-30b"
     model: str = field(
-        default_factory=lambda: os.getenv(
-            "SILICA_MODEL", "openrouter/google/gemma-4-31b-it"
-        )
+        default_factory=lambda: os.getenv("SILICA_MODEL", "")
     )
 
     # Provider preset name (derived from model prefix by default, or overridden)

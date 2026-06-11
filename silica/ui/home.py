@@ -33,8 +33,8 @@ def print_home() -> None:
     from silica.ui.style import command_table
 
     vault = CONFIG.vault_name or "—"
-    model_slug = CONFIG.model.rsplit("/", 1)[-1]
-    worker_model = CONFIG.worker_model or CONFIG.model
+    model_slug = (CONFIG.model or "(not configured)").rsplit("/", 1)[-1]
+    worker_model = CONFIG.worker_model or CONFIG.model or "(not configured)"
     worker_slug = worker_model.rsplit("/", 1)[-1]
     pinned = [c for c in COMMANDS if c.home_pin]
     help_cmd = next(c for c in COMMANDS if c.name == "/help")

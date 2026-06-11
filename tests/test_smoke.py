@@ -27,7 +27,7 @@ def test_tool_json_schema():
 def test_config_loads():
     """Config singleton should load without errors."""
     from silica.config import CONFIG
-    assert CONFIG.model  # should have a default model
+    # model may legitimately be empty (fail-fast default — see test_config_failfast)
     assert CONFIG.backend in ("cli", "fs")
 
 

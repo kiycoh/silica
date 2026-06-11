@@ -637,7 +637,7 @@ def _handle_slash_command(cmd: str, messages: list[dict]) -> bool:
         return False  # Signal to exit
 
     if cmd == "/model":
-        CONSOLE.print(f"  Current model: [bold]{CONFIG.model}[/]")
+        CONSOLE.print(f"  Current model: [bold]{CONFIG.model or '(not configured)'}[/]")
         return True
 
     if cmd == "/tools":
@@ -682,13 +682,47 @@ def _handle_slash_command(cmd: str, messages: list[dict]) -> bool:
     return True
 
 
+_NO_MODEL_HINT = (
+    "  [yellow]No chat model configured.[/] Run [bold]silica init[/] to set one — "
+    "direct commands (/find, /status, /cooccur, …) still work."
+)
+
+
+def _model_configured() -> bool:
+    return bool(CONFIG.model.strip())
+
+
+def _dispatch_subcommand(args: list[str]) -> int | None:
+    """Handle `silica doctor` / `silica init`.
+
+    Returns an exit code, or None when no subcommand matched (→ REPL).
+    Lazy imports keep REPL startup unchanged. Module attributes (not `from`
+    imports) so tests can monkeypatch run_checks / run_wizard.
+    """
+    if args[:1] == ["doctor"]:
+        import silica.onboarding.checks as checks
+        results = checks.run_checks(CONFIG)
+        checks.render_report(results)
+        return 1 if checks.has_failures(results) else 0
+    if args[:1] == ["init"]:
+        import silica.onboarding.wizard as wizard_mod
+        return wizard_mod.run_wizard()
+    return None
+
+
 def main():
     """Entry point for the `silica` CLI command."""
+    _args = [a for a in sys.argv[1:] if a not in ("--verbose", "-v")]
+    code = _dispatch_subcommand(_args)
+    if code is not None:
+        sys.exit(code)
     _activate_repo_mode()
     debug_mode = "--verbose" in sys.argv or "-v" in sys.argv or CONFIG.debug_logging
     _setup_logging(debug=debug_mode)
 
     print_home()
+    if not _model_configured():
+        CONSOLE.print(_NO_MODEL_HINT)
 
     session = build_session()
     messages: list[dict] = [{"role": "system", "content": SYSTEM_PROMPT}]
@@ -733,6 +767,12 @@ def main():
             if not should_continue:
                 print("  (_  _)。˚")
                 break
+            continue
+
+        # Fail-fast guard: a chat turn without a model would only surface a
+        # provider stack trace — point at `silica init` instead.
+        if not _model_configured():
+            CONSOLE.print(_NO_MODEL_HINT)
             continue
 
         # Normal user message → agentic loop
