@@ -25,7 +25,7 @@ def isolated_indexes(tmp_path, monkeypatch):
     autouse conftest fixture; embed needs explicit redirection here)."""
     import silica.kernel.embed as embed_mod
     import silica.kernel.cooccurrence as cooc_mod
-    monkeypatch.setattr(embed_mod, "_INDEX_PATH", tmp_path / "emb.json")
+    monkeypatch.setattr(embed_mod, "_index_path", lambda: tmp_path / "emb.json")
     return embed_mod, cooc_mod
 
 

@@ -20,7 +20,14 @@ from typing import Any
 import numpy as np
 import orjson
 
-_INDEX_PATH = Path.home() / ".silica" / "index" / "embeddings.json"
+_LEGACY_INDEX_PATH = Path.home() / ".silica" / "index" / "embeddings.json"
+
+
+def _index_path() -> Path:
+    # Function, not constant: resolves per current vault; tests monkeypatch it.
+    from silica.kernel import paths
+
+    return paths.index_dir() / "embeddings.json"
 
 # Maximum characters of note content to embed (title + body prefix).
 # Keeps embedding calls fast without losing most of the signal.
@@ -94,8 +101,8 @@ class EmbedStore:
     """
 
     def __init__(self, path: Path | None = None):
-        # Resolve lazily so tests can monkeypatch `_INDEX_PATH` after import
-        self._path = path if path is not None else _INDEX_PATH
+        # Resolve lazily so tests can monkeypatch `_index_path` after import
+        self._path = path if path is not None else _index_path()
         self._notes: dict[str, dict[str, Any]] = {}
         # Lazily-built, unit-normalized search matrix (numpy). Invalidated on any
         # mutation; rebuilt on the next cosine_top_k. Keeps _notes authoritative
@@ -116,9 +123,12 @@ class EmbedStore:
 
     def _load(self) -> None:
         self._invalidate_matrix()
-        if self._path.exists():
+        src = self._path
+        if not src.exists() and src != _LEGACY_INDEX_PATH and _LEGACY_INDEX_PATH.exists():
+            src = _LEGACY_INDEX_PATH  # one-time soft migration: copied forward on next save()
+        if src.exists():
             try:
-                data = orjson.loads(self._path.read_bytes())
+                data = orjson.loads(src.read_bytes())
                 self._notes = data.get("notes", {})
             except Exception:
                 self._notes = {}

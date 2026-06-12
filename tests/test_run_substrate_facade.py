@@ -26,7 +26,7 @@ def _chunk(name="neural network"):
 
 
 def test_substrate_fuses_cooccurrence_candidates(tmp_path, monkeypatch):
-    monkeypatch.setattr(embed_mod, "_INDEX_PATH", tmp_path / "emb.json")
+    monkeypatch.setattr(embed_mod, "_index_path", lambda: tmp_path / "emb.json")
     es = EmbedStore()
     es.upsert("Concepts/Near", "Near", [1.0, 0.0])
     es.upsert("Concepts/Far", "Far", [0.0, 1.0])
@@ -47,7 +47,7 @@ def test_substrate_fuses_cooccurrence_candidates(tmp_path, monkeypatch):
 def test_substrate_routes_on_cooccurrence_when_embed_index_empty(tmp_path, monkeypatch):
     # No embedding index -> build_substrate returned None before; now the
     # co-occurrence leg alone can still propose candidates.
-    monkeypatch.setattr(embed_mod, "_INDEX_PATH", tmp_path / "emb.json")  # empty
+    monkeypatch.setattr(embed_mod, "_index_path", lambda: tmp_path / "emb.json")  # empty
     cs = CooccurStore(lang="english")
     cs.upsert_note("Concepts/Cooc", build_contribution("Cooc", "neural network model"))
     cs.save()
@@ -59,7 +59,7 @@ def test_substrate_routes_on_cooccurrence_when_embed_index_empty(tmp_path, monke
 
 
 def test_substrate_excludes_manifest_titles(tmp_path, monkeypatch):
-    monkeypatch.setattr(embed_mod, "_INDEX_PATH", tmp_path / "emb.json")
+    monkeypatch.setattr(embed_mod, "_index_path", lambda: tmp_path / "emb.json")
     es = EmbedStore()
     es.upsert("Concepts/Near", "Near", [1.0, 0.0])
     es.save()

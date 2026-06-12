@@ -25,7 +25,7 @@ def vault(tmp_path, monkeypatch):
         encoding="utf-8",
     )
     # isolate the embedding index (empty) so the embed leg abstains, fast + deterministic
-    monkeypatch.setattr(embed_mod, "_INDEX_PATH", tmp_path / "emb.json")
+    monkeypatch.setattr(embed_mod, "_index_path", lambda: tmp_path / "emb.json")
     monkeypatch.setattr("silica.config.CONFIG.backend", "fs")
     monkeypatch.setattr("silica.config.CONFIG.vault_path", str(vd))
     monkeypatch.setattr("silica.driver._driver", None)

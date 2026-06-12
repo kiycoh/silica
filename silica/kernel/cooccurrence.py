@@ -23,7 +23,14 @@ GAP = 4               # effective look-back of GAP - 1 = 3 tokens
 MIN_TOKEN_LEN = 3
 EVIDENCE = "cooccur"
 
-_INDEX_PATH = Path.home() / ".silica" / "index" / "cooccurrence.json"
+_LEGACY_INDEX_PATH = Path.home() / ".silica" / "index" / "cooccurrence.json"
+
+
+def _index_path() -> Path:
+    # Function, not constant: resolves per current vault; tests monkeypatch it.
+    from silica.kernel import paths
+
+    return paths.index_dir() / "cooccurrence.json"
 
 # Compact function-word stopword sets. Filtered at BUILD time (not promoted to
 # nodes); raw text is never mutated. Italian set seeds from a function-word core.
@@ -162,7 +169,7 @@ class CooccurStore:
     """
 
     def __init__(self, path: Path | None = None, lang: str = "english"):
-        self._path = path if path is not None else _INDEX_PATH
+        self._path = path if path is not None else _index_path()
         self._notes: dict[str, dict[str, Any]] = {}
         self.lang = lang
         # lazy aggregated graph caches (scope=None only)
@@ -178,9 +185,12 @@ class CooccurStore:
     # --- I/O ---
     def _load(self) -> None:
         self._invalidate()
-        if self._path.exists():
+        src = self._path
+        if not src.exists() and src != _LEGACY_INDEX_PATH and _LEGACY_INDEX_PATH.exists():
+            src = _LEGACY_INDEX_PATH  # one-time soft migration: copied forward on next save()
+        if src.exists():
             try:
-                data = orjson.loads(self._path.read_bytes())
+                data = orjson.loads(src.read_bytes())
                 self._notes = data.get("notes", {})
                 self.lang = data.get("lang", self.lang)
             except Exception:

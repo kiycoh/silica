@@ -14,6 +14,15 @@ def _fresh_bus(monkeypatch: pytest.MonkeyPatch) -> None:
 
 
 @pytest.fixture(autouse=True)
+def _isolate_embed_legacy_path(tmp_path, monkeypatch: pytest.MonkeyPatch) -> None:
+    """Guard against the real ~/.silica/index/embeddings.json leaking into tests
+    via the legacy-migration fallback. Any test that redirects _index_path to a
+    non-existent tmp file would otherwise fall back to the developer's real index."""
+    import silica.kernel.embed as embed_mod
+    monkeypatch.setattr(embed_mod, "_LEGACY_INDEX_PATH", tmp_path / "legacy_embed.json")
+
+
+@pytest.fixture(autouse=True)
 def _isolate_cooccurrence_index(tmp_path, monkeypatch: pytest.MonkeyPatch) -> None:
     """Redirect the default co-occurrence index to a per-test tmp path.
 
@@ -24,7 +33,8 @@ def _isolate_cooccurrence_index(tmp_path, monkeypatch: pytest.MonkeyPatch) -> No
     path; this only redirects the default.
     """
     import silica.kernel.cooccurrence as cooc_mod
-    monkeypatch.setattr(cooc_mod, "_INDEX_PATH", tmp_path / "cooccurrence_index.json")
+    monkeypatch.setattr(cooc_mod, "_index_path", lambda: tmp_path / "cooccurrence_index.json")
+    monkeypatch.setattr(cooc_mod, "_LEGACY_INDEX_PATH", tmp_path / "legacy_cooc.json")
 
 
 @pytest.fixture(autouse=True)

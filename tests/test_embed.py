@@ -330,7 +330,7 @@ def test_silica_semantic_search_empty_index(tmp_path, monkeypatch):
     from silica.kernel.embed import EmbedStore as _ES
 
     # Ensure the store loaded by the tool sees an empty index
-    monkeypatch.setattr("silica.kernel.embed._INDEX_PATH", tmp_path / "empty.json")
+    monkeypatch.setattr("silica.kernel.embed._index_path", lambda: tmp_path / "empty.json")
 
     from silica.tools.composed import silica_semantic_search
     result = silica_semantic_search(query="neural networks")
@@ -338,10 +338,10 @@ def test_silica_semantic_search_empty_index(tmp_path, monkeypatch):
 
 
 def test_silica_semantic_search_returns_results(tmp_path, monkeypatch):
-    from silica.kernel.embed import EmbedStore as _ES, _INDEX_PATH
+    from silica.kernel.embed import EmbedStore as _ES
 
     idx = tmp_path / "embeddings.json"
-    monkeypatch.setattr("silica.kernel.embed._INDEX_PATH", idx)
+    monkeypatch.setattr("silica.kernel.embed._index_path", lambda: idx)
     # Pre-populate the store
     store = _ES(idx)
     store.upsert("Concepts/A", "A", [1.0, 0.0])
@@ -390,3 +390,48 @@ def test_openai_embedder_empty_input():
 
     embedder = OpenAIEmbedder.__new__(OpenAIEmbedder)
     assert embedder.embed([]) == []
+
+
+# ---------------------------------------------------------------------------
+# Per-vault index keying (Task 8)
+# ---------------------------------------------------------------------------
+
+def test_index_path_is_keyed_by_vault(tmp_path, monkeypatch):
+    from silica.config import CONFIG
+    from silica.kernel import paths
+    from silica.kernel.embed import _index_path
+
+    monkeypatch.setattr(CONFIG, "vault_path", str(tmp_path / "v1"))
+    p1 = _index_path()
+    monkeypatch.setattr(CONFIG, "vault_path", str(tmp_path / "v2"))
+    p2 = _index_path()
+    assert p1 != p2
+    assert p1.name == "embeddings.json" and p2.name == "embeddings.json"
+    assert paths.index_dir() == p2.parent
+
+
+def test_index_path_falls_back_to_global_without_vault(monkeypatch):
+    from silica.config import CONFIG
+    from silica.kernel import paths
+    from pathlib import Path
+
+    monkeypatch.setattr(CONFIG, "vault_path", "")
+    assert paths.index_dir() == Path.home() / ".silica" / "index"
+
+
+def test_legacy_index_migrates_on_load(tmp_path, monkeypatch):
+    import orjson
+    from silica.kernel import embed as embed_mod
+    from silica.kernel.embed import EmbedStore
+
+    legacy = tmp_path / "legacy" / "embeddings.json"
+    legacy.parent.mkdir(parents=True)
+    legacy.write_bytes(orjson.dumps({"version": 1, "notes": {"old/note": {"vec": [1.0], "name": "old", "ts": 0}}}))
+    keyed = tmp_path / "keyed" / "embeddings.json"
+    monkeypatch.setattr(embed_mod, "_LEGACY_INDEX_PATH", legacy)
+    monkeypatch.setattr(embed_mod, "_index_path", lambda: keyed)
+
+    store = EmbedStore()
+    assert "old/note" in store._notes  # loaded from legacy
+    store.save()
+    assert keyed.exists()              # copied forward into the keyed namespace

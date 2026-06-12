@@ -11,6 +11,7 @@ This module is the single source of truth for that normalization.
 """
 from __future__ import annotations
 
+import hashlib
 from pathlib import Path
 
 from silica.config import CONFIG
@@ -33,6 +34,19 @@ def silica_tmp_dir() -> Path:
     d = _SILICA_HOME / "tmp"
     d.mkdir(parents=True, exist_ok=True)
     return d
+
+
+def index_dir() -> Path:
+    """Per-vault index namespace: ~/.silica/index/<digest12>/ keyed by the
+    resolved vault path; legacy global ~/.silica/index/ when no vault is
+    configured. Per-vault state follows the vault (ADR-0014), so /vault
+    switch no longer serves another vault's entries."""
+    base = _SILICA_HOME / "index"
+    vault = (getattr(CONFIG, "vault_path", "") or "").strip()
+    if not vault:
+        return base
+    digest = hashlib.sha1(str(Path(vault).resolve()).encode("utf-8")).hexdigest()[:12]
+    return base / digest
 
 
 def to_vault_relative(path: str, *, ensure_md: bool = True) -> str:
