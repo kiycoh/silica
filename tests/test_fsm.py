@@ -604,6 +604,119 @@ def test_collision_low_similarity_keeps_for_distillation():
     assert concepts_left[0]["name"] == "Quantum Entanglement"
 
 
+def test_collision_embeds_concept_with_excerpt():
+    """Regression (Error 3): the COLLISION query must embed name+excerpt, not the
+    bare acronym.
+
+    Embedding "MEM" alone scores spuriously high against unrelated short-acronym
+    notes (e.g. "RAM (Random Access Memory)") because the index stores rich
+    title+body vectors; the bare-name query is incomparable. The excerpt — already
+    in hand — anchors the concept in its real semantic neighbourhood.
+    """
+    fsm = _make_fsm_at_collision([
+        {"name": "MEM", "excerpt": "Agentic memory mechanism for evolving context."}
+    ])
+
+    mock_store = MagicMock()
+    mock_store.__len__ = lambda _: 5
+    mock_store.cosine_top_k.return_value = [
+        {"path": "AI/RAM (Random Access Memory).md", "name": "RAM (Random Access Memory)", "score": 0.40}
+    ]
+
+    embedded_texts: list[str] = []
+
+    def _capture(texts):
+        embedded_texts.extend(texts)
+        return [[0.1, 0.2, 0.3] for _ in texts]
+
+    mock_embedder = MagicMock()
+    mock_embedder.embed.side_effect = _capture
+
+    with patch("silica.router.orchestrator.CONFIG") as mock_cfg, \
+         patch("silica.kernel.embed.EmbedStore", return_value=mock_store), \
+         patch("silica.agent.providers.get_embedder", return_value=mock_embedder):
+        mock_cfg.sim_threshold_high = 0.85
+        mock_cfg.sim_threshold_low = 0.65
+
+        fsm.step()
+
+    assert embedded_texts, "embedder was never called"
+    assert any("Agentic memory mechanism" in t for t in embedded_texts), \
+        f"excerpt missing from query embedding text: {embedded_texts!r}"
+    assert any("MEM" in t for t in embedded_texts)
+
+
+def test_collision_high_score_name_mismatch_demoted_to_distiller():
+    """High cosine but disagreeing names (a domain collision) must NOT mechanically
+    patch — the concept is demoted to the distiller for semantic judgement.
+
+    Reproduces the MEMORY → "RAM (Random Access Memory)" pollution: cosine is high
+    because both mention "memory", yet the concepts differ. The mechanical bypass
+    must not fire; the concept stays in the chunk so the distiller can judge.
+    """
+    fsm = _make_fsm_at_collision([
+        {"name": "MEMORY", "excerpt": "Agentic memory mechanisms for evolving context."}
+    ])
+
+    mock_store = MagicMock()
+    mock_store.__len__ = lambda _: 5
+    mock_store.cosine_top_k.return_value = [
+        {"path": "Agenti Autonomi/RAM (Random Access Memory).md",
+         "name": "RAM (Random Access Memory)", "score": 0.88}
+    ]
+
+    mock_embedder = MagicMock()
+    mock_embedder.embed.return_value = [[0.1, 0.2, 0.3]]
+
+    with patch("silica.router.orchestrator.CONFIG") as mock_cfg, \
+         patch("silica.router.orchestrator.DRIVER") as mock_driver, \
+         patch("silica.kernel.embed.EmbedStore", return_value=mock_store), \
+         patch("silica.agent.providers.get_embedder", return_value=mock_embedder):
+        mock_cfg.sim_threshold_high = 0.85
+        mock_cfg.sim_threshold_low = 0.65
+        mock_driver.read_note.return_value = MagicMock()  # note exists in graph
+        fsm.step()
+
+    # No mechanical patch — bypass blocked by the name guard.
+    assert fsm.context.get("chunk_0_collision_ops", []) == []
+    # Concept kept in the chunk for the distiller to judge.
+    kept = [c for b in fsm._chunks[0].get("batches", []) for c in b.get("concepts", [])]
+    assert any(c["name"] == "MEMORY" for c in kept)
+
+
+def test_collision_high_score_acronym_match_still_patches():
+    """High cosine WITH agreeing names (concept == note acronym) still auto-patches.
+
+    Positive control: GPT → "Modelli Linguistici Generativi (GPT)" is a true dedup
+    target, so the mechanical pre-route must remain.
+    """
+    fsm = _make_fsm_at_collision([
+        {"name": "GPT", "excerpt": "Generative pretrained transformer language model."}
+    ])
+
+    mock_store = MagicMock()
+    mock_store.__len__ = lambda _: 5
+    mock_store.cosine_top_k.return_value = [
+        {"path": "Agenti Autonomi/Modelli Linguistici Generativi (GPT).md",
+         "name": "Modelli Linguistici Generativi (GPT)", "score": 0.88}
+    ]
+
+    mock_embedder = MagicMock()
+    mock_embedder.embed.return_value = [[0.1, 0.2, 0.3]]
+
+    with patch("silica.router.orchestrator.CONFIG") as mock_cfg, \
+         patch("silica.router.orchestrator.DRIVER") as mock_driver, \
+         patch("silica.kernel.embed.EmbedStore", return_value=mock_store), \
+         patch("silica.agent.providers.get_embedder", return_value=mock_embedder):
+        mock_cfg.sim_threshold_high = 0.85
+        mock_cfg.sim_threshold_low = 0.65
+        mock_driver.read_note.return_value = MagicMock()
+        fsm.step()
+
+    ops = fsm.context.get("chunk_0_collision_ops", [])
+    assert len(ops) == 1
+    assert ops[0]["op"] == "patch"
+    assert ops[0]["path"] == "Agenti Autonomi/Modelli Linguistici Generativi (GPT).md"
 
 
 def test_collision_borderline_deferred():
