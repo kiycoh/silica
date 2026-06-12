@@ -10,7 +10,7 @@ from unittest.mock import MagicMock, patch, call
 import pytest
 
 from silica.router.orchestrator import InjectorFSM, InjectorState
-from silica.tools.registry import TOOLS
+from silica.tools import TOOLS
 
 
 # ---------------------------------------------------------------------------

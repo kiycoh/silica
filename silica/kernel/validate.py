@@ -21,6 +21,7 @@ def validate_operations(
     hub: str | None = None,
     cleared_parents_out: list | None = None,
     future_ref_whitelist: list[str] | None = None,
+    cleared_links_out: list | None = None,
 ) -> tuple[list[Op], list[Rejection]]:
     """Validates operations against payloads and target_dir using DRIVER."""
     from silica.kernel.ops_io import parse_ops
@@ -319,12 +320,19 @@ def validate_operations(
     if hub_ops:
         validated_ops = hub_ops + validated_ops
 
-    # 4. Prospective link check: write/patch/overwrite ops must not introduce wikilinks that
-    # cannot be resolved either in the current vault, within this batch's write ops, or the future_ref_whitelist.
+    # 4. Prospective link check: surface wikilinks introduced by write/patch/overwrite
+    # ops that cannot be resolved in the current vault, within this batch, or via the
+    # future_ref_whitelist.  Unlike parents (see _resolve_parent), an unresolved inline
+    # link does NOT reject the op — it is kept verbatim as a dangling forward-reference
+    # and recorded in cleared_links_out, symmetric with cleared_parents.  This mirrors
+    # Obsidian semantics (dangling links are first-class) and prevents a self-referential
+    # source from losing whole notes to the rejection-rate gate.
+    # Any op that leaves a note at op.path after this batch (write/patch/overwrite) is a
+    # valid in-batch link target — not just freshly-written notes.
     batch_created_names: set[str] = {
         os.path.splitext(os.path.basename(op.path))[0].lower()
         for op in validated_ops
-        if op.op == OpType.write and op.path
+        if op.op in (OpType.write, OpType.patch, OpType.overwrite) and op.path
     }
 
     _link_resolve_cache: dict[str, bool] = {}
@@ -361,12 +369,18 @@ def validate_operations(
         links = extract_links(text)
         broken = [lnk for lnk in links if not _link_resolves(lnk)]
         if broken:
-            rejected_ops.append(Rejection(
-                op=op,
-                reason=f"Introduces unresolved wikilinks: {broken!r}",
-            ))
-        else:
-            prospective_valid.append(op)
+            logger.debug(
+                "validate: %d unresolved wikilink(s) kept as forward-ref in '%s': %r",
+                len(broken), op.path or op.heading or "?", broken,
+            )
+            if cleared_links_out is not None:
+                for lnk in broken:
+                    cleared_links_out.append({
+                        "cleared_link": lnk,
+                        "note_heading": op.heading or "",
+                        "note_path": op.path or "",
+                    })
+        prospective_valid.append(op)
     validated_ops = prospective_valid
 
     return validated_ops, rejected_ops

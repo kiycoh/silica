@@ -259,6 +259,13 @@ def handle_validate(fsm: "InjectorFSM") -> None:
         fsm.context.setdefault("run_cleared_parents", []).extend(cleared)
         logger.debug("VALIDATE: %d parent reference(s) cleared to hub fallback (tracked as forward refs)", len(cleared))
 
+    # Unresolved inline wikilinks are kept verbatim as dangling forward-refs (no
+    # rejection) and accumulated so later chunks / future runs can anticipate them.
+    cleared_links = res.get("cleared_links", [])
+    if cleared_links:
+        fsm.context.setdefault("run_cleared_links", []).extend(cleared_links)
+        logger.debug("VALIDATE: %d unresolved wikilink(s) kept as forward refs", len(cleared_links))
+
     rejection_rate = res.get("rejection_rate", 0)
     if rejection_rate >= max_rate:
         logger.warning(
