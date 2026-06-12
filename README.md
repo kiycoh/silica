@@ -1,11 +1,12 @@
 # Silica Agent
 
 [![Python 3.11+](https://img.shields.io/badge/python-3.11+-blue.svg)](https://www.python.org/)
-[![Obsidian Native](https://img.shields.io/badge/Obsidian-Native-purple.svg)](https://obsidian.md/)
+[![Filesystem Native](https://img.shields.io/badge/Backend-Filesystem--Native-brightgreen.svg)](#)
+[![Obsidian Compatible](https://img.shields.io/badge/Obsidian-Compatible-purple.svg)](https://obsidian.md/)
 [![License: Apache 2.0](https://img.shields.io/badge/License-Apache_2.0-yellow.svg)](https://opensource.org/licenses/Apache-2.0)
 [![Powered by UV](https://img.shields.io/badge/package--manager-uv-brightgreen.svg)](https://github.com/astral-sh/uv)
 
-> **Silica** is a conversational CLI agent and automated curation engine designed to be **Obsidian-native**. It operates directly on your knowledge base, managing logs, linking notes, and structuring concepts while preserving vault integrity through strict quality gates.
+> **Silica** is a conversational CLI agent and automated curation engine that operates **filesystem-native** — no Obsidian installation required. It manages logs, links notes, and structures concepts directly on your markdown vault while preserving integrity through strict quality gates. The Obsidian desktop app is supported as an optional enhancement (adds version-history rollback and live metadata-cache reads).
 
 ---
 
@@ -29,7 +30,7 @@
 
 ## System Overview
 
-Silica manages personal knowledge bases (Obsidian vaults) using agentic LLMs. It addresses the risk of vault corruption and structural chaos by using safety-hardened tools, strict validation gates, and transaction rollbacks. Instead of direct, unstructured filesystem edits, Silica interacts with the Obsidian desktop app's live cache to resolve links, query metadata, and audit vault graph structures.
+Silica manages personal knowledge bases (Obsidian vaults) using agentic LLMs. It addresses the risk of vault corruption and structural chaos by using safety-hardened tools, strict validation gates, and transaction rollbacks. Silica maintains its own vault index over plain Markdown files to resolve links, query metadata, and audit the vault graph — and can optionally attach to the Obsidian desktop app's live cache (cli backend) for the same operations.
 
 ---
 
@@ -44,7 +45,7 @@ Silica is designed for:
 > ### Key Technical Differentiators
 > * **Graph Validation Gates:** Intercepts write operations to ensure no broken backlinks, unresolved links, or unplanned orphan notes are introduced.
 > * **Transactional Rollbacks:** Captures prior states to execute atomicity-preserving rollbacks (`InverseOp`) if post-write validation fails.
-> * **Dual-Backend Access:** Primary interaction runs through Obsidian's Chrome DevTools Protocol (CDP) CLI for live cache synchronization, with local filesystem (`fs`) fallback.
+> * **Dual-Backend Access:** Default `fs` backend operates directly on the markdown filesystem (headless, no Obsidian required). The optional `cli` backend connects to Obsidian's Chrome DevTools Protocol (CDP) for live cache synchronization and version-history rollback.
 > * **Semantic Deduplication:** Uses cosine similarity of embeddings ($\tau_{\text{high}}$ / $\tau_{\text{low}}$) to automatically route new concepts, patch existing notes, or redirect borderline collisions to a deferred queue.
 > * **Deterministic Autolinking:** Identifies vault note title mentions in newly written text and wraps them in wikilinks (`[[Title]]`), bypassing code blocks, frontmatter, and mathematical formulas.
 > * **Execution Ledgers:** Logs step completion state in a progress ledger, enabling resume-on-failure and content-addressed step caching.
@@ -80,12 +81,12 @@ graph TD
     Router -->|Conversational Loop| REPL[LLM Agent REPL]
     Router -->|Deterministic Run| FSM[Pipeline Orchestrator FSM]
     
-    REPL -->|Call Tool| Toolset[Obsidian-Native Toolset]
+    REPL -->|Call Tool| Toolset[Vault Toolset]
     FSM -->|Step Execution| Toolset
     
     Toolset -->|L0 Driver| Driver{Obsidian Driver}
-    Driver -->|cli backend / CDP| LiveApp[Live Obsidian Electron App]
-    Driver -->|fs backend / Fallback| RawFiles[Filesystem Vault]
+    Driver -->|fs backend / Default| RawFiles[Filesystem Vault]
+    Driver -->|cli backend / Optional CDP| LiveApp[Live Obsidian Electron App]
 ```
 
 ### Pipeline Execution Flow
@@ -109,8 +110,8 @@ graph LR
 ```mermaid
 graph TD
     API[Silica Tools] --> Interface[Driver Protocol]
-    Interface --> CLI[CLI Backend <br> Primary]
-    Interface --> FS[FS Backend <br> Fallback Oracle]
+    Interface --> FS[FS Backend <br> Default]
+    Interface --> CLI[CLI Backend <br> Optional / Obsidian]
     
     CLI -.->|Reads Live Cache & Updates| Obsidian[Obsidian Desktop App]
     FS -.->|Direct Disk Access| Filesystem[Markdown Files]
@@ -140,7 +141,7 @@ Configure the agent via environment variables (e.g., in a `.env` file):
 | `SILICA_PROVIDER` | derived from model prefix, else `lmstudio` | Chat provider preset: `lmstudio` or `openrouter` |
 | `OPENROUTER_API_KEY` | *(none)* | Required when the provider is `openrouter` |
 | `SILICA_VAULT` | *(unset — repo mode: `.silica/` of the current git repo)* | Vault path for the `fs` backend and context |
-| `SILICA_BACKEND` | `cli` | `cli` (live Obsidian desktop via CDP) or `fs` (headless filesystem) |
+| `SILICA_BACKEND` | `fs` | `fs` (default, headless filesystem) or `cli` (live Obsidian desktop via CDP — adds rollback + live cache) |
 | `SILICA_EMBEDDING_MODEL` | `qwen3-embedding-4b` | Embedding model identifier |
 | `SILICA_EMBEDDING_BASE_URL` | `http://localhost:1234/v1` | Embedding API endpoint |
 | `SILICA_EMBEDDING_API_KEY` | `lm-studio` | Embedding API key |
@@ -257,9 +258,9 @@ silica-agent/
 
 We maintain a set of structural patterns and trade-offs documented as Architecture Decision Records (ADRs):
 
-> [!WARNING]
-> **ADR-001: Obsidian CLI Primary Driver (vs. Pure Filesystem)**
-> We interface with Obsidian's live application cache via a Chrome DevTools Protocol (CDP) client rather than editing raw files directly. This requires the Obsidian desktop app to be running, but guarantees 100% graph safety. The workaround is to use the filesystem backend (`SILICA_BACKEND=fs`) for headless execution.
+> [!NOTE]
+> **ADR-001: Filesystem-Native Default (Obsidian as Optional Enhancement)**
+> The default backend (`SILICA_BACKEND=fs`) operates directly on the markdown filesystem — no Obsidian installation required, and fully graph-safe. The optional `cli` backend connects to Obsidian's Chrome DevTools Protocol (CDP) for version-history rollback on patch ops and live metadata-cache reads. Set `SILICA_BACKEND=cli` (and ensure the Obsidian desktop app is running) to opt in.
 
 > [!NOTE]
 > **ADR-002: Hardcoded Code Invariants (vs. System Prompts)**
