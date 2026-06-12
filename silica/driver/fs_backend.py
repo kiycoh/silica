@@ -43,7 +43,6 @@ class ObsidianFSBackend:
         # In-memory index
         self._notes: dict[str, NoteRef] = {}          # path -> NoteRef
         self._notes_by_name: dict[str, list[NoteRef]] = {}  # lower_name -> list of NoteRefs
-        self._links: dict[str, set[str]] = {}         # source_path -> set(target_name)
         self._graph = nx.DiGraph()
         self._unresolved_links: set[tuple[str, str]] = set() # (source_path, raw_target)
         self._mention_index: dict[str, set[str]] = {}        # title_lower -> set(path)
@@ -143,7 +142,6 @@ class ObsidianFSBackend:
         logger.debug("Rebuilding FS graph index...")
         self._notes.clear()
         self._notes_by_name.clear()
-        self._links.clear()
         self._graph.clear()
         self._unresolved_links.clear()
         self._mention_index.clear()
@@ -202,7 +200,6 @@ class ObsidianFSBackend:
             try:
                 content = path.read_text(encoding="utf-8")
                 targets = set(extract_links(content))
-                self._links[rel_path_file] = targets
                 for target in targets:
                     ref = self._resolve_target(target, source_path=rel_path_file)
                     if ref:
@@ -222,12 +219,27 @@ class ObsidianFSBackend:
         self._dirty_paths.clear()
         logger.debug("Indexed %d notes", len(self._notes))
 
+    def _is_inbox_path(self, rel_path: str) -> bool:
+        """True if rel_path is the inbox directory or lives inside it."""
+        from silica.config import CONFIG
+        if not CONFIG.inbox_dir:
+            return False
+        inbox_norm = os.path.normcase(CONFIG.inbox_dir.replace("\\", "/").strip("/"))
+        rel_norm = os.path.normcase(rel_path.replace("\\", "/").strip("/"))
+        return rel_norm == inbox_norm or rel_norm.startswith(inbox_norm + "/")
+
     def _patch_index(self, rel_path: str, content: str | None) -> None:
         """Incrementally update the graph index for a single changed path.
 
         If content is None the note was deleted — remove it from the index.
         Call this instead of setting _needs_reindex = True for single-file writes.
         """
+        # Inbox notes are never indexed (_rebuild_index skips the whole
+        # directory), so a write/move into the inbox must degrade to a
+        # removal — otherwise it strands an entry the next rebuild drops.
+        if content is not None and self._is_inbox_path(rel_path):
+            content = None
+
         # --- remove stale data for this path ---
         if rel_path in self._graph:
             self._graph.remove_edges_from(list(self._graph.out_edges(rel_path)))
@@ -262,7 +274,6 @@ class ObsidianFSBackend:
 
         # --- rebuild edges for this path ---
         targets = set(extract_links(content))
-        self._links[rel_path] = targets
         for target in targets:
             target_ref = self._resolve_target(target, source_path=rel_path)
             if target_ref:
@@ -628,27 +639,123 @@ class ObsidianFSBackend:
         path.write_text(new_content, encoding="utf-8")
 
     def move(self, ref: NoteRef | str, to: str) -> None:
-        """Move/rename a note. 
-        
-        Note: The FS backend currently does NOT update wikilinks like Obsidian does.
-        This is a known limitation compared to the CLI backend.
+        """Move/rename a note, rewriting incoming wikilinks in all referrers.
+
+        Mirrors Obsidian's "automatically update internal links" behaviour:
+
+        - Resolved referrers (predecessors in the graph) have their link text
+          rewritten via the pure kernel ``rewrite_links`` function.
+        - Ambiguity guard: if the old basename is shared by multiple notes and
+          the referrer's name-based resolution points elsewhere, only path-based
+          links in that referrer are rewritten (``rewrite_name_links=False``).
+        - After the physical rename, the in-memory index is updated
+          incrementally for the moved note and every rewritten referrer.
+        - Unresolved-promotion sweep: raw targets that were previously
+          unresolvable but now resolve to the new path are promoted to resolved
+          graph edges via ``_patch_index``.
         """
+        from silica.kernel.rename import rewrite_links
+
+        # Step 1: guarantee a fresh index before reading graph state
+        self._ensure_index()
+
         src = self._resolve_path(ref)
         if not src.exists():
             raise RuntimeError(f"File not found: {src}")
-            
-        dst = self.vault_path / to
+
+        # Step 2: vault-relative paths
+        old_rel = src.relative_to(self.vault_path).as_posix()
+        new_rel = Path(to).as_posix()  # caller always passes vault-relative
+        old_basename = old_rel.rsplit("/", 1)[-1].removesuffix(".md")
+
+        # Step 3: collect referrers BEFORE moving so graph is still accurate
+        referrers: list[str] = list(self._graph.predecessors(old_rel)) if old_rel in self._graph else []
+
+        # Ambiguity guard: check whether the old basename is shared by
+        # multiple notes (i.e. name-based resolution could be ambiguous).
+        basename_is_unique = len(self._notes_by_name.get(old_basename.lower(), [])) <= 1
+
+        # Step 4: physical filesystem move
+        dst = self.vault_path / new_rel
         dst.parent.mkdir(parents=True, exist_ok=True)
-        
-        src_rel = src.relative_to(self.vault_path).as_posix()
         src.rename(dst)
-        if self._needs_reindex:
-            self._rebuild_index()
-        else:
-            dst_content = dst.read_text(encoding="utf-8")
-            self._patch_index(src_rel, None)
-            dst_rel = dst.relative_to(self.vault_path).as_posix()
-            self._patch_index(dst_rel, dst_content)
+
+        # move() is the only multi-file write in this backend.  Everything after
+        # the physical rename (referrer disk-writes, index patches, unresolved
+        # sweep) is wrapped so that ANY failure sets _needs_reindex=True before
+        # re-raising.  This forces a clean full rebuild on the next
+        # _ensure_index(), matching the backend's existing fallback convention
+        # (see restore()).  The alternative — leaving the in-memory index in a
+        # torn state — would silently corrupt subsequent operations in the same
+        # session (e.g. the rest of an /organize batch).
+        try:
+            # Step 5a: rewrite link text on disk for referrers that need it.
+            # Also collect updated content for every referrer so we can re-patch
+            # the index after step 6 (which deletes the old node and breaks edges).
+            referrer_updates: list[tuple[str, str]] = []  # (rel_path, content_to_index)
+
+            for referrer_rel in referrers:
+                referrer_path = self.vault_path / referrer_rel
+                if not referrer_path.exists():
+                    continue
+                referrer_content = referrer_path.read_text(encoding="utf-8")
+
+                # Determine whether name-based rewrites are safe for this referrer
+                if basename_is_unique:
+                    allow_name = True
+                else:
+                    # Resolve where [[old_basename]] points from this referrer's
+                    # perspective — only allow name-based rewrite if it resolves
+                    # to the moved note (not some other same-named note).
+                    resolved = self._resolve_target(old_basename, source_path=referrer_rel)
+                    allow_name = resolved is not None and resolved.path == old_rel
+
+                new_content, n = rewrite_links(
+                    referrer_content, old_rel, new_rel,
+                    rewrite_name_links=allow_name,
+                )
+                if n > 0:
+                    # Write directly — avoids re-entrant overwrite() logic
+                    referrer_path.write_text(new_content, encoding="utf-8")
+                    referrer_updates.append((referrer_rel, new_content))
+                else:
+                    # Even if content is unchanged, we must re-patch after the old
+                    # node is removed (step 6) so that name-based edges that still
+                    # resolve correctly are re-established in the graph.
+                    referrer_updates.append((referrer_rel, referrer_content))
+
+            # Step 6: patch index for the moved note itself first, so that when
+            # referrer edges are rebuilt in step 5b, _resolve_target() can already
+            # see the new path.
+            moved_content = dst.read_text(encoding="utf-8")
+            self._patch_index(old_rel, None)
+            self._patch_index(new_rel, moved_content)
+
+            # Step 5b: re-index every referrer now that new_rel is registered.
+            # This rebuilds their outgoing edges (including name-based links that
+            # now resolve to new_rel) without requiring any file content change.
+            for referrer_rel, content in referrer_updates:
+                self._patch_index(referrer_rel, content)
+
+            # Step 7: unresolved-promotion sweep — targets that were previously
+            # unresolvable may now resolve because the new name/path matches them.
+            # Collect affected sources first, then patch (avoid mutating while iterating).
+            sources_to_promote: list[tuple[str, str]] = []
+            for source, target in self._unresolved_links:
+                resolved = self._resolve_target(target, source_path=source)
+                if resolved is not None and resolved.path == new_rel:
+                    sources_to_promote.append((source, target))
+            for source, _target in sources_to_promote:
+                promote_path = self.vault_path / source
+                if promote_path.exists():
+                    promote_content = promote_path.read_text(encoding="utf-8")
+                    self._patch_index(source, promote_content)
+
+        except Exception:
+            # Force a full rebuild on next _ensure_index() so no torn state
+            # persists into subsequent operations.
+            self._needs_reindex = True
+            raise
 
     def delete(self, ref: NoteRef | str) -> None:
         """Delete a note from the vault."""
@@ -698,11 +805,6 @@ class ObsidianFSBackend:
                     name = file.removesuffix(".md")
                     results.append(NoteRef(name=name, path=rel_p))
         return results
-
-    def base_query(self, base: str, view: str) -> list[dict]:
-        """Query an Obsidian Base (not implemented in FS backend)."""
-        logger.warning("base_query not implemented in FS backend")
-        return []
 
     # ------------------------------------------------------------------
     # Transactionality
