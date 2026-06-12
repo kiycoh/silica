@@ -115,6 +115,48 @@ class TestRunWizard:
         assert rc == 0
         assert "SILICA_VAULT" not in env_path.read_text()
 
+    def test_repo_mode_writes_vault_manifest(self, monkeypatch, tmp_path):
+        import silica.onboarding.wizard as wizard
+
+        env_path = tmp_path / ".env"
+
+        monkeypatch.setattr(wizard.gitstate, "find_repo_root", lambda p: tmp_path)
+        monkeypatch.setattr(wizard, "run_checks", lambda cfg: [])
+        monkeypatch.setattr(wizard.os, "environ", dict(os.environ))
+
+        answers = [
+            "",            # repo mode? → default y
+            "",            # backend → fs
+            "",            # provider → lmstudio
+            "test-model",  # model
+            "skip",        # embeddings
+            "",            # write → y
+        ]
+        rc = wizard.run_wizard(input_fn=self._scripted(answers), env_path=env_path)
+
+        assert rc == 0
+        manifest = tmp_path / ".silica" / "vault.yaml"
+        assert manifest.is_file()
+        text = manifest.read_text(encoding="utf-8")
+        assert "sources:" in text and "code" in text and "overlay: codebase" in text
+
+    def test_repo_mode_preserves_existing_manifest(self, monkeypatch, tmp_path):
+        import silica.onboarding.wizard as wizard
+
+        (tmp_path / ".silica").mkdir(parents=True)
+        (tmp_path / ".silica" / "vault.yaml").write_text("sources: [prose]\n", encoding="utf-8")
+        env_path = tmp_path / ".env"
+
+        monkeypatch.setattr(wizard.gitstate, "find_repo_root", lambda p: tmp_path)
+        monkeypatch.setattr(wizard, "run_checks", lambda cfg: [])
+        monkeypatch.setattr(wizard.os, "environ", dict(os.environ))
+
+        answers = ["", "", "", "test-model", "skip", ""]
+        rc = wizard.run_wizard(input_fn=self._scripted(answers), env_path=env_path)
+
+        assert rc == 0
+        assert (tmp_path / ".silica" / "vault.yaml").read_text(encoding="utf-8") == "sources: [prose]\n"
+
     def test_eof_mid_wizard_aborts_cleanly(self, monkeypatch, tmp_path):
         import silica.onboarding.wizard as wizard
 

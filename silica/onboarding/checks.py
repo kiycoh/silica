@@ -156,11 +156,37 @@ def check_embeddings(config: SilicaConfig) -> CheckResult:
     )
 
 
+def check_manifest(config: SilicaConfig) -> CheckResult:
+    from silica.kernel.vault_manifest import MANIFEST_REL, load_manifest
+    from silica.sources.registry import ALL_ADAPTERS
+
+    vault = config.vault_path.strip()
+    if not vault:
+        return CheckResult("vault manifest", "ok", "no vault — defaults apply")
+    path = Path(vault) / MANIFEST_REL
+    if not path.is_file():
+        return CheckResult("vault manifest", "ok", "absent — retro-compatible defaults")
+    m = load_manifest(vault)
+    known = {a.name for a in ALL_ADAPTERS}
+    unknown = [s for s in m.sources if s not in known]
+    if unknown:
+        return CheckResult(
+            "vault manifest", "warn",
+            f"unknown source(s) {unknown} in {MANIFEST_REL}",
+            f"known sources: {sorted(known)}",
+        )
+    detail = f"sources={list(m.sources)}"
+    if m.overlay:
+        detail += f", overlay={m.overlay}"
+    return CheckResult("vault manifest", "ok", detail)
+
+
 def run_checks(config: SilicaConfig) -> list[CheckResult]:
     return [
         check_chat_model(config),
         check_chat_endpoint(config),
         check_vault(config),
+        check_manifest(config),
         check_obsidian_backend(config),
         check_embeddings(config),
     ]

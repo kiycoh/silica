@@ -231,8 +231,28 @@ class TestCheckEmbeddings:
         assert r.status == "ok"
 
 
+def test_check_manifest_absent_is_ok(tmp_path):
+    from silica.config import SilicaConfig
+    from silica.onboarding.checks import check_manifest
+
+    cfg = SilicaConfig()
+    cfg.vault_path = str(tmp_path)
+    assert check_manifest(cfg).status == "ok"
+
+
+def test_check_manifest_unknown_source_warns(tmp_path):
+    from silica.config import SilicaConfig
+    from silica.onboarding.checks import check_manifest
+
+    (tmp_path / "vault.yaml").write_text("sources: [prose, zotero]\n", encoding="utf-8")
+    cfg = SilicaConfig()
+    cfg.vault_path = str(tmp_path)
+    res = check_manifest(cfg)
+    assert res.status == "warn" and "zotero" in res.detail
+
+
 class TestAggregation:
-    def test_run_checks_returns_all_five(self, monkeypatch, tmp_path):
+    def test_run_checks_returns_all_six(self, monkeypatch, tmp_path):
         import silica.onboarding.checks as checks
 
         def boom(url, timeout):
@@ -242,7 +262,8 @@ class TestAggregation:
         monkeypatch.setattr(checks.gitstate, "find_repo_root", lambda p: None)
         results = checks.run_checks(_cfg(vault_path=str(tmp_path)))
         assert [r.name for r in results] == [
-            "chat model", "chat endpoint", "vault", "obsidian backend", "embeddings",
+            "chat model", "chat endpoint", "vault", "vault manifest",
+            "obsidian backend", "embeddings",
         ]
 
     def test_has_failures(self):

@@ -8,6 +8,7 @@ from typing import Callable
 
 from silica.config import SilicaConfig
 from silica.kernel import gitstate
+from silica.kernel.vault_manifest import MANIFEST_REL
 from silica.onboarding.checks import has_failures, render_report, run_checks
 from silica.ui.console import CONSOLE
 
@@ -71,6 +72,13 @@ def _run_wizard_inner(
         if answer.lower() in ("y", "yes"):
             use_repo_mode = True
             repo_vault.mkdir(parents=True, exist_ok=True)
+            manifest = repo_vault / MANIFEST_REL
+            if not manifest.exists():
+                # Declared capabilities (ADR-0014): repo-mode vault wants the
+                # codebase overlay and the code source active.
+                manifest.write_text(
+                    "sources: [prose, code]\noverlay: codebase\n", encoding="utf-8"
+                )
     if not use_repo_mode:
         while True:
             path = _ask(input_fn, "Vault path (existing directory)")
