@@ -12,6 +12,7 @@ from __future__ import annotations
 
 from silica.driver import DRIVER
 from silica.kernel import templates
+from silica.kernel.merge import three_way_merge
 from silica.kernel.ops import Op, OpType, FailedOp, BulkResult
 
 
@@ -71,12 +72,30 @@ def _execute_patch(op: Op, path: str) -> dict:
 
 
 def _execute_overwrite(op: Op, path: str) -> dict:
-    """Rewrite a whole note. Requires content."""
+    """Rewrite a whole note. Requires content.
+
+    When the op carries base_content (the note as it was at op-build time) and
+    the note on disk has changed since, the incoming content is written with a
+    conflict callout prepended instead of stomping silently (ADR-0007 soft
+    failure; charter UC6).
+    """
     content = op.content
     if content is None:
         raise ValueError("Missing 'content' for overwrite operation")
+
+    had_conflict = False
+    if op.base_content is not None:
+        try:
+            current: str | None = DRIVER.read_note(path).content
+        except Exception:
+            current = None
+        content, had_conflict = three_way_merge(op.base_content, current, content)
+
     DRIVER.overwrite(path, content)
-    return {"path": path, "op": "overwrite", "success": True}
+    result = {"path": path, "op": "overwrite", "success": True}
+    if had_conflict:
+        result["conflict"] = True
+    return result
 
 
 def _execute_delete(op: Op, path: str) -> dict:

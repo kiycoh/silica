@@ -32,6 +32,7 @@ class Op(BaseModel):
     snippet: str = ""                   # distilled body (write / patch)
     hub: str | None = None              # [[Hub]] link required for write ops
     content: str | None = None          # full body (overwrite only)
+    base_content: str | None = None     # overwrite only: note content at op-build time; enables 3-way conflict detection
     tags: list[str] | None = None
     related: list[str] | None = None
     concepts: list[str] | None = None  # #9: normalized concept phrases for the co-occurrence graph
