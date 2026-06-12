@@ -9,6 +9,7 @@ preserved but gated behind the `VAULT_PATH` environment variable.
 Path-as-identity: with path-keyed snapshots, duplicate basenames (A/Cell,
 B/Cell) produce distinct keys and are no longer excluded from assertions.
 """
+import inspect
 import os
 import unicodedata
 from pathlib import Path
@@ -16,8 +17,172 @@ from collections import Counter
 
 import pytest
 
+from silica.driver.base import ObsidianDriver
 from silica.driver.fs_backend import ObsidianFSBackend
+from silica.driver.cli_backend import ObsidianCLIBackend
 from tests.fixtures.vault_factory import SPEC, _canonical
+
+
+# ---------------------------------------------------------------------------
+# Structural parity tests — always run, no env gating, no I/O
+# ---------------------------------------------------------------------------
+
+def _protocol_method_names() -> set[str]:
+    """Return the set of public method names declared in ObsidianDriver.
+
+    Uses the class __dict__ directly (not inspect.getmembers) to limit scope
+    to methods actually declared on the protocol, not inherited helpers.
+    On Python >= 3.12, __protocol_attrs__ would be authoritative; on 3.11 we
+    derive the same set: callables not starting with '_'.
+    """
+    if hasattr(ObsidianDriver, "__protocol_attrs__"):
+        # Future-proof: use the canonical attribute when available.
+        return set(ObsidianDriver.__protocol_attrs__)
+    return {
+        name
+        for name, val in ObsidianDriver.__dict__.items()
+        if callable(val) and not name.startswith("_")
+    }
+
+
+def _public_methods(cls) -> set[str]:
+    """Return the public callable method names defined on cls (not inherited)."""
+    return {
+        name
+        for name, val in inspect.getmembers(cls, predicate=inspect.isfunction)
+        if not name.startswith("_")
+    }
+
+
+class TestDriverStructuralParity:
+    """Structural parity checks: no Obsidian / no I/O required.
+
+    These tests guard against three categories of protocol drift:
+      1. A backend loses a protocol method (forward drift).
+      2. A method present on BOTH backends goes undeclared in the protocol
+         (reverse drift — silent protocol widening).
+      3. A backend method's parameter names diverge from the protocol
+         (signature drift — catches renamed args without type errors).
+    """
+
+    # ------------------------------------------------------------------
+    # Test 1: isinstance / protocol satisfaction
+    # ------------------------------------------------------------------
+
+    def test_fs_backend_satisfies_protocol(self, tmp_path):
+        """ObsidianFSBackend instantiates cheaply and satisfies ObsidianDriver."""
+        backend = ObsidianFSBackend(vault_path=str(tmp_path))
+        assert isinstance(backend, ObsidianDriver), (
+            "ObsidianFSBackend does not satisfy the ObsidianDriver protocol. "
+            "A method may be missing or have the wrong signature."
+        )
+
+    def test_cli_backend_satisfies_protocol(self):
+        """ObsidianCLIBackend instantiates cheaply and satisfies ObsidianDriver."""
+        backend = ObsidianCLIBackend(vault_name="")
+        assert isinstance(backend, ObsidianDriver), (
+            "ObsidianCLIBackend does not satisfy the ObsidianDriver protocol. "
+            "A method may be missing or have the wrong signature."
+        )
+
+    # ------------------------------------------------------------------
+    # Test 2: forward drift — protocol methods present on each backend
+    # ------------------------------------------------------------------
+
+    def test_fs_backend_implements_all_protocol_methods(self, tmp_path):
+        """Every protocol method exists as a callable on ObsidianFSBackend."""
+        backend = ObsidianFSBackend(vault_path=str(tmp_path))
+        proto_methods = _protocol_method_names()
+        missing = [
+            m for m in sorted(proto_methods)
+            if not (hasattr(backend, m) and callable(getattr(backend, m)))
+        ]
+        assert not missing, (
+            f"ObsidianFSBackend is missing protocol methods: {missing}"
+        )
+
+    def test_cli_backend_implements_all_protocol_methods(self):
+        """Every protocol method exists as a callable on ObsidianCLIBackend."""
+        backend = ObsidianCLIBackend(vault_name="")
+        proto_methods = _protocol_method_names()
+        missing = [
+            m for m in sorted(proto_methods)
+            if not (hasattr(backend, m) and callable(getattr(backend, m)))
+        ]
+        assert not missing, (
+            f"ObsidianCLIBackend is missing protocol methods: {missing}"
+        )
+
+    # ------------------------------------------------------------------
+    # Test 3: reverse drift — public methods on BOTH backends declared in protocol
+    # ------------------------------------------------------------------
+
+    def test_no_undeclared_shared_public_methods(self):
+        """Public methods present on BOTH backends must be declared in the protocol.
+
+        A method on both backends but absent from the protocol is silent drift:
+        callers cannot rely on it through the Driver abstraction, and it should
+        either be added to the protocol or made private (prefixed with '_').
+        Backend-specific private helpers (prefixed '_') are excluded.
+        """
+        proto_methods = _protocol_method_names()
+        fs_public = _public_methods(ObsidianFSBackend)
+        cli_public = _public_methods(ObsidianCLIBackend)
+
+        # Methods on BOTH backends = shared domain surface
+        shared = fs_public & cli_public
+
+        # Anything shared but not in the protocol = drift
+        undeclared = shared - proto_methods
+        assert not undeclared, (
+            f"These public methods exist on BOTH backends but are NOT declared "
+            f"in ObsidianDriver: {sorted(undeclared)}. "
+            f"Either add them to the protocol or make them private (prefix with '_')."
+        )
+
+    # ------------------------------------------------------------------
+    # Test 4: signature drift — parameter names must match the protocol
+    # ------------------------------------------------------------------
+
+    def test_fs_backend_parameter_names_match_protocol(self, tmp_path):
+        """ObsidianFSBackend method parameter names match the protocol's."""
+        proto_methods = _protocol_method_names()
+        mismatches = []
+        for method_name in sorted(proto_methods):
+            proto_params = list(
+                inspect.signature(getattr(ObsidianDriver, method_name)).parameters.keys()
+            )
+            fs_params = list(
+                inspect.signature(getattr(ObsidianFSBackend, method_name)).parameters.keys()
+            )
+            if proto_params != fs_params:
+                mismatches.append(
+                    f"{method_name}: protocol={proto_params} fs={fs_params}"
+                )
+        assert not mismatches, (
+            "ObsidianFSBackend method signatures diverge from protocol:\n"
+            + "\n".join(f"  {m}" for m in mismatches)
+        )
+
+    def test_cli_backend_parameter_names_match_protocol(self):
+        """ObsidianCLIBackend method parameter names match the protocol's."""
+        proto_methods = _protocol_method_names()
+        mismatches = []
+        for method_name in sorted(proto_methods):
+            proto_params = list(
+                inspect.signature(getattr(ObsidianDriver, method_name)).parameters.keys()
+            )
+            cli_params = list(
+                inspect.signature(getattr(ObsidianCLIBackend, method_name)).parameters.keys()
+            )
+            if proto_params != cli_params:
+                mismatches.append(
+                    f"{method_name}: protocol={proto_params} cli={cli_params}"
+                )
+        assert not mismatches, (
+            "ObsidianCLIBackend method signatures diverge from protocol:\n"
+            + "\n".join(f"  {m}" for m in mismatches)
+        )
 
 
 # ---------------------------------------------------------------------------

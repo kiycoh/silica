@@ -232,15 +232,6 @@ class ObsidianDriver(Protocol):
         """List all files in the inbox directory."""
         ...
 
-    def base_query(self, base: str, view: str) -> list[dict]:
-        """Query an Obsidian Base (DB on frontmatter).
-
-        CAPABILITY GAP: CLI-backend only. The FS backend has no Bases engine
-        and returns [] (logged). Callers must treat an empty result as
-        "unavailable on this backend", not "no matches".
-        """
-        ...
-
     # -- graph data (in-process, avoids O(N) subprocess calls) -------------
 
     def graph_data(self, folder: str = "") -> tuple[dict, set, Any]:

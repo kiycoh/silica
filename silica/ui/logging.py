@@ -75,10 +75,8 @@ FRIENDLY_TEMPLATES = {
         "Distiller provider call failed, falling back to standard litellm: {0}",
     "Failed to index %s: %s":
         "Failed to index note {0}: {1}",
-    "base_query not implemented in FS backend":
-        "Base query is not implemented in the File System backend",
-    "No history available for %s":
-        "No history available for {0}",
+    "No history available for %s: %s":
+        "No version history available for {0} (reason: {1})",
     "Convergence guard: tool '%s' with args %s failed consecutively. Injecting warning message.":
         "Loop detected: tool '{0}' with args {1} failed consecutively. Injected warning message.",
     "Agent loop hit max iterations (%d)":

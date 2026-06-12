@@ -1046,10 +1046,6 @@ class ObsidianCLIBackend:
                 results.append(NoteRef(name=name, path=line))
         return results
 
-    def base_query(self, base: str, view: str) -> list[dict]:
-        """Query an Obsidian Base."""
-        return self._run_json("base:query", f"file={base}", f"view={view}")
-
     # ------------------------------------------------------------------
     # Transactionality
     # ------------------------------------------------------------------

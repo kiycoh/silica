@@ -92,6 +92,24 @@ def test_human_friendly_formatter_non_silica_fallback():
     assert "⚙" in formatted
     assert "Starting new HTTPS connection (1): api.openai.com" in formatted
 
+def test_human_friendly_formatter_no_history_matches_real_call_site():
+    # The only call site (cli_backend.restore_version) logs with TWO
+    # placeholders: "No history available for %s: %s" — the template key
+    # must match it or the mapping is dead code.
+    formatter = HumanFriendlyFormatter()
+    record = logging.LogRecord(
+        name="silica.driver.cli_backend",
+        level=logging.WARNING,
+        pathname="cli_backend.py",
+        lineno=1076,
+        msg="No history available for %s: %s",
+        args=("note.md", "boom"),
+        exc_info=None,
+    )
+    formatted = formatter.format(record)
+    assert "No version history available for note.md (reason: boom)" in formatted
+
+
 def test_human_friendly_formatter_bad_args_graceful_fallback():
     formatter = HumanFriendlyFormatter()
     # Template expects 2 args but we only pass 1 (which causes format to fail)

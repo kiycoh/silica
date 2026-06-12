@@ -86,8 +86,21 @@ def test_fs_create_patches_index(tmp_path):
 
     ref = backend.create("test.md", "some content with [[Missing]]")
     assert ref.path == "test.md"
-    # _patch_index sets _links atomically
-    assert "Missing" in backend._links.get("test.md", set())
+    # _patch_index registered the new note and its (unresolved) link atomically
+    assert "test.md" in backend._notes
+    assert ("test.md", "Missing") in backend._unresolved_links
+
+
+def test_fs_create_into_inbox_not_indexed(tmp_path, monkeypatch):
+    """_patch_index must skip inbox paths, mirroring _rebuild_index."""
+    from silica.config import CONFIG
+    monkeypatch.setattr(CONFIG, "inbox_dir", "Inbox")
+    backend = ObsidianFSBackend(vault_path=str(tmp_path))
+    backend._rebuild_index()
+
+    backend.create("Inbox/clip.md", "raw clipped content")
+    assert "Inbox/clip.md" not in backend._notes
+    assert "Inbox/clip.md" not in backend._graph
 
 
 # ---------------------------------------------------------------------------
