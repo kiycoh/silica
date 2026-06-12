@@ -102,6 +102,36 @@ def rebadge(vault: Path | str, note_path: str, repo_root: Path | str | None = No
     return head
 
 
+def note_is_stale(
+    vault: Path | str, note_path: str, repo_root: Path | str | None = None
+) -> bool | None:
+    """Per-note staleness: True (stale), False (fresh), None (unknown — no
+    git, unreadable note, no code_ref/documents, or no history for any
+    documented path). Same semantics as one stale_docs() iteration."""
+    vault = Path(vault)
+    root = Path(repo_root) if repo_root else gitstate.find_repo_root(vault)
+    if root is None:
+        return None
+    try:
+        content = (vault / note_path).read_text(encoding="utf-8")
+    except OSError:
+        return None
+    data, _, _ = frontmatter.split(content)
+    recorded = str((data or {}).get("code_ref") or "").strip()
+    docs = _documents_of(data or {})
+    if not recorded or not docs:
+        return None
+    known = False
+    for code_path in docs:
+        latest = gitstate.log_for_path(root, code_path, limit=1)
+        if not latest:
+            continue  # path has no history → contributes nothing
+        known = True
+        if latest[0].sha != recorded:
+            return True
+    return False if known else None
+
+
 def stale_count(vault: Path | str) -> int:
     """Count of stale (note, path) pairs. Soft-zero on any failure / no git."""
     try:

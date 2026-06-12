@@ -223,10 +223,13 @@ def _handle_direct_shortcut(raw_input: str, messages: list[dict]) -> bool:
             reset_driver()
             from silica.kernel.overlay import reset_overlay_cache
             reset_overlay_cache()  # overlay is vault-scoped; don't serve the old vault's
+            from silica.kernel.vault_manifest import apply_manifest_to_config, reset_manifest_cache
+            reset_manifest_cache()  # manifest is vault-scoped too
+            apply_manifest_to_config()
             CONSOLE.print(f"  Vault → [bold]{resolved}[/] (backend: {CONFIG.backend})")
             CONSOLE.print(
-                "  [yellow]Embed/co-occurrence indexes are global and now stale "
-                "for this vault — run /embed --force and /cooccur --force.[/]"
+                "  [dim]Index namespace follows the vault — run /embed and /cooccur "
+                "if this vault has not been indexed yet.[/]"
             )
             return True
         vault = CONFIG.vault_path or "(not configured)"
@@ -515,28 +518,27 @@ def _expand_workflow_shortcut(user_input: str) -> str | None:
         if not files:
             return "Error: /ingest requires at least one file path. Usage: /ingest <file...> [--target=DIR]"
 
-        from silica.kernel import codeast
-        from silica.tools import TOOLS
+        from silica.kernel.vault_manifest import get_active_manifest
+        from silica.sources.registry import adapter_for, stage
 
-        md_files = [f for f in files if f.lower().endswith((".md", ".txt"))]
-        code_files = [f for f in files if f not in md_files and codeast.language_for(f) is not None]
-        skipped = [f for f in files if f not in md_files and f not in code_files]
-
-        for f in skipped:
-            CONSOLE.print(f"  [yellow]Skipped {f}: unsupported file type.[/]")
-        for f in code_files:
-            result = TOOLS["silica_document"].run(path=f)
-            try:
-                parsed = json.loads(result)
-            except Exception:
-                parsed = {}
-            if parsed.get("status") == "ok":
+        enabled = get_active_manifest().sources
+        md_files: list[str] = []
+        for f in files:
+            adapter = adapter_for(f, enabled=enabled)
+            if adapter is None:
+                CONSOLE.print(f"  [yellow]Skipped {f}: no enabled source handles this file type.[/]")
+                continue
+            result = stage(adapter, f)
+            if result["status"] == "distill":
+                md_files.append(f)
+            elif result["status"] == "ok":
+                code_ref = result["meta"].get("code_ref", "")
                 CONSOLE.print(
-                    f"  Staged [bold]{parsed['note_path']}[/] "
-                    f"(code_ref {parsed.get('code_ref', '')[:8]}). Refine via the inbox."
+                    f"  Staged [bold]{result['note_path']}[/] "
+                    f"(code_ref {code_ref[:8]}). Refine via the inbox."
                 )
             else:
-                CONSOLE.print(f"  [yellow]{f}: {parsed.get('message', result)}[/]")
+                CONSOLE.print(f"  [yellow]{f}: {result.get('message', '')}[/]")
 
         if not md_files:
             return ""  # fully handled inline — sentinel: nothing for the agent
@@ -808,6 +810,8 @@ def main():
     if code is not None:
         sys.exit(code)
     _activate_repo_mode()
+    from silica.kernel.vault_manifest import apply_manifest_to_config
+    apply_manifest_to_config()
     debug_mode = "--verbose" in sys.argv or "-v" in sys.argv or CONFIG.debug_logging
     _setup_logging(debug=debug_mode)
 

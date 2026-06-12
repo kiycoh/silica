@@ -100,3 +100,48 @@ def test_stale_count_zero_without_git(tmp_path):
     vault.mkdir()
     (vault / "m.md").write_text("---\ndocuments:\n  - x.py\ncode_ref: abc\n---\n\nb\n", encoding="utf-8")
     assert codedocs.stale_count(vault) == 0  # not a repo → soft zero
+
+
+# ---------------------------------------------------------------------------
+# note_is_stale tests
+# ---------------------------------------------------------------------------
+
+from silica.kernel.codedocs import note_is_stale
+
+
+def _write_note_single(vault, name, documents, code_ref):
+    (vault / name).write_text(
+        "---\ndocuments:\n  - " + documents + f"\ncode_ref: {code_ref}\n---\n\n# n\n",
+        encoding="utf-8",
+    )
+
+
+def test_note_is_stale_fresh_and_stale(tmp_path):
+    import subprocess
+    from silica.kernel import gitstate
+
+    subprocess.run(["git", "init", "-q"], cwd=tmp_path, check=True)
+    subprocess.run(["git", "config", "user.email", "t@t.t"], cwd=tmp_path, check=True)
+    subprocess.run(["git", "config", "user.name", "t"], cwd=tmp_path, check=True)
+    (tmp_path / "m.py").write_text("x = 1\n", encoding="utf-8")
+    subprocess.run(["git", "add", "-A"], cwd=tmp_path, check=True)
+    subprocess.run(["git", "commit", "-q", "-m", "init"], cwd=tmp_path, check=True)
+    vault = tmp_path / ".silica"
+    vault.mkdir()
+    head = gitstate.head_ref(tmp_path)
+
+    _write_note_single(vault, "n.md", "m.py", head)
+    assert note_is_stale(vault, "n.md") is False
+
+    (tmp_path / "m.py").write_text("x = 2\n", encoding="utf-8")
+    subprocess.run(["git", "add", "-A"], cwd=tmp_path, check=True)
+    subprocess.run(["git", "commit", "-q", "-m", "change"], cwd=tmp_path, check=True)
+    assert note_is_stale(vault, "n.md") is True
+
+
+def test_note_is_stale_unknown_cases(tmp_path):
+    vault = tmp_path / "v"
+    vault.mkdir()
+    (vault / "plain.md").write_text("# no frontmatter\n", encoding="utf-8")
+    assert note_is_stale(vault, "plain.md") is None      # no git repo
+    assert note_is_stale(vault, "missing.md") is None    # unreadable note

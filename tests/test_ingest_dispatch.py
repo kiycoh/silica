@@ -12,6 +12,14 @@ from silica.cli import _expand_workflow_shortcut
 from silica.config import CONFIG
 
 
+@pytest.fixture(autouse=True)
+def _reset_manifest_cache():
+    from silica.kernel.vault_manifest import reset_manifest_cache
+    reset_manifest_cache()
+    yield
+    reset_manifest_cache()
+
+
 def test_ingest_md_expands_to_injector_message():
     msg = _expand_workflow_shortcut("/ingest Inbox/a.md --target=Concepts/AI")
     assert msg is not None and "silica_run_injector" in msg
