@@ -1,8 +1,8 @@
-"""Tests for the WarningLedger (silica/planner/warnings.py)."""
+"""Tests for the WarningLedger (silica/router/warning_ledger.py)."""
 import json
 import threading
 
-from silica.planner.warnings import WarningLedger
+from silica.router.warning_ledger import WarningLedger
 
 
 def test_add_and_dedup_by_path_kind():
