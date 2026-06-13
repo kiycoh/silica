@@ -69,22 +69,11 @@ def silica_ledger_digest(run_id: str = "") -> dict[str, Any]:
     Loads TaskLedger (immutable plan) and ProgressLedger (execution state) from
     ~/.silica/runs/<run_id>/. Pass run_id="" to inspect the most recently saved run.
     """
-    from silica.kernel.progress import ProgressLedger, _RUNS_DIR
+    from silica.kernel.progress import ProgressLedger, latest_run_id
 
-    resolved_id = run_id.strip()
+    resolved_id = run_id.strip() or (latest_run_id() or "")
     if not resolved_id:
-        # Find the most recently modified run directory
-        runs_root = _RUNS_DIR
-        if not runs_root.exists():
-            return {"error": "No runs found in ~/.silica/runs/"}
-        candidates = [
-            d for d in runs_root.iterdir()
-            if d.is_dir() and (d / "ledger.json").exists()
-        ]
-        if not candidates:
-            return {"error": "No runs found in ~/.silica/runs/"}
-        latest = max(candidates, key=lambda d: d.stat().st_mtime)
-        resolved_id = latest.name
+        return {"error": "No runs found in ~/.silica/runs/"}
 
     try:
         ledger = ProgressLedger.load(resolved_id)

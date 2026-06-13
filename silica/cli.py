@@ -592,7 +592,7 @@ def _expand_workflow_shortcut(user_input: str) -> str | None:
         folder = next((p for p in args if not p.startswith("-")), "")
 
         from silica.driver import DRIVER
-        from silica.kernel.progress import PlanStep, ProgressLedger, TaskLedger
+        from silica.kernel.progress import PlanStep, Run
         from pathlib import Path
         import orjson
 
@@ -600,12 +600,6 @@ def _expand_workflow_shortcut(user_input: str) -> str | None:
         paths = [r.path for r in refs if r.path.startswith(folder) or r.path == folder]
         if not paths:
             return f"Error: no files found in '{folder}'."
-
-        progress = ProgressLedger.new(mode="analyst", inputs={"scope": folder or "vault"})
-        run_id = progress.run_id
-        run_dir = Path.home() / ".silica" / "runs" / run_id
-        payloads_dir = run_dir / "payloads"
-        payloads_dir.mkdir(parents=True, exist_ok=True)
 
         chunks = []
         cur_chunk = []
@@ -624,29 +618,26 @@ def _expand_workflow_shortcut(user_input: str) -> str | None:
 
         cap = "silica_refine_batch" if cmd == "/refine" else "silica_enrich_batch"
 
+        run = Run.new(
+            mode="analyst",
+            user_request=f"{cmd.strip('/')} {folder or 'vault'}",
+            checkpoints=[PlanStep(id="remediate", kind="gate", objective=cap)],
+            inputs={"scope": folder or "vault"},
+        )
+        payloads_dir = run.payloads_dir
+
         for i, chunk in enumerate(chunks):
-            task = progress.add_task(cap)
+            task = run.progress.add_task(cap)
             payload = {"note_paths": chunk, "_reason": f"Batch {i+1} of {len(chunks)}"}
             payload_path = str(payloads_dir / f"{task.id}.json")
             Path(payload_path).write_bytes(orjson.dumps(payload, option=orjson.OPT_INDENT_2))
             task.input_ref = payload_path
 
-        progress.save()
+        run.save()
 
         from silica.ui.renderer import emit_batch_event
         from silica.agent.events import BatchRunStartEvent
-        emit_batch_event(BatchRunStartEvent(run_id=run_id, kind=cmd.strip("/"), label=folder or "vault", total=len(chunks)))
-
-        tl = TaskLedger.new(
-            run_id=run_id,
-            user_request=f"{cmd.strip('/')} {folder or 'vault'}",
-            checkpoints=[PlanStep(id="remediate", kind="gate", objective=cap)],
-            facts=[]
-        )
-        try:
-            tl.save()
-        except Exception:
-            pass
+        emit_batch_event(BatchRunStartEvent(run_id=run.run_id, kind=cmd.strip("/"), label=folder or "vault", total=len(chunks)))
 
         return f"A ledger for {cmd} has been created with {len(chunks)} chunk(s) across {len(paths)} note(s). Use `silica_ledger_next` to execute them."
 

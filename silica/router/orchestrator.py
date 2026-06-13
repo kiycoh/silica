@@ -226,32 +226,6 @@ class InjectorFSM(BaseFSM[InjectorState]):
         self._file_chunks: list[dict] = []  # [{"source_file": str, "chunks": [...]}, ...]
         self._chunk_flat_to_fi_ci: dict[int, tuple[int, int]] = {}  # flat_idx → (file_idx, chunk_idx)
 
-        # Shadow ProgressLedger — mirrors FSM state on disk; FSM remains canonical
-        from silica.kernel.progress import ProgressLedger, RunManifest
-        _resumed = False
-        if resume_run_id:
-            try:
-                self.progress = ProgressLedger.load(resume_run_id)
-                logger.info("Resuming run %s", resume_run_id)
-                _resumed = True
-            except Exception as _re:
-                logger.warning("Failed to load run '%s', starting fresh: %s", resume_run_id, _re)
-        if not _resumed:
-            self.progress = ProgressLedger.new(
-                mode="inject",
-                inputs={
-                    "inbox_files": self.inbox_files,
-                    "inbox_file": self.inbox_file,
-                    "target_dir": target_dir,
-                    "hub": hub or "",
-                },
-            )
-            self.progress.add_task("recon",   task_id="recon")
-            self.progress.add_task("payload", task_id="payload", depends_on=["recon"])
-
-        # RunManifest — short-term memory of what was injected in this run
-        self.manifest = RunManifest(run_id=self.progress.run_id)
-
         # S3.3: Load the recipe for dynamic configuration
         from silica.router.recipe_parser import load_recipe
         try:
@@ -285,6 +259,40 @@ class InjectorFSM(BaseFSM[InjectorState]):
                     { "id": "rollback",     "kind": "txn",        "tool": "silica_restore", "on_gate_fail": True }
                 ]
             }
+
+        # Run facade — TaskLedger (immutable plan, built from the recipe) +
+        # ProgressLedger (mutable state) + RunManifest (short-term memory)
+        # under one run_id; the resume fallback dance lives in Run.resume.
+        from silica.kernel.progress import PlanStep, Run
+        _checkpoints = [
+            PlanStep(
+                id=p["id"],
+                kind=p.get("kind", "mechanical"),
+                objective=p.get("tool", p.get("worker", p["id"])),
+            )
+            for p in self._recipe.get("phases", [])
+        ]
+        _run_kwargs: dict[str, Any] = dict(
+            mode="inject",
+            user_request=f"inject {', '.join(self.inbox_files)} → {target_dir}",
+            checkpoints=_checkpoints,
+            inputs={
+                "inbox_files": self.inbox_files,
+                "inbox_file": self.inbox_file,
+                "target_dir": target_dir,
+                "hub": hub or "",
+            },
+        )
+        # NB: named _run because `run` would shadow the FSM's run() entry point
+        run = Run.resume(resume_run_id, **_run_kwargs) if resume_run_id else Run.new(**_run_kwargs)
+        self._run = run
+        self.progress = run.progress
+        self.manifest = run.manifest
+        self.task_ledger = run.task_ledger
+        if not run.resumed:
+            self.progress.add_task("recon",   task_id="recon")
+            self.progress.add_task("payload", task_id="payload", depends_on=["recon"])
+            self.progress.save()
 
         # BaseFSM contract
         self._phase_label = "Injector"
@@ -344,45 +352,6 @@ class InjectorFSM(BaseFSM[InjectorState]):
             InjectorState.HUB_UPDATE: InjectorState.ROLLBACK,
             InjectorState.LINT: InjectorState.ROLLBACK,
         }
-
-        # Build and persist the immutable TaskLedger from the loaded recipe.
-        # Shares run_id with ProgressLedger so both sides of the ledger are
-        # co-located under ~/.silica/runs/<run_id>/.
-        from silica.kernel.progress import TaskLedger, PlanStep
-        _checkpoints = [
-            PlanStep(
-                id=p["id"],
-                kind=p.get("kind", "mechanical"),
-                objective=p.get("tool", p.get("worker", p["id"])),
-            )
-            for p in self._recipe.get("phases", [])
-        ]
-        if _resumed:
-            # On resume: load the original TaskLedger to preserve its immutable
-            # user_request / created_at / checkpoints.  Fall back to creating a
-            # fresh one only if the file is missing (e.g. run dir was pruned).
-            try:
-                self.task_ledger = TaskLedger.load(self.progress.run_id)
-            except Exception:
-                self.task_ledger = TaskLedger.new(
-                    run_id=self.progress.run_id,
-                    user_request=f"inject {', '.join(self.inbox_files)} → {target_dir}",
-                    checkpoints=_checkpoints,
-                )
-                try:
-                    self.task_ledger.save()
-                except Exception as _e:
-                    logger.debug("TaskLedger save failed (suppressed): %s", _e)
-        else:
-            self.task_ledger = TaskLedger.new(
-                run_id=self.progress.run_id,
-                user_request=f"inject {', '.join(self.inbox_files)} → {target_dir}",
-                checkpoints=_checkpoints,
-            )
-            try:
-                self.task_ledger.save()
-            except Exception as _e:
-                logger.debug("TaskLedger save failed (suppressed): %s", _e)
 
     def _get_chunks_from_context_if_empty(self) -> None:
         """Helper to extract chunks from self.context['payload'] if self._chunks is empty."""
