@@ -12,7 +12,7 @@ from pathlib import Path
 
 from pydantic import BaseModel
 
-from silica.planner.workqueue import WorkItem
+from silica.kernel.workqueue import WorkItem
 
 _PROMPT_DIR = Path(__file__).resolve().parent / "prompts"
 

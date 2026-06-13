@@ -16,7 +16,7 @@ from silica.capabilities.orphan import run_orphan, OrphanLinkDecision
 from silica.capabilities._base import NoteContent
 from silica.config import SilicaConfig
 from silica.kernel.ops import OpType
-from silica.planner.workqueue import WorkItem
+from silica.kernel.workqueue import WorkItem
 
 CONFIG = SilicaConfig()
 

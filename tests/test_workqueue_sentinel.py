@@ -8,7 +8,7 @@ from __future__ import annotations
 import threading
 import time
 
-from silica.planner.workqueue import WorkQueue, WorkItem
+from silica.kernel.workqueue import WorkQueue, WorkItem
 
 
 def _drain_thread(wq: WorkQueue, results: list) -> threading.Thread:

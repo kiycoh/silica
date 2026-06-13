@@ -65,7 +65,7 @@ def test_delete_op_path_is_leased():
         leased_paths.append(path)
         yield
 
-    with patch("silica.planner.workqueue.path_lease", side_effect=fake_path_lease), \
+    with patch("silica.kernel.workqueue.path_lease", side_effect=fake_path_lease), \
          patch("silica.tools.composed.silica_validate_ops",
                return_value={"validated_count": 1, "status": "ok", "rejected_ops": []}), \
          patch("silica.tools.wrapped.silica_snapshot", return_value={"txn_id": "t1", "inverses": []}), \

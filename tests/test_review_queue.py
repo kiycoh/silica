@@ -48,7 +48,7 @@ def test_queue_depth_decreases_after_remove(store):
 # ---------------------------------------------------------------------------
 
 def test_digest_includes_queue_depth_when_nonzero(tmp_path, monkeypatch):
-    import silica.planner.progress as prog_mod
+    import silica.kernel.progress as prog_mod
     import silica.kernel.deferred as deferred_mod
 
     prog_mod._RUNS_DIR = tmp_path
@@ -56,21 +56,21 @@ def test_digest_includes_queue_depth_when_nonzero(tmp_path, monkeypatch):
     store.put("h1", "inbox/a.md", "Dir", None, [{"op": "write"}])
     monkeypatch.setattr(deferred_mod, "_store", store)
 
-    from silica.planner.progress import ProgressLedger
+    from silica.kernel.progress import ProgressLedger
     p = ProgressLedger.new(mode="inject", inputs={})
     digest = p.digest()
     assert "review" in digest.lower() or "deferred" in digest.lower() or "queue" in digest.lower()
 
 
 def test_digest_omits_queue_line_when_empty(tmp_path, monkeypatch):
-    import silica.planner.progress as prog_mod
+    import silica.kernel.progress as prog_mod
     import silica.kernel.deferred as deferred_mod
 
     prog_mod._RUNS_DIR = tmp_path
     store = DeferredStore(path=tmp_path / "deferred")
     monkeypatch.setattr(deferred_mod, "_store", store)
 
-    from silica.planner.progress import ProgressLedger
+    from silica.kernel.progress import ProgressLedger
     p = ProgressLedger.new(mode="inject", inputs={})
     digest = p.digest()
     assert "REVIEW QUEUE" not in digest

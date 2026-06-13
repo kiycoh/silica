@@ -275,10 +275,10 @@ class TestT2ChunkContainment:
 class TestT3Resume:
     def test_resume_run_id_loads_existing_ledger(self, tmp_path, monkeypatch):
         """resume_run_id causes the FSM to load the existing ProgressLedger."""
-        import silica.planner.progress as prog_mod
+        import silica.kernel.progress as prog_mod
         # Redirect runs dir to a tmp directory for isolation
         monkeypatch.setattr(prog_mod, "_RUNS_DIR", tmp_path / "runs")
-        from silica.planner.progress import ProgressLedger
+        from silica.kernel.progress import ProgressLedger
 
         # Simulate a prior run
         prior = ProgressLedger.new(mode="inject", inputs={"inbox_files": ["Inbox/a.md"]})

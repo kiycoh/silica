@@ -55,8 +55,8 @@ class Coordinator:
         if not getattr(self.config, "subagents_enabled", True):
             return self.fsm.run()
 
-        from silica.planner.workqueue import WorkQueue
-        from silica.planner.warnings import WarningLedger
+        from silica.kernel.workqueue import WorkQueue
+        from silica.router.warning_ledger import WarningLedger
         from silica.agent.bus import BUS
 
         run_dir = getattr(self.fsm.progress, "run_dir", None)
@@ -144,7 +144,7 @@ class Coordinator:
 
     def _enqueue_orphan_repairs(self, wq: Any, result: dict) -> None:
         from silica.agent.bounds import _norm_path
-        from silica.planner.workqueue import WorkItem
+        from silica.kernel.workqueue import WorkItem
 
         ledger = getattr(self.fsm, "warning_ledger", None)
         if ledger is None or len(ledger) == 0:

@@ -12,7 +12,7 @@ from __future__ import annotations
 from pydantic import BaseModel, Field
 
 from silica.tools import tool
-from silica.planner.workqueue import WorkItem
+from silica.kernel.workqueue import WorkItem
 from silica.agent.subagent import run_subagent_batch
 import silica.capabilities  # noqa: F401  (registers capabilities incl. worker profiles)
 

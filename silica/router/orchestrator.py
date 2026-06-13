@@ -227,7 +227,7 @@ class InjectorFSM(BaseFSM[InjectorState]):
         self._chunk_flat_to_fi_ci: dict[int, tuple[int, int]] = {}  # flat_idx → (file_idx, chunk_idx)
 
         # Shadow ProgressLedger — mirrors FSM state on disk; FSM remains canonical
-        from silica.planner.progress import ProgressLedger, RunManifest
+        from silica.kernel.progress import ProgressLedger, RunManifest
         _resumed = False
         if resume_run_id:
             try:
@@ -348,9 +348,9 @@ class InjectorFSM(BaseFSM[InjectorState]):
         # Build and persist the immutable TaskLedger from the loaded recipe.
         # Shares run_id with ProgressLedger so both sides of the ledger are
         # co-located under ~/.silica/runs/<run_id>/.
-        from silica.planner.progress import TaskLedger, CheckpointSpec
+        from silica.kernel.progress import TaskLedger, PlanStep
         _checkpoints = [
-            CheckpointSpec(
+            PlanStep(
                 id=p["id"],
                 kind=p.get("kind", "mechanical"),
                 objective=p.get("tool", p.get("worker", p["id"])),

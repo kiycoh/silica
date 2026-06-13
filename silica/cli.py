@@ -592,8 +592,7 @@ def _expand_workflow_shortcut(user_input: str) -> str | None:
         folder = next((p for p in args if not p.startswith("-")), "")
 
         from silica.driver import DRIVER
-        from silica.planner.progress import ProgressLedger, TaskLedger
-        from silica.planner.analyst_plan import CheckpointSpec
+        from silica.kernel.progress import PlanStep, ProgressLedger, TaskLedger
         from pathlib import Path
         import orjson
 
@@ -641,7 +640,7 @@ def _expand_workflow_shortcut(user_input: str) -> str | None:
         tl = TaskLedger.new(
             run_id=run_id,
             user_request=f"{cmd.strip('/')} {folder or 'vault'}",
-            checkpoints=[CheckpointSpec(id="remediate", kind="gate", objective=cap)],
+            checkpoints=[PlanStep(id="remediate", kind="gate", objective=cap)],
             facts=[]
         )
         try:

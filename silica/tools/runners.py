@@ -69,7 +69,7 @@ def silica_ledger_digest(run_id: str = "") -> dict[str, Any]:
     Loads TaskLedger (immutable plan) and ProgressLedger (execution state) from
     ~/.silica/runs/<run_id>/. Pass run_id="" to inspect the most recently saved run.
     """
-    from silica.planner.progress import ProgressLedger, _RUNS_DIR
+    from silica.kernel.progress import ProgressLedger, _RUNS_DIR
 
     resolved_id = run_id.strip()
     if not resolved_id:
@@ -106,7 +106,7 @@ def silica_dedup_pairs(pairs: list[dict]) -> dict[str, Any]:
     Delegates the provided duplicate pairs to the leashed dedup sub-agent batch processor.
     The smaller note is appended to the larger note as a single patch.
     """
-    from silica.planner.workqueue import WorkItem
+    from silica.kernel.workqueue import WorkItem
     from silica.agent.subagent import run_subagent_batch
     
     if not pairs:
@@ -175,7 +175,7 @@ def silica_dedup(folder: str = "", cancel_token: Any = None) -> dict[str, Any]:
     are topically distinct but the titles share a strong semantic relationship.
     """
     from silica.kernel.embed import EmbedStore, _cosine
-    from silica.planner.workqueue import WorkItem
+    from silica.kernel.workqueue import WorkItem
     from silica.agent.subagent import run_subagent_batch
     from silica.config import CONFIG as _C
 
@@ -271,7 +271,7 @@ def silica_refine_batch(note_paths: list[str], cancel_token: Any = None) -> dict
     if not note_paths:
         return {"error": "No note paths provided."}
 
-    from silica.planner.workqueue import WorkItem
+    from silica.kernel.workqueue import WorkItem
     from silica.agent.subagent import run_subagent_batch
 
     items = [WorkItem(kind="refine", target_path=p, context={}) for p in note_paths]
@@ -289,7 +289,7 @@ def silica_enrich_batch(note_paths: list[str], cancel_token: Any = None) -> dict
     if not note_paths:
         return {"error": "No note paths provided."}
 
-    from silica.planner.workqueue import WorkItem
+    from silica.kernel.workqueue import WorkItem
     from silica.agent.subagent import run_subagent_batch
 
     items = [WorkItem(kind="enrich", target_path=p, context={}) for p in note_paths]

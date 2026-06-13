@@ -67,7 +67,7 @@ def test_check_plan_status_warns_on_bad_enum():
 
 def test_digest_includes_plans_line(tmp_path, monkeypatch):
     from silica.config import CONFIG
-    from silica.planner.progress import ProgressLedger
+    from silica.kernel.progress import ProgressLedger
 
     p = tmp_path / "plans"
     p.mkdir(parents=True)
@@ -83,7 +83,7 @@ def test_digest_includes_plans_line(tmp_path, monkeypatch):
 def test_digest_omits_plans_line_when_no_plans(tmp_path, monkeypatch):
     # No plans/ dir → status_counts is empty → the `if counts:` guard omits the line.
     from silica.config import CONFIG
-    from silica.planner.progress import ProgressLedger
+    from silica.kernel.progress import ProgressLedger
 
     monkeypatch.setattr(CONFIG, "vault_path", str(tmp_path))
 

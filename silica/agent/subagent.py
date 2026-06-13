@@ -19,7 +19,7 @@ from typing import Any
 
 from silica.config import CONFIG
 from silica.capabilities import CAPABILITIES, Capability
-from silica.planner.workqueue import WorkItem
+from silica.kernel.workqueue import WorkItem
 
 logger = logging.getLogger(__name__)
 
@@ -71,7 +71,7 @@ def run_subagent_batch(
     """
     from concurrent.futures import ThreadPoolExecutor
 
-    from silica.planner.workqueue import WorkQueue
+    from silica.kernel.workqueue import WorkQueue
 
     if not items:
         return {"items": 0, "summary": {}, "results": []}

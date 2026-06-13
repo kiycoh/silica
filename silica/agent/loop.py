@@ -24,7 +24,7 @@ import logging
 import json
 
 if TYPE_CHECKING:
-    from silica.planner.progress import ProgressLedger
+    from silica.kernel.progress import ProgressLedger
 
 import silica.agent.bus as _bus_mod
 from silica.agent.events import (

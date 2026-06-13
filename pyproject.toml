@@ -60,7 +60,6 @@ source_modules = [
   "silica.router",
   "silica.tools",
   "silica.kernel",
-  "silica.planner",
   "silica.driver",
   "silica.sources",
   "silica.ui",
@@ -80,6 +79,17 @@ forbidden_modules = [
 ]
 # Direct imports only: reaching internals through the package root is the
 # sanctioned path (the root re-exports the seam).
+allow_indirect_imports = true
+
+[[tool.importlinter.contracts]]
+name = "kernel is the lowest layer under the seam — never imports the decision cycle"
+type = "forbidden"
+source_modules = ["silica.kernel"]
+forbidden_modules = ["silica.router", "silica.capabilities"]
+# This is the invariant that keeps workqueue/progress legal homes in kernel
+# (capabilities -> kernel.workqueue must never become a cycle). Note: kernel
+# is NOT pure — lazy imports into agent/ and tools/ exist (see ADR-0016 and
+# the AUDIT-COALA WATCH list); this contract codifies only what is true today.
 allow_indirect_imports = true
 
 [tool.mypy]

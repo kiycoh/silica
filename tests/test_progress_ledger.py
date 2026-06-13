@@ -4,8 +4,8 @@ from __future__ import annotations
 import pytest
 from pathlib import Path
 
-from silica.planner.progress import (
-    CheckpointSpec,
+from silica.kernel.progress import (
+    PlanStep,
     IssueCard,
     ProgressLedger,
     Task,
@@ -19,7 +19,7 @@ from silica.planner.progress import (
 
 def _ledger(tmp_path: Path, mode: str = "inject") -> ProgressLedger:
     """Return a fresh ProgressLedger whose save() target is tmp_path."""
-    import silica.planner.progress as _mod
+    import silica.kernel.progress as _mod
     monkeypatched = _mod._RUNS_DIR
     _mod._RUNS_DIR = tmp_path
     try:
@@ -33,7 +33,7 @@ def _ledger(tmp_path: Path, mode: str = "inject") -> ProgressLedger:
 # ---------------------------------------------------------------------------
 
 def test_roundtrip_empty(tmp_path):
-    import silica.planner.progress as _mod
+    import silica.kernel.progress as _mod
     orig_dir = _mod._RUNS_DIR
     _mod._RUNS_DIR = tmp_path
     try:
@@ -52,7 +52,7 @@ def test_roundtrip_empty(tmp_path):
 
 
 def test_roundtrip_with_tasks(tmp_path):
-    import silica.planner.progress as _mod
+    import silica.kernel.progress as _mod
     orig_dir = _mod._RUNS_DIR
     _mod._RUNS_DIR = tmp_path
     try:
@@ -76,7 +76,7 @@ def test_roundtrip_with_tasks(tmp_path):
 
 
 def test_roundtrip_preserves_issue_cards(tmp_path):
-    import silica.planner.progress as _mod
+    import silica.kernel.progress as _mod
     _mod._RUNS_DIR = tmp_path
     try:
         p = ProgressLedger.new(mode="inject", inputs={})
@@ -102,7 +102,7 @@ def test_roundtrip_preserves_issue_cards(tmp_path):
 # ---------------------------------------------------------------------------
 
 def test_next_pending_respects_depends_on(tmp_path):
-    import silica.planner.progress as _mod
+    import silica.kernel.progress as _mod
     _mod._RUNS_DIR = tmp_path
 
     p = ProgressLedger.new(mode="inject", inputs={})
@@ -119,7 +119,7 @@ def test_next_pending_respects_depends_on(tmp_path):
 
 
 def test_next_pending_returns_none_when_all_done(tmp_path):
-    import silica.planner.progress as _mod
+    import silica.kernel.progress as _mod
     _mod._RUNS_DIR = tmp_path
 
     p = ProgressLedger.new(mode="inject", inputs={})
@@ -130,7 +130,7 @@ def test_next_pending_returns_none_when_all_done(tmp_path):
 
 
 def test_next_pending_skips_running_tasks(tmp_path):
-    import silica.planner.progress as _mod
+    import silica.kernel.progress as _mod
     _mod._RUNS_DIR = tmp_path
 
     p = ProgressLedger.new(mode="inject", inputs={})
@@ -147,7 +147,7 @@ def test_next_pending_skips_running_tasks(tmp_path):
 # ---------------------------------------------------------------------------
 
 def test_next_pending_never_returns_blocked(tmp_path):
-    import silica.planner.progress as _mod
+    import silica.kernel.progress as _mod
     _mod._RUNS_DIR = tmp_path
 
     p = ProgressLedger.new(mode="inject", inputs={})
@@ -158,7 +158,7 @@ def test_next_pending_never_returns_blocked(tmp_path):
 
 
 def test_next_pending_skips_blocked_even_with_deps_met(tmp_path):
-    import silica.planner.progress as _mod
+    import silica.kernel.progress as _mod
     _mod._RUNS_DIR = tmp_path
 
     p = ProgressLedger.new(mode="inject", inputs={})
@@ -175,7 +175,7 @@ def test_next_pending_skips_blocked_even_with_deps_met(tmp_path):
 # ---------------------------------------------------------------------------
 
 def test_set_status_running_increments_attempts(tmp_path):
-    import silica.planner.progress as _mod
+    import silica.kernel.progress as _mod
     _mod._RUNS_DIR = tmp_path
 
     p = ProgressLedger.new(mode="inject", inputs={})
@@ -191,7 +191,7 @@ def test_set_status_running_increments_attempts(tmp_path):
 
 
 def test_mark_done_clears_cursor(tmp_path):
-    import silica.planner.progress as _mod
+    import silica.kernel.progress as _mod
     _mod._RUNS_DIR = tmp_path
 
     p = ProgressLedger.new(mode="inject", inputs={})
@@ -205,7 +205,7 @@ def test_mark_done_clears_cursor(tmp_path):
 
 
 def test_set_status_unknown_task_raises(tmp_path):
-    import silica.planner.progress as _mod
+    import silica.kernel.progress as _mod
     _mod._RUNS_DIR = tmp_path
 
     p = ProgressLedger.new(mode="inject", inputs={})
@@ -214,7 +214,7 @@ def test_set_status_unknown_task_raises(tmp_path):
 
 
 def test_mark_failed_records_error(tmp_path):
-    import silica.planner.progress as _mod
+    import silica.kernel.progress as _mod
     _mod._RUNS_DIR = tmp_path
 
     p = ProgressLedger.new(mode="inject", inputs={})
@@ -231,7 +231,7 @@ def test_mark_failed_records_error(tmp_path):
 # ---------------------------------------------------------------------------
 
 def test_add_task_returns_task_appended(tmp_path):
-    import silica.planner.progress as _mod
+    import silica.kernel.progress as _mod
     _mod._RUNS_DIR = tmp_path
 
     p = ProgressLedger.new(mode="inject", inputs={})
@@ -249,7 +249,7 @@ def test_add_task_returns_task_appended(tmp_path):
 
 def test_last_updated_advances_on_mutation(tmp_path):
     import time
-    import silica.planner.progress as _mod
+    import silica.kernel.progress as _mod
     _mod._RUNS_DIR = tmp_path
 
     p = ProgressLedger.new(mode="inject", inputs={})
@@ -267,7 +267,7 @@ def test_last_updated_advances_on_mutation(tmp_path):
 # ---------------------------------------------------------------------------
 
 def test_task_content_hash_defaults_none(tmp_path):
-    import silica.planner.progress as _mod
+    import silica.kernel.progress as _mod
     _mod._RUNS_DIR = tmp_path
 
     p = ProgressLedger.new(mode="inject", inputs={})
@@ -276,7 +276,7 @@ def test_task_content_hash_defaults_none(tmp_path):
 
 
 def test_task_content_hash_survives_roundtrip(tmp_path):
-    import silica.planner.progress as _mod
+    import silica.kernel.progress as _mod
     _mod._RUNS_DIR = tmp_path
 
     p = ProgressLedger.new(mode="inject", inputs={})
@@ -293,7 +293,7 @@ def test_task_content_hash_survives_roundtrip(tmp_path):
 # ---------------------------------------------------------------------------
 
 def test_deferred_status_is_accepted(tmp_path):
-    import silica.planner.progress as _mod
+    import silica.kernel.progress as _mod
     _mod._RUNS_DIR = tmp_path
 
     p = ProgressLedger.new(mode="inject", inputs={})
@@ -306,7 +306,7 @@ def test_deferred_status_is_accepted(tmp_path):
 
 
 def test_next_pending_skips_deferred(tmp_path):
-    import silica.planner.progress as _mod
+    import silica.kernel.progress as _mod
     _mod._RUNS_DIR = tmp_path
 
     p = ProgressLedger.new(mode="inject", inputs={})
@@ -317,11 +317,11 @@ def test_next_pending_skips_deferred(tmp_path):
 
 
 # ---------------------------------------------------------------------------
-# CheckpointSpec
+# PlanStep
 # ---------------------------------------------------------------------------
 
 def test_checkpoint_spec_fields():
-    cs = CheckpointSpec(id="recon", kind="mechanical", objective="silica_recon")
+    cs = PlanStep(id="recon", kind="mechanical", objective="silica_recon")
     assert cs.id == "recon"
     assert cs.kind == "mechanical"
     assert cs.objective == "silica_recon"
@@ -332,13 +332,13 @@ def test_checkpoint_spec_fields():
 # ---------------------------------------------------------------------------
 
 def test_task_ledger_roundtrip(tmp_path):
-    import silica.planner.progress as _mod
+    import silica.kernel.progress as _mod
     _mod._RUNS_DIR = tmp_path
 
     specs = [
-        CheckpointSpec("recon",   "mechanical", "silica_recon"),
-        CheckpointSpec("distill", "semantic",   "distiller"),
-        CheckpointSpec("validate","gate",        "silica_validate_ops"),
+        PlanStep("recon",   "mechanical", "silica_recon"),
+        PlanStep("distill", "semantic",   "distiller"),
+        PlanStep("validate","gate",        "silica_validate_ops"),
     ]
     tl = TaskLedger.new(
         run_id="testrun001",
@@ -358,7 +358,7 @@ def test_task_ledger_roundtrip(tmp_path):
 
 def test_task_ledger_save_is_write_once(tmp_path):
     """Second save() must not overwrite the file."""
-    import silica.planner.progress as _mod
+    import silica.kernel.progress as _mod
     _mod._RUNS_DIR = tmp_path
 
     tl = TaskLedger.new(run_id="testrun002", user_request="original", checkpoints=[])
@@ -377,7 +377,7 @@ def test_task_ledger_save_is_write_once(tmp_path):
 # ---------------------------------------------------------------------------
 
 def test_digest_contains_run_id(tmp_path):
-    import silica.planner.progress as _mod
+    import silica.kernel.progress as _mod
     _mod._RUNS_DIR = tmp_path
 
     p = ProgressLedger.new(mode="inject", inputs={"inbox_file": "Inbox/test.md"})
@@ -392,10 +392,10 @@ def test_digest_contains_run_id(tmp_path):
 
 def test_digest_under_500_tokens(tmp_path):
     """Digest must stay compact enough for LLM context injection."""
-    import silica.planner.progress as _mod
+    import silica.kernel.progress as _mod
     _mod._RUNS_DIR = tmp_path
 
-    specs = [CheckpointSpec(f"phase_{i}", "mechanical", f"tool_{i}") for i in range(10)]
+    specs = [PlanStep(f"phase_{i}", "mechanical", f"tool_{i}") for i in range(10)]
     tl = TaskLedger.new(run_id="bigrun", user_request="inject big vault", checkpoints=specs)
     tl.save()
 
@@ -412,12 +412,12 @@ def test_digest_under_500_tokens(tmp_path):
 
 
 def test_digest_shows_task_ledger_plan(tmp_path):
-    import silica.planner.progress as _mod
+    import silica.kernel.progress as _mod
     _mod._RUNS_DIR = tmp_path
 
     specs = [
-        CheckpointSpec("recon",   "mechanical", "silica_recon"),
-        CheckpointSpec("distill", "semantic",   "distiller"),
+        PlanStep("recon",   "mechanical", "silica_recon"),
+        PlanStep("distill", "semantic",   "distiller"),
     ]
     tl = TaskLedger.new(run_id="plantest", user_request="inject test", checkpoints=specs)
     tl.save()
@@ -433,7 +433,7 @@ def test_digest_shows_task_ledger_plan(tmp_path):
 
 def test_digest_graceful_without_task_ledger(tmp_path):
     """digest() must not raise when TaskLedger doesn't exist on disk."""
-    import silica.planner.progress as _mod
+    import silica.kernel.progress as _mod
     _mod._RUNS_DIR = tmp_path
 
     p = ProgressLedger.new(mode="inject", inputs={})
@@ -449,7 +449,7 @@ def test_digest_graceful_without_task_ledger(tmp_path):
 # ---------------------------------------------------------------------------
 
 def test_silica_ledger_digest_tool(tmp_path):
-    import silica.planner.progress as _mod
+    import silica.kernel.progress as _mod
     _mod._RUNS_DIR = tmp_path
 
     p = ProgressLedger.new(mode="inject", inputs={"inbox_file": "Inbox/x.md"})
@@ -468,7 +468,7 @@ def test_silica_ledger_digest_tool(tmp_path):
 
 def test_silica_ledger_digest_tool_latest_run(tmp_path):
     """Passing run_id='' should pick the most recently modified run."""
-    import silica.planner.progress as _mod
+    import silica.kernel.progress as _mod
     _mod._RUNS_DIR = tmp_path
 
     p = ProgressLedger.new(mode="inject", inputs={})
@@ -483,7 +483,7 @@ def test_silica_ledger_digest_tool_latest_run(tmp_path):
 
 
 def test_silica_ledger_digest_tool_unknown_run(tmp_path):
-    import silica.planner.progress as _mod
+    import silica.kernel.progress as _mod
     _mod._RUNS_DIR = tmp_path
 
     from silica.tools.composed import silica_ledger_digest

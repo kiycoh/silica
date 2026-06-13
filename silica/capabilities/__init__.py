@@ -26,7 +26,7 @@ from __future__ import annotations
 
 from typing import Any, Callable
 
-from silica.planner.workqueue import WorkItem
+from silica.kernel.workqueue import WorkItem
 from silica.capabilities.dedup import run_dedup
 from silica.capabilities.refine import run_refine
 from silica.capabilities.enrich import run_enrich

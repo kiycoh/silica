@@ -51,7 +51,7 @@ def commit_ops(
     """
     from silica.tools.composed import silica_validate_ops, silica_bulk_write, silica_lint
     from silica.tools.wrapped import silica_snapshot, silica_restore
-    from silica.planner.workqueue import path_lease
+    from silica.kernel.workqueue import path_lease
 
     rejected_by_bounds: list[dict] = []
     if bounds is not None:

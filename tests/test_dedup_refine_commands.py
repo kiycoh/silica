@@ -3,7 +3,7 @@ import json
 from unittest.mock import patch, MagicMock
 
 from silica.agent.subagent import run_subagent_batch, BoundedSubAgent
-from silica.planner.workqueue import WorkItem
+from silica.kernel.workqueue import WorkItem
 
 
 # --- run_subagent_batch ----------------------------------------------------

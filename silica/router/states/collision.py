@@ -294,7 +294,7 @@ def handle_collision(fsm: "InjectorFSM") -> None:
     # sub-agent's append-only patch never races the Injector's new-note writes;
     # the per-path lease covers the rare same-note overlap.
     if deferred_concepts and fsm.work_queue is not None:
-        from silica.planner.workqueue import WorkItem
+        from silica.kernel.workqueue import WorkItem
         for d in deferred_concepts:
             concept = d["concept"]
             match = d.get("top_match", {})

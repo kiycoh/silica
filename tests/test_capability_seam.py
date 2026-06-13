@@ -53,7 +53,7 @@ def test_worker_item_round_trip_through_dispatch(monkeypatch):
     """A WorkItem with kind=<profile> flows BoundedSubAgent → adapter → run_worker."""
     from silica.agent.subagent import BoundedSubAgent
     from silica.config import SilicaConfig
-    from silica.planner.workqueue import WorkItem
+    from silica.kernel.workqueue import WorkItem
     from silica.capabilities.profile import WorkerResult
 
     seen: dict = {}

@@ -401,8 +401,8 @@ def silica_vault_report(
 
     from silica.config import CONFIG
     from silica.kernel.graph_report import compute_report, to_digest, to_facts, write_report
-    from silica.planner.analyst_plan import build_task_plan
-    from silica.planner.progress import IssueCard, ProgressLedger, TaskLedger
+    from silica.kernel.analyst_plan import build_task_plan
+    from silica.kernel.progress import IssueCard, ProgressLedger, TaskLedger
 
     # 1. Build report
     report = compute_report(
