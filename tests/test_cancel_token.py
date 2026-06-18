@@ -12,7 +12,7 @@ from unittest.mock import patch
 
 import pytest
 
-from silica.planner.workqueue import WorkItem
+from silica.kernel.workqueue import WorkItem
 from silica.config import SilicaConfig
 from silica.capabilities.dedup import run_dedup, DedupDecision
 from silica.capabilities.refine import run_refine

@@ -3,7 +3,7 @@ from __future__ import annotations
 from unittest.mock import patch
 
 from silica.tools.delegate_tool import silica_delegate
-from silica.workers.profile import WorkerResult
+from silica.capabilities.profile import WorkerResult
 
 
 def _fake_run_worker(task, *, config, cancel_token=None, profiles=None):
@@ -13,7 +13,7 @@ def _fake_run_worker(task, *, config, cancel_token=None, profiles=None):
 
 def test_fan_out_aggregates_in_order():
     tasks = [{"goal": f"t{i}", "inputs": {}} for i in range(5)]
-    with patch("silica.capabilities.worker.run_worker", _fake_run_worker):
+    with patch("silica.capabilities.run_worker", _fake_run_worker):
         out = silica_delegate(profile="reader", tasks=tasks, max_workers=4)
 
     assert out["summary"]["ok"] == 5
@@ -23,7 +23,7 @@ def test_fan_out_aggregates_in_order():
 
 def test_more_than_ten_tasks_are_chunked_not_rejected():
     tasks = [{"goal": f"t{i}", "inputs": {}} for i in range(23)]
-    with patch("silica.capabilities.worker.run_worker", _fake_run_worker):
+    with patch("silica.capabilities.run_worker", _fake_run_worker):
         out = silica_delegate(profile="reader", tasks=tasks, max_workers=10)
 
     assert out["summary"]["ok"] == 23
@@ -42,7 +42,7 @@ def test_worker_error_is_captured_not_raised():
     def boom(task, *, config, cancel_token=None, profiles=None):
         return WorkerResult(status="error", detail="kaboom")
 
-    with patch("silica.capabilities.worker.run_worker", boom):
+    with patch("silica.capabilities.run_worker", boom):
         out = silica_delegate(profile="reader", tasks=[{"goal": "x", "inputs": {}}])
 
     assert out["summary"]["error"] == 1

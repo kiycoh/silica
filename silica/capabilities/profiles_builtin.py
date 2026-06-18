@@ -9,7 +9,7 @@ from __future__ import annotations
 
 import orjson
 
-from silica.workers.profile import WorkerProfile, WorkerResult, PROFILES
+from silica.capabilities.profile import WorkerProfile, WorkerResult, PROFILES
 
 
 def _reader_parser(final_text: str, trace: list[dict]) -> WorkerResult:

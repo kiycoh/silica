@@ -1,8 +1,8 @@
-"""ProgressLedger — persistent run-state for the Silica planner.
+"""ProgressLedger — persistent run-state (working memory of a run).
 
-Distinct from kernel/ledger.py (CommitLedger), which records what was
-written to the vault.  This module records what the planner intends to do
-and how far along it is.
+Distinct from its sibling kernel/ledger.py (CommitLedger), which records
+what was written to the vault.  This module records what a run intends to
+do and how far along it is.
 
 Two complementary objects:
   TaskLedger    — immutable run plan (written once at init, never mutated)
@@ -13,6 +13,7 @@ Both serialised to ~/.silica/runs/<run_id>/ via orjson.
 from __future__ import annotations
 
 import dataclasses
+import logging
 import uuid
 from dataclasses import dataclass, field
 from datetime import datetime, timezone
@@ -22,20 +23,22 @@ from typing import Any, Literal
 import orjson
 
 TaskStatus = Literal["pending", "running", "done", "failed", "skipped", "blocked", "deferred"]
-CheckpointKind = Literal["mechanical", "semantic", "gate", "txn"]
+PlanStepKind = Literal["mechanical", "semantic", "gate", "txn"]
 
 _RUNS_DIR = Path.home() / ".silica" / "runs"
 
+logger = logging.getLogger(__name__)
+
 
 # ---------------------------------------------------------------------------
-# CheckpointSpec — one entry in the immutable plan
+# PlanStep — one entry in the immutable plan
 # ---------------------------------------------------------------------------
 
 @dataclass
-class CheckpointSpec:
+class PlanStep:
     """A single planned step from the recipe. Written once; never mutated."""
     id: str
-    kind: str          # CheckpointKind — str for forward-compat with new kinds
+    kind: str          # PlanStepKind — str for forward-compat with new kinds
     objective: str     # tool / worker name or free-form description
 
 
@@ -48,7 +51,7 @@ class TaskLedger:
     """Immutable run plan — created at FSM init, written once, never overwritten."""
     run_id: str
     user_request: str
-    checkpoints: list[CheckpointSpec]
+    checkpoints: list[PlanStep]
     facts: dict[str, Any]
     created_at: str
 
@@ -61,7 +64,7 @@ class TaskLedger:
         cls,
         run_id: str,
         user_request: str,
-        checkpoints: list[CheckpointSpec],
+        checkpoints: list[PlanStep],
         facts: dict[str, Any] | None = None,
     ) -> TaskLedger:
         return cls(
@@ -492,6 +495,156 @@ class ProgressLedger:
 
 
 # ---------------------------------------------------------------------------
+# Run — deep facade over the per-run trio
+# ---------------------------------------------------------------------------
+
+@dataclass
+class Run:
+    """One run = TaskLedger (immutable plan) + ProgressLedger (mutable state)
+    + RunManifest (short-term memory), co-located under ~/.silica/runs/<run_id>/.
+
+    Run.new and Run.resume are the only two ways a run comes into existence.
+    resume hides the fallback dance: a missing/corrupt run falls back to a
+    fresh one, a missing task_ledger.json is rebuilt from the caller's args,
+    and manifest.json is restored when present.
+    """
+    task_ledger: TaskLedger
+    progress: ProgressLedger
+    manifest: RunManifest
+    resumed: bool = False
+
+    # ------------------------------------------------------------------
+    # Identity / layout
+    # ------------------------------------------------------------------
+
+    @property
+    def run_id(self) -> str:
+        return self.progress.run_id
+
+    @property
+    def run_dir(self) -> Path:
+        return self.progress.run_dir
+
+    @property
+    def payloads_dir(self) -> Path:
+        """Directory for per-task input payloads; created on first access."""
+        d = self.run_dir / "payloads"
+        d.mkdir(parents=True, exist_ok=True)
+        return d
+
+    # ------------------------------------------------------------------
+    # Factories
+    # ------------------------------------------------------------------
+
+    @classmethod
+    def new(
+        cls,
+        mode: str,
+        *,
+        user_request: str,
+        checkpoints: list[PlanStep],
+        inputs: dict[str, Any] | None = None,
+        facts: dict[str, Any] | None = None,
+    ) -> "Run":
+        progress = ProgressLedger.new(mode=mode, inputs=inputs)
+        task_ledger = TaskLedger.new(
+            run_id=progress.run_id,
+            user_request=user_request,
+            checkpoints=checkpoints,
+            facts=facts or {},
+        )
+        run = cls(
+            task_ledger=task_ledger,
+            progress=progress,
+            manifest=RunManifest(run_id=progress.run_id),
+        )
+        run.save()
+        try:
+            task_ledger.save()
+        except Exception as _e:
+            logger.debug("TaskLedger save failed (suppressed): %s", _e)
+        return run
+
+    @classmethod
+    def resume(
+        cls,
+        run_id: str,
+        *,
+        mode: str,
+        user_request: str,
+        checkpoints: list[PlanStep],
+        inputs: dict[str, Any] | None = None,
+        facts: dict[str, Any] | None = None,
+    ) -> "Run":
+        """Resume an existing run; fall back to a fresh one if it cannot load.
+
+        On success the loaded state wins (the kwargs are ignored); the kwargs
+        are used only for the fresh fallback and to rebuild a missing
+        task_ledger.json. Check `.resumed` to tell which path was taken.
+        """
+        try:
+            progress = ProgressLedger.load(run_id)
+        except Exception as exc:
+            logger.warning("Failed to load run '%s', starting fresh: %s", run_id, exc)
+            return cls.new(
+                mode=mode, user_request=user_request,
+                checkpoints=checkpoints, inputs=inputs, facts=facts,
+            )
+
+        logger.info("Resuming run %s", run_id)
+        try:
+            task_ledger = TaskLedger.load(run_id)
+        except Exception:
+            task_ledger = TaskLedger.new(
+                run_id=run_id,
+                user_request=user_request,
+                checkpoints=checkpoints,
+                facts=facts or {},
+            )
+            try:
+                task_ledger.save()
+            except Exception as _e:
+                logger.debug("TaskLedger save failed (suppressed): %s", _e)
+
+        try:
+            manifest = RunManifest.load(run_id)
+        except Exception:
+            manifest = RunManifest(run_id=run_id)
+
+        return cls(
+            task_ledger=task_ledger,
+            progress=progress,
+            manifest=manifest,
+            resumed=True,
+        )
+
+    # ------------------------------------------------------------------
+    # Persistence
+    # ------------------------------------------------------------------
+
+    def save(self) -> None:
+        """Persist mutable state (ProgressLedger). TaskLedger is write-once
+        at creation; RunManifest is saved by whoever records entries."""
+        self.progress.save()
+
+
+def latest_run_id() -> str | None:
+    """run_id of the most recently modified run that has a ledger.json, or None.
+
+    Public replacement for reaching into the private _RUNS_DIR layout.
+    """
+    if not _RUNS_DIR.exists():
+        return None
+    candidates = [
+        d for d in _RUNS_DIR.iterdir()
+        if d.is_dir() and (d / "ledger.json").exists()
+    ]
+    if not candidates:
+        return None
+    return max(candidates, key=lambda d: d.stat().st_mtime).name
+
+
+# ---------------------------------------------------------------------------
 # Serialisation helpers
 # ---------------------------------------------------------------------------
 
@@ -515,7 +668,7 @@ def _from_dict(data: dict[str, Any]) -> ProgressLedger:
 
 
 def _task_ledger_from_dict(data: dict[str, Any]) -> TaskLedger:
-    checkpoints = [CheckpointSpec(**c) for c in data.get("checkpoints", [])]
+    checkpoints = [PlanStep(**c) for c in data.get("checkpoints", [])]
     return TaskLedger(
         run_id=data["run_id"],
         user_request=data.get("user_request", ""),

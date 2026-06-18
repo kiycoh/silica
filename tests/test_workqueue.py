@@ -1,9 +1,9 @@
-"""Tests for the WorkQueue + per-path lease (silica/planner/workqueue.py)."""
+"""Tests for the WorkQueue + per-path lease (silica/kernel/workqueue.py)."""
 import json
 import threading
 import time
 
-from silica.planner.workqueue import WorkQueue, WorkItem, path_lease
+from silica.kernel.workqueue import WorkQueue, WorkItem, path_lease
 
 
 def test_enqueue_claim_complete_roundtrip():

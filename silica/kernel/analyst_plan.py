@@ -20,7 +20,7 @@ from typing import Literal
 import networkx as nx
 
 from silica.kernel.graph_report import VaultReport
-from silica.planner.progress import CheckpointSpec
+from silica.kernel.progress import PlanStep
 
 Tier = Literal["auto", "propose", "escalate"]
 
@@ -54,7 +54,7 @@ class TaskCandidate:
 
 @dataclass
 class AnalystPlan:
-    checkpoints: list[CheckpointSpec]
+    checkpoints: list[PlanStep]
     auto:     list[TaskCandidate] = field(default_factory=list)
     propose:  list[TaskCandidate] = field(default_factory=list)
     escalate: list[TaskCandidate] = field(default_factory=list)
@@ -270,9 +270,9 @@ def build_task_plan(report: VaultReport) -> AnalystPlan:
     escalate.sort(key=lambda c: (c.priority, c.reason))
 
     checkpoints = [
-        CheckpointSpec(id="audit",    kind="mechanical", objective="silica_vault_report"),
-        CheckpointSpec(id="remediate", kind="gate",      objective="silica_autolink"),
-        CheckpointSpec(id="report",   kind="mechanical", objective="silica_ledger_digest"),
+        PlanStep(id="audit",    kind="mechanical", objective="silica_vault_report"),
+        PlanStep(id="remediate", kind="gate",      objective="silica_autolink"),
+        PlanStep(id="report",   kind="mechanical", objective="silica_ledger_digest"),
     ]
 
     return AnalystPlan(

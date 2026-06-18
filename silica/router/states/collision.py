@@ -21,6 +21,35 @@ if TYPE_CHECKING:
 logger = logging.getLogger(__name__)
 
 
+def _names_agree(concept: str, note_name: str) -> bool:
+    """Conservative lexical gate for the mechanical high-score auto-patch.
+
+    A high cosine can be driven by a single shared word — e.g. the concept
+    "MEMORY" against the note "RAM (Random Access Memory)" — which is a domain
+    collision, not the same concept. COLLISION may bypass the distiller and patch
+    directly ONLY when the names genuinely agree; otherwise the concept is demoted
+    to normal distillation so the distiller can judge from the excerpts. A wrong
+    demotion only costs an extra distillation pass; a wrong auto-patch pollutes the
+    vault, so the gate is deliberately strict.
+
+    Agreement holds when either name normalizes to the other (same slug) or the
+    concept equals the note's acronym — its parenthetical token (e.g. "(GPT)") or
+    the head token before the first parenthesis.
+    """
+    import re
+    from silica.kernel.templates import slugify
+
+    if not concept.strip() or not note_name.strip():
+        return False
+    if slugify(concept) == slugify(note_name):
+        return True
+    norm = lambda s: re.sub(r"[^a-z0-9]", "", s.lower())
+    acronyms = set(re.findall(r"\(([^)]*)\)", note_name))   # parenthetical contents
+    acronyms.add(note_name.split("(", 1)[0])                # head before any paren
+    nc = norm(concept)
+    return bool(nc) and nc in {norm(a) for a in acronyms if a.strip()}
+
+
 def handle_collision(fsm: "InjectorFSM") -> None:
     """Dedup/collision routing — Phase 5.
 
@@ -85,12 +114,25 @@ def handle_collision(fsm: "InjectorFSM") -> None:
     # round-trip per chunk instead of one per concept).  Falls back to
     # per-concept embedding only if the embedder returns a ragged response,
     # so a short/odd reply can never silently drop concepts.
+    #
+    # The query text is name+excerpt, built with the SAME _note_text used to
+    # index notes, so the query vector is comparable to the stored title+body
+    # vectors. Embedding the bare name lets short acronyms ("MEM", "ACE") score
+    # spuriously high against unrelated short-acronym notes ("RAM (Random Access
+    # Memory)", "MACE"); the excerpt anchors the concept in its real neighbourhood.
+    from silica.kernel.embed import _note_text
+
+    def _concept_embed_text(concept: Any) -> str:
+        if isinstance(concept, dict):
+            return _note_text(concept.get("name", ""), concept.get("excerpt", ""))
+        return _note_text(str(concept), "")
+
     all_texts: list[str] = []
     for batch in chunk.get("batches", []):
         for concept in batch.get("concepts", []):
-            ct = concept.get("name", "") if isinstance(concept, dict) else str(concept)
-            if ct:
-                all_texts.append(ct)
+            et = _concept_embed_text(concept)
+            if et.strip():
+                all_texts.append(et)
 
     vec_by_text: dict[str, Any] = {}
     uniq_texts = list(dict.fromkeys(all_texts))
@@ -121,7 +163,7 @@ def handle_collision(fsm: "InjectorFSM") -> None:
                 kept.append(concept)
                 continue
 
-            vec = vec_by_text.get(concept_text)
+            vec = vec_by_text.get(_concept_embed_text(concept))
             if vec is None:
                 # Embedding unavailable for this concept (batch failed or
                 # missing) — keep it for normal distillation.
@@ -169,7 +211,18 @@ def handle_collision(fsm: "InjectorFSM") -> None:
             _is_hub = _vault_ctx.get(_match_key, {}).get("is_hub", False)
             τ_eff = τ_high - (0.08 if _is_hub else 0.0)
 
-            if score >= τ_eff:
+            if score >= τ_eff and not _names_agree(concept_text, top["name"]):
+                # High cosine but the names disagree — a domain collision (shared
+                # word, different concept). Don't bypass the distiller mechanically;
+                # demote to normal distillation so it can judge from the excerpts.
+                logger.info(
+                    "COLLISION: '%s' ~ '%s' (score=%.3f) but names disagree — "
+                    "demoting to distiller (no mechanical patch)",
+                    concept_text, existing_path, score,
+                )
+                kept.append(concept)
+
+            elif score >= τ_eff:
                 try:
                     orch.DRIVER.read_note(existing_path)
                     # Graph confirms node exists — safe to patch
@@ -241,7 +294,7 @@ def handle_collision(fsm: "InjectorFSM") -> None:
     # sub-agent's append-only patch never races the Injector's new-note writes;
     # the per-path lease covers the rare same-note overlap.
     if deferred_concepts and fsm.work_queue is not None:
-        from silica.planner.workqueue import WorkItem
+        from silica.kernel.workqueue import WorkItem
         for d in deferred_concepts:
             concept = d["concept"]
             match = d.get("top_match", {})

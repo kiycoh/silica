@@ -36,5 +36,5 @@ class WorkerResult:
     detail: str = ""
 
 
-# Global registry — populated by silica/workers/profiles_builtin.py.
+# Global registry — populated by silica/capabilities/profiles_builtin.py.
 PROFILES: dict[str, WorkerProfile] = {}

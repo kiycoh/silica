@@ -18,7 +18,7 @@ from pathlib import Path
 logger = logging.getLogger(__name__)
 
 # Distiller prompt template — vendored at install time
-_PROMPT_PATH = Path(__file__).resolve().parent.parent / "workers" / "distiller_prompt.txt"
+_PROMPT_PATH = Path(__file__).resolve().parent.parent / "capabilities" / "prompts" / "distiller_prompt.txt"
 
 
 def _load_prompt() -> str:

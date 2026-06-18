@@ -13,7 +13,7 @@ from typing import Any
 from silica.agent.loop import run_agent
 from silica.agent.constraints import AgentConstraints
 from silica.agent.events import ToolCompleteEvent
-from silica.workers.profile import WorkerProfile, WorkerTask, WorkerResult, PROFILES
+from silica.capabilities.profile import WorkerProfile, WorkerTask, WorkerResult, PROFILES
 
 logger = logging.getLogger(__name__)
 

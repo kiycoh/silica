@@ -1,4 +1,4 @@
-"""Tests for silica/planner/analyst_plan.py.
+"""Tests for silica/kernel/analyst_plan.py.
 
 Verifies three-tier confidence logic, §3.2-bis irreversible-capability guard,
 and AnalystPlan structure.
@@ -15,7 +15,7 @@ from silica.kernel.graph_report import (
     VaultReport,
     _empty_report,
 )
-from silica.planner.analyst_plan import (
+from silica.kernel.analyst_plan import (
     AnalystPlan,
     TaskCandidate,
     _CLUSTER_SIZE_THRESHOLD,

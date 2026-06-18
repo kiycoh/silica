@@ -101,10 +101,10 @@ class TestGraphPath:
 class TestLedgerSteering:
     def test_round_trip(self, tmp_path, monkeypatch):
         """Full cycle: vault_report seeds tasks → next → update("done") → done."""
-        import silica.planner.progress as prog_mod
+        import silica.kernel.progress as prog_mod
         monkeypatch.setattr(prog_mod, "_RUNS_DIR", tmp_path / "runs")
 
-        from silica.planner.progress import ProgressLedger, TaskLedger, CheckpointSpec
+        from silica.kernel.progress import ProgressLedger, TaskLedger, PlanStep
         from silica.tools.atomic import silica_ledger_next, silica_ledger_update
         import orjson
 
@@ -140,16 +140,16 @@ class TestLedgerSteering:
         assert result2.get("done") is True
 
     def test_ledger_next_unknown_run(self, tmp_path, monkeypatch):
-        import silica.planner.progress as prog_mod
+        import silica.kernel.progress as prog_mod
         monkeypatch.setattr(prog_mod, "_RUNS_DIR", tmp_path / "runs")
         from silica.tools.atomic import silica_ledger_next
         res = silica_ledger_next("nonexistent_run_id")
         assert "error" in res
 
     def test_ledger_update_unknown_task(self, tmp_path, monkeypatch):
-        import silica.planner.progress as prog_mod
+        import silica.kernel.progress as prog_mod
         monkeypatch.setattr(prog_mod, "_RUNS_DIR", tmp_path / "runs")
-        from silica.planner.progress import ProgressLedger
+        from silica.kernel.progress import ProgressLedger
         from silica.tools.atomic import silica_ledger_update
 
         p = ProgressLedger.new(mode="test")
@@ -159,10 +159,10 @@ class TestLedgerSteering:
 
     def test_needs_confirmation_flag_propagated(self, tmp_path, monkeypatch):
         """propose tasks have needs_confirmation=True in their payload."""
-        import silica.planner.progress as prog_mod
+        import silica.kernel.progress as prog_mod
         monkeypatch.setattr(prog_mod, "_RUNS_DIR", tmp_path / "runs")
 
-        from silica.planner.progress import ProgressLedger
+        from silica.kernel.progress import ProgressLedger
         from silica.tools.atomic import silica_ledger_next
         import orjson
 
@@ -241,3 +241,34 @@ class TestPartitionByFile:
         for group in groups:
             for chunk in group["chunks"]:
                 assert chunk.get("source_file") == "X.md"
+
+
+class TestGraphExportAutoCooccur:
+    """silica_graph_export refreshes the co-occurrence index first (best-effort)."""
+
+    def test_refreshes_cooccurrence_before_export(self, monkeypatch):
+        import silica.tools.graph as gmod
+        import silica.kernel.graph_export as gx
+
+        calls = []
+        monkeypatch.setattr(gmod, "silica_cooccurrence_refresh",
+                            lambda folder="": calls.append(("refresh", folder)))
+        monkeypatch.setattr(gx, "export_graph",
+                            lambda **kw: calls.append(("export", kw["folder"])) or {"ok": True})
+
+        result = gmod.silica_graph_export(folder="sub")
+
+        assert result == {"ok": True}
+        assert calls == [("refresh", "sub"), ("export", "sub")]  # refresh first
+
+    def test_refresh_failure_is_best_effort(self, monkeypatch):
+        import silica.tools.graph as gmod
+        import silica.kernel.graph_export as gx
+
+        def boom(folder=""):
+            raise RuntimeError("index locked")
+        monkeypatch.setattr(gmod, "silica_cooccurrence_refresh", boom)
+        monkeypatch.setattr(gx, "export_graph", lambda **kw: {"ok": True})
+
+        # Must not raise — naming degrades to "Cluster N", graph still renders.
+        assert gmod.silica_graph_export() == {"ok": True}

@@ -208,8 +208,8 @@ class TestRunDistillerSchemaPassing:
 
 def test_distiller_prompt_documents_concepts_field():
     from pathlib import Path
-    import silica.workers as _w
-    prompt = (Path(_w.__file__).parent / "distiller_prompt.txt").read_text(encoding="utf-8")
+    import silica.capabilities as _c
+    prompt = (Path(_c.__file__).parent / "prompts" / "distiller_prompt.txt").read_text(encoding="utf-8")
     # A dedicated instruction block must exist (distinct from the INPUT payload's
     # per-batch "concepts" array, which predates #9).
     assert "Concept Keyphrases" in prompt

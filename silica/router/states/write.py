@@ -207,7 +207,7 @@ def handle_write(fsm: "InjectorFSM") -> None:
 
     # Register committed notes in the RunManifest and refresh embedding index.
     try:
-        from silica.planner.progress import RunManifestEntry
+        from silica.kernel.progress import RunManifestEntry
         vault_ctx = fsm.context.get("vault_graph_ctx", {})
         for op in ops:
             path = op.touched_ref()

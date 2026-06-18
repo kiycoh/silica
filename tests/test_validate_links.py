@@ -42,8 +42,8 @@ class _ReadSideEffect:
 # Test: write ops are exempt from the link check
 # ---------------------------------------------------------------------------
 
-def test_write_op_forward_reference_non_exempt_rejected():
-    """write ops with unresolvable links must be rejected now."""
+def test_write_op_forward_reference_neutralized():
+    """write ops with unresolvable links are kept; the links become forward-refs."""
     ops = [
         {
             "op": "write",
@@ -54,13 +54,17 @@ def test_write_op_forward_reference_non_exempt_rejected():
         }
     ]
     read_mock = _ReadSideEffect(known=set())  # nothing exists
+    cleared_links: list[dict] = []
     with patch("silica.kernel.validate.DRIVER.read_note", side_effect=read_mock), \
          patch("silica.kernel.validate.DRIVER.search_names", return_value=[]):
-        validated, rejected = validate_operations(ops, [], "Concepts")
+        validated, rejected = validate_operations(
+            ops, [], "Concepts", cleared_links_out=cleared_links
+        )
 
-    assert len(rejected) == 1
-    assert "Vanishing Gradient" in rejected[0].reason
-    assert not any(op.get("heading") == "Neural Network" for op in validated)
+    assert not rejected
+    assert any(op.get("heading") == "Neural Network" for op in validated)
+    recorded = {c["cleared_link"] for c in cleared_links}
+    assert {"Vanishing Gradient", "Backpropagation"} <= recorded
 
 
 # ---------------------------------------------------------------------------
@@ -93,8 +97,8 @@ def test_patch_op_link_resolved_in_vault():
 # Test: patch op — broken link rejected
 # ---------------------------------------------------------------------------
 
-def test_patch_op_broken_link_rejected():
-    """patch op that introduces a wikilink not in the vault or the batch must be rejected."""
+def test_patch_op_broken_link_neutralized():
+    """patch op with a wikilink not in vault/batch is kept; link becomes a forward-ref."""
     read_mock = _ReadSideEffect(known={"Existing Note"})
 
     ops = [
@@ -106,13 +110,17 @@ def test_patch_op_broken_link_rejected():
             "snippet": "Links to [[Ghost Note That Does Not Exist]].",
         }
     ]
+    cleared_links: list[dict] = []
     with patch("silica.kernel.validate.DRIVER.read_note", side_effect=read_mock), \
          patch("silica.kernel.validate.DRIVER.search_names", return_value=[]):
-        validated, rejected = validate_operations(ops, [], "Concepts")
+        validated, rejected = validate_operations(
+            ops, [], "Concepts", cleared_links_out=cleared_links
+        )
 
-    assert len(rejected) == 1
-    assert "Ghost Note That Does Not Exist" in rejected[0].reason
-    assert not any(op.get("heading") == "Existing Note" for op in validated)
+    assert not rejected
+    op = next(op for op in validated if op.heading == "Existing Note")
+    assert "[[Ghost Note That Does Not Exist]]" in op.snippet
+    assert any(c["cleared_link"] == "Ghost Note That Does Not Exist" for c in cleared_links)
 
 
 # ---------------------------------------------------------------------------
@@ -152,8 +160,8 @@ def test_patch_op_link_resolved_by_same_batch_write():
 # Test: overwrite op — broken link rejected
 # ---------------------------------------------------------------------------
 
-def test_overwrite_op_broken_link_rejected():
-    """overwrite ops obey the same rule as patch ops."""
+def test_overwrite_op_broken_link_neutralized():
+    """overwrite ops obey the same neutralize-and-register rule as patch ops."""
     read_mock = _ReadSideEffect(known={"Existing Note"})
 
     ops = [
@@ -165,12 +173,15 @@ def test_overwrite_op_broken_link_rejected():
             "content": "Full rewrite with [[Ghost Link]].",
         }
     ]
+    cleared_links: list[dict] = []
     with patch("silica.kernel.validate.DRIVER.read_note", side_effect=read_mock), \
          patch("silica.kernel.validate.DRIVER.search_names", return_value=[]):
-        validated, rejected = validate_operations(ops, [], "Concepts")
+        validated, rejected = validate_operations(
+            ops, [], "Concepts", cleared_links_out=cleared_links
+        )
 
-    assert len(rejected) == 1
-    assert "Ghost Link" in rejected[0].reason
+    assert not rejected
+    assert any(c["cleared_link"] == "Ghost Link" for c in cleared_links)
 
 
 # ---------------------------------------------------------------------------
@@ -254,6 +265,86 @@ def test_write_op_whitelist_link_accepted():
 # ---------------------------------------------------------------------------
 # Test: deduplication happens before coercion, avoiding incorrect reject
 # ---------------------------------------------------------------------------
+
+def test_unresolved_inline_links_neutralized_not_rejected():
+    """Paper-internal wikilinks with no note must be kept as forward-refs, not rejected.
+
+    Reproduces the 83%-rejection incident: a dense paper coerced to patch ops whose
+    bodies cross-reference paper-internal terms (MEM, GEPA, A-MEM) that have no note.
+    Policy: neutralize + register — keep the op, keep the dangling link, record it.
+    """
+    read_mock = _ReadSideEffect(known={"RAM (Random Access Memory)", "MACE"})
+
+    ops = [
+        {
+            "op": "patch",
+            "path": "AI/MACE.md",
+            "heading": "ACE",
+            "source_basename": "inbox.md",
+            "snippet": "ACE builds on [[MEM]] and [[GEPA]].",
+        },
+        {
+            "op": "patch",
+            "path": "AI/RAM (Random Access Memory).md",
+            "heading": "MEM",
+            "source_basename": "inbox.md",
+            "snippet": "MEM relates to [[A-MEM]].",
+        },
+    ]
+    cleared_links: list[dict] = []
+    with patch("silica.kernel.validate.DRIVER.read_note", side_effect=read_mock), \
+         patch("silica.kernel.validate.DRIVER.search_names", return_value=[]):
+        validated, rejected = validate_operations(
+            ops, [], "AI", cleared_links_out=cleared_links
+        )
+
+    # No op is rejected — both survive.
+    assert not rejected
+    headings = {op.heading for op in validated if op.op != "write"}
+    assert {"ACE", "MEM"} <= headings
+    # The dangling links are kept verbatim in the op bodies.
+    ace_op = next(op for op in validated if op.heading == "ACE")
+    assert "[[MEM]]" in ace_op.snippet and "[[GEPA]]" in ace_op.snippet
+    # Every unresolved link is recorded as a forward-ref.
+    recorded = {c["cleared_link"] for c in cleared_links}
+    assert {"MEM", "GEPA", "A-MEM"} <= recorded
+
+
+def test_patch_link_to_same_batch_patch_sibling_resolves():
+    """A link to a sibling that is itself a patch op (not a write) must resolve.
+
+    Error 2: batch_created_names previously counted only write ops, so a cross-ref
+    between two colliding (patched) siblings was wrongly treated as unresolved.
+    """
+    read_mock = _ReadSideEffect(known={"Alpha", "Beta"})
+
+    ops = [
+        {
+            "op": "patch",
+            "path": "Concepts/Alpha.md",
+            "heading": "Alpha",
+            "source_basename": "inbox.md",
+            "snippet": "See [[Beta]].",
+        },
+        {
+            "op": "patch",
+            "path": "Concepts/Beta.md",
+            "heading": "Beta",
+            "source_basename": "inbox.md",
+            "snippet": "A sibling.",
+        },
+    ]
+    cleared_links: list[dict] = []
+    with patch("silica.kernel.validate.DRIVER.read_note", side_effect=read_mock), \
+         patch("silica.kernel.validate.DRIVER.search_names", return_value=[]):
+        validated, rejected = validate_operations(
+            ops, [], "Concepts", cleared_links_out=cleared_links
+        )
+
+    assert not rejected
+    # [[Beta]] resolves via the sibling patch op → not recorded as a forward-ref.
+    assert not any(c["cleared_link"].lower() == "beta" for c in cleared_links)
+
 
 def test_deduplication_before_coercion_prevents_unnecessary_rejection():
     """Duplicate ops for an existing file should not fail validation after coercion.

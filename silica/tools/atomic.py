@@ -346,7 +346,7 @@ def silica_ledger_next(run_id: str) -> dict:
     """
     import orjson
     from pathlib import Path
-    from silica.planner.progress import ProgressLedger
+    from silica.kernel.progress import ProgressLedger
 
     try:
         progress = ProgressLedger.load(run_id)
@@ -390,7 +390,7 @@ def silica_ledger_update(run_id: str, task_id: str, status: str, error: str = ""
     Returns {"ok": true, "digest": ...} so the agent has the updated state
     for the next iteration.
     """
-    from silica.planner.progress import ProgressLedger
+    from silica.kernel.progress import ProgressLedger
 
     try:
         progress = ProgressLedger.load(run_id)

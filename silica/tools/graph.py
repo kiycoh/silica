@@ -5,12 +5,15 @@ passes, the vis.js graph export, and the structural vault report.
 """
 from __future__ import annotations
 
+import logging
 from typing import Any
 
 from pydantic import BaseModel, Field
 
 from silica.driver import DRIVER
 from silica.tools import tool
+
+logger = logging.getLogger(__name__)
 
 
 def _in_folder(path: str, folder: str) -> bool:
@@ -45,6 +48,16 @@ def silica_graph_export(output_path: str = "graph.html", folder: str = "", title
     The output file can be opened directly in any browser — no server needed.
     """
     from silica.kernel.graph_export import export_graph
+
+    # Best-effort: refresh the co-occurrence index so clusters get named labels
+    # (incremental — skips already-indexed notes). Naming degrades to "Cluster N"
+    # if this fails; the graph still renders. ponytail: full-vault refresh, scope
+    # to changed notes only if it gets slow on big vaults.
+    try:
+        silica_cooccurrence_refresh(folder=folder)
+    except Exception as exc:
+        logger.warning("silica_graph_export: cooccurrence refresh skipped (%s)", exc)
+
     return export_graph(output_path=output_path, folder=folder, title=title)
 
 
@@ -401,8 +414,8 @@ def silica_vault_report(
 
     from silica.config import CONFIG
     from silica.kernel.graph_report import compute_report, to_digest, to_facts, write_report
-    from silica.planner.analyst_plan import build_task_plan
-    from silica.planner.progress import IssueCard, ProgressLedger, TaskLedger
+    from silica.kernel.analyst_plan import build_task_plan
+    from silica.kernel.progress import IssueCard, Run
 
     # 1. Build report
     report = compute_report(
@@ -430,27 +443,18 @@ def silica_vault_report(
     # 3. Build plan and seed ledger
     plan = build_task_plan(report)
 
-    progress = ProgressLedger.new(mode="analyst", inputs={"scope": folder or "vault"})
-    run_id = progress.run_id
-    run_dir = Path.home() / ".silica" / "runs" / run_id
-    payloads_dir = run_dir / "payloads"
-    payloads_dir.mkdir(parents=True, exist_ok=True)
-
-    # Persist immutable TaskLedger
-    tl = TaskLedger.new(
-        run_id=run_id,
+    run = Run.new(
+        mode="analyst",
         user_request=f"audit {folder or 'vault'}",
         checkpoints=plan.checkpoints,
+        inputs={"scope": folder or "vault"},
         facts=to_facts(report),
     )
-    try:
-        tl.save()
-    except Exception:
-        pass
+    payloads_dir = run.payloads_dir
 
     # Seed tasks from auto + propose (propose carries needs_confirmation flag)
     for candidate in plan.auto + plan.propose:
-        task = progress.add_task(candidate.capability_name)
+        task = run.progress.add_task(candidate.capability_name)
         # Write payload to disk
         payload = dict(candidate.payload)
         payload["_reason"] = candidate.reason
@@ -471,11 +475,11 @@ def silica_vault_report(
                 {"label": "ignore", "description": "Leave the broken link as-is"},
             ],
         )
-        progress.issues.append(card)
+        run.progress.issues.append(card)
 
-    progress.save()
+    run.save()
 
-    result["run_id"] = run_id
+    result["run_id"] = run.run_id
     result["auto"] = len(plan.auto)
     result["propose"] = len(plan.propose)
     result["issues"] = len(plan.escalate)

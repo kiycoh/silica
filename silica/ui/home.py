@@ -64,7 +64,7 @@ def print_home() -> None:
             _model_vault_line(model_slug, worker_slug, vault),
             Text(""),
             Text("Commands overview", style="bold"),
-            command_table(all_cmds, show_summary=False),
+            command_table(all_cmds, show_summary=False, compact=True),
         )
 
         outer = Table(show_header=False, box=None, show_edge=False, pad_edge=False, padding=(0, 1))

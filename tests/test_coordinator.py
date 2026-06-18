@@ -9,7 +9,7 @@ from unittest.mock import patch
 
 from silica.config import SilicaConfig
 from silica.router.coordinator import Coordinator
-from silica.planner.workqueue import WorkItem
+from silica.kernel.workqueue import WorkItem
 
 
 class _FakeFSM:

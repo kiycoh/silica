@@ -8,8 +8,8 @@ from pydantic import BaseModel
 
 from silica.config import SilicaConfig
 from silica.tools import TOOLS, Tool
-from silica.workers.profile import WorkerProfile, WorkerTask, WorkerResult
-from silica.workers.runtime import run_worker
+from silica.capabilities.profile import WorkerProfile, WorkerTask, WorkerResult
+from silica.capabilities.runtime import run_worker
 
 
 class _Args(BaseModel):

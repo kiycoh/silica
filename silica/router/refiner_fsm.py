@@ -261,6 +261,7 @@ class RefinerFSM(BaseFSM[RefinerState]):
                         "heading": hub,
                         "source_basename": basename,
                         "content": frontmatter.dump(hub_fm, index_body),
+                        "base_content": content,
                         "hub": hub
                     })
 
@@ -274,6 +275,7 @@ class RefinerFSM(BaseFSM[RefinerState]):
                             "heading": os.path.splitext(basename)[0],
                             "source_basename": basename,
                             "content": new_content,
+                            "base_content": content,
                             "hub": self.hub or os.path.splitext(basename)[0]
                         })
 
@@ -288,6 +290,7 @@ class RefinerFSM(BaseFSM[RefinerState]):
                             "heading": os.path.splitext(basename)[0],
                             "source_basename": basename,
                             "content": new_content,
+                            "base_content": content,
                             "hub": self.hub or os.path.splitext(basename)[0]
                         })
                     enrich_queue.append({

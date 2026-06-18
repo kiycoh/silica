@@ -212,6 +212,7 @@ def silica_validate_ops(
             return {"error": f"Failed to load payload {path}: {e}"}
 
     cleared_parents: list[dict] = []
+    cleared_links: list[dict] = []
     validated_ops, rejected_ops = validate_operations(
         ops,
         payloads,
@@ -219,6 +220,7 @@ def silica_validate_ops(
         hub=hub,
         cleared_parents_out=cleared_parents,
         future_ref_whitelist=future_ref_whitelist,
+        cleared_links_out=cleared_links,
     )
 
     total = len(ops)
@@ -244,6 +246,7 @@ def silica_validate_ops(
         "validated_ops": [o.model_dump() for o in validated_ops],
         "rejected_ops": [r.model_dump() for r in rejected_ops],
         "cleared_parents": cleared_parents,
+        "cleared_links": cleared_links,
     }
 
 

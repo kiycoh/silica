@@ -8,7 +8,7 @@ from typing import Any
 from silica.agent.commit import commit_ops
 from silica.agent.bounds import refiner_bounds
 from silica.kernel.ops import Op, OpType
-from silica.planner.workqueue import WorkItem
+from silica.kernel.workqueue import WorkItem
 from silica.capabilities._base import NoteContent, emit_feedback, load_prompt, read_or_skip
 
 logger = logging.getLogger(__name__)

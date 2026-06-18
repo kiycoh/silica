@@ -1,6 +1,6 @@
 from __future__ import annotations
 
-from silica.workers.profile import WorkerProfile, WorkerTask, WorkerResult, PROFILES
+from silica.capabilities.profile import WorkerProfile, WorkerTask, WorkerResult, PROFILES
 
 
 def test_worker_result_shape():

@@ -25,7 +25,7 @@ logger = logging.getLogger(__name__)
 class Tool:
     """Metadata and executor for a single registered tool."""
 
-    __slots__ = ("fn", "name", "description", "params_model", "cls")
+    __slots__ = ("fn", "name", "description", "params_model", "cls", "collapse", "summarize")
 
     def __init__(
         self,
@@ -34,12 +34,16 @@ class Tool:
         description: str,
         params_model: type[BaseModel],
         cls: str,
+        collapse: str = "lazy",
+        summarize: Callable[[dict], str] | None = None,
     ):
         self.fn = fn
         self.name = name
         self.description = description
         self.params_model = params_model
         self.cls = cls  # "atomic" | "composed" | "wrapped"
+        self.collapse = collapse  # "lazy" | "eager" | "never"
+        self.summarize = summarize
 
     def json_schema(self) -> dict:
         """Return the OpenAI-compatible function schema for this tool."""
@@ -86,7 +90,12 @@ class Tool:
 TOOLS: dict[str, Tool] = {}
 
 
-def tool(params_model: type[BaseModel], cls: str = "atomic"):
+def tool(
+    params_model: type[BaseModel],
+    cls: str = "atomic",
+    collapse: str = "lazy",
+    summarize: Callable[[dict], str] | None = None,
+):
     """Decorator that registers a function as a Silica tool.
 
     Usage:
@@ -102,8 +111,11 @@ def tool(params_model: type[BaseModel], cls: str = "atomic"):
     def decorator(fn: Callable) -> Callable:
         tool_name = fn.__name__
         tool_desc = fn.__doc__ or ""
-        TOOLS[tool_name] = Tool(fn, tool_name, tool_desc.strip(), params_model, cls)
-        logger.debug("Registered tool: %s (class=%s)", tool_name, cls)
+        TOOLS[tool_name] = Tool(
+            fn, tool_name, tool_desc.strip(), params_model, cls,
+            collapse=collapse, summarize=summarize,
+        )
+        logger.debug("Registered tool: %s (class=%s, collapse=%s)", tool_name, cls, collapse)
         return fn
 
     return decorator

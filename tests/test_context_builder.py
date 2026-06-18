@@ -167,9 +167,9 @@ def test_segmented_pure_dynamic_matches_build_context():
 
 
 def test_is_checkpoint_done_returns_output_ref(tmp_path):
-    import silica.planner.progress as _mod
+    import silica.kernel.progress as _mod
     _mod._RUNS_DIR = tmp_path
-    from silica.planner.progress import ProgressLedger
+    from silica.kernel.progress import ProgressLedger
 
     p = ProgressLedger.new(mode="inject", inputs={})
     p.add_task("validate", task_id="chunk_0_validate")
@@ -180,9 +180,9 @@ def test_is_checkpoint_done_returns_output_ref(tmp_path):
 
 
 def test_is_checkpoint_done_wrong_hash(tmp_path):
-    import silica.planner.progress as _mod
+    import silica.kernel.progress as _mod
     _mod._RUNS_DIR = tmp_path
-    from silica.planner.progress import ProgressLedger
+    from silica.kernel.progress import ProgressLedger
 
     p = ProgressLedger.new(mode="inject", inputs={})
     p.add_task("validate", task_id="chunk_0_validate")
@@ -192,9 +192,9 @@ def test_is_checkpoint_done_wrong_hash(tmp_path):
 
 
 def test_is_checkpoint_done_pending_task(tmp_path):
-    import silica.planner.progress as _mod
+    import silica.kernel.progress as _mod
     _mod._RUNS_DIR = tmp_path
-    from silica.planner.progress import ProgressLedger
+    from silica.kernel.progress import ProgressLedger
 
     p = ProgressLedger.new(mode="inject", inputs={})
     p.add_task("validate", task_id="chunk_0_validate")
@@ -203,9 +203,9 @@ def test_is_checkpoint_done_pending_task(tmp_path):
 
 
 def test_is_checkpoint_done_unknown_task(tmp_path):
-    import silica.planner.progress as _mod
+    import silica.kernel.progress as _mod
     _mod._RUNS_DIR = tmp_path
-    from silica.planner.progress import ProgressLedger
+    from silica.kernel.progress import ProgressLedger
 
     p = ProgressLedger.new(mode="inject", inputs={})
     assert p.is_checkpoint_done("nonexistent_task", "abc123") is None
@@ -216,9 +216,9 @@ def test_is_checkpoint_done_unknown_task(tmp_path):
 # ---------------------------------------------------------------------------
 
 def test_run_dir_is_under_runs_dir(tmp_path):
-    import silica.planner.progress as _mod
+    import silica.kernel.progress as _mod
     _mod._RUNS_DIR = tmp_path
-    from silica.planner.progress import ProgressLedger
+    from silica.kernel.progress import ProgressLedger
 
     p = ProgressLedger.new(mode="inject", inputs={})
     assert p.run_dir == tmp_path / p.run_id
@@ -229,9 +229,9 @@ def test_run_dir_is_under_runs_dir(tmp_path):
 # ---------------------------------------------------------------------------
 
 def test_mark_done_content_hash_survives_roundtrip(tmp_path):
-    import silica.planner.progress as _mod
+    import silica.kernel.progress as _mod
     _mod._RUNS_DIR = tmp_path
-    from silica.planner.progress import ProgressLedger
+    from silica.kernel.progress import ProgressLedger
 
     p = ProgressLedger.new(mode="inject", inputs={})
     p.add_task("validate", task_id="chunk_0_validate")

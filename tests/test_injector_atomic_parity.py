@@ -9,7 +9,7 @@ import pytest
 
 import silica.config
 import silica.driver
-import silica.planner.progress as prog_mod
+import silica.kernel.progress as prog_mod
 
 from silica.kernel.ops import Op, OpType
 from silica.router.orchestrator import InjectorFSM

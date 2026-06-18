@@ -1,7 +1,7 @@
 from __future__ import annotations
 
-from silica.workers.profile import PROFILES, WorkerResult
-import silica.workers.profiles_builtin  # noqa: F401  (import registers profiles)
+from silica.capabilities.profile import PROFILES, WorkerResult
+import silica.capabilities.profiles_builtin  # noqa: F401  (import registers profiles)
 
 
 READONLY_TOOLS = {
