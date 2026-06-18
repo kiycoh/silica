@@ -35,11 +35,25 @@ def command_table(
     name_style: str = "bold #22d3ee",
     usage_style: str = "dim",
     show_summary: bool = True,
+    compact: bool = False,
 ) -> Table:
-    """Rich Table (no borders): name | usage | [summary]."""
-    table = Table(show_header=False, box=None, padding=(0, 3, 0, 0), pad_edge=False)
-    table.add_column(style=name_style, no_wrap=True)
-    table.add_column(style=usage_style, no_wrap=True)
+    """Rich Table (no borders): name | usage | [summary].
+
+    With ``compact=True`` the name column is pinned to its content width and the
+    usage column flexes (ellipsised when truncated), so a narrow panel can never
+    crush the command names — used by the side-by-side home overview.
+    """
+    table = Table(
+        show_header=False, box=None, padding=(0, 3, 0, 0), pad_edge=False, expand=compact
+    )
+    name_width = max((len(c.name) for c in commands), default=0) if compact else None
+    table.add_column(style=name_style, no_wrap=True, width=name_width)
+    if compact:
+        table.add_column(style=usage_style, no_wrap=True, overflow="ellipsis", ratio=1)
+    else:
+        # Wrappable so an outlier usage (e.g. /organize) reflows instead of
+        # forcing Rich to crush the no_wrap name column down to "/o…".
+        table.add_column(style=usage_style, no_wrap=False)
     if show_summary:
         table.add_column(no_wrap=False)
     for cmd in commands:
