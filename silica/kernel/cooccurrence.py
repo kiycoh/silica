@@ -10,6 +10,7 @@ separate relatedness facade — NOT here.
 """
 from __future__ import annotations
 
+import math
 import re
 from pathlib import Path
 from typing import Any
@@ -275,6 +276,69 @@ class CooccurStore:
     def node_label(self, stem: str) -> str:
         _adj, labels = self._aggregate()
         return labels.get(stem, stem)
+
+    def community_labels(
+        self,
+        communities: list[set[str]],
+        *,
+        terms: int = 2,
+    ) -> dict[int, str]:
+        """Name each community using class-based TF-IDF over the concept index.
+
+        Returns {community_index: label_string}. Communities whose member notes
+        are all absent from the store are omitted (the caller falls back to its
+        own "Cluster N" label).  Pure read-only — never calls save() and never
+        mutates self._notes.
+
+        Algorithm (BERTopic-style c-TF-IDF):
+          1. For each community i, build tf_i = sum of note_nodes(path) over
+             all member paths (absent paths contribute nothing).
+          2. Drop communities with an empty tf_i; they are excluded from N and df.
+          3. N = number of non-empty communities.
+          4. df[stem] = number of non-empty communities containing that stem.
+          5. score(stem, i) = tf_i[stem] * log(1 + N / df[stem]).
+          6. Rank by (-score, stem) — score desc, stem asc as tie-break. Take top
+             `terms` stems; resolve each to its surface via node_label(stem).
+          7. Join surfaces with " · ".
+        """
+        if not communities:
+            return {}
+
+        # Step 1 — build per-community term-frequency vectors
+        tf_list: list[dict[str, int]] = []
+        valid_indices: list[int] = []
+        for i, members in enumerate(communities):
+            tf: dict[str, int] = {}
+            for path in members:
+                for stem, count in self.note_nodes(path).items():
+                    tf[stem] = tf.get(stem, 0) + count
+            if tf:
+                tf_list.append(tf)
+                valid_indices.append(i)
+
+        if not tf_list:
+            return {}
+
+        # Steps 3–4 — N and document frequency
+        N = len(tf_list)
+        df: dict[str, int] = {}
+        for tf in tf_list:
+            for stem in tf:
+                df[stem] = df.get(stem, 0) + 1
+
+        # Steps 5–7 — score, rank, surface, label
+        result: dict[int, str] = {}
+        for orig_i, tf in zip(valid_indices, tf_list):
+            scored = [
+                (stem, count * math.log(1 + N / df[stem]))
+                for stem, count in tf.items()
+            ]
+            ranked = sorted(scored, key=lambda kv: (-kv[1], kv[0]))
+            top_stems = [stem for stem, _score in ranked[:terms]]
+            surfaces = [self.node_label(stem) for stem in top_stems]
+            result[orig_i] = " · ".join(surfaces)
+
+        return result
 
     def to_networkx(self, scope: str | None = None):
         """Return an undirected weighted nx.Graph for consumers (centrality,
