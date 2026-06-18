@@ -5,12 +5,15 @@ passes, the vis.js graph export, and the structural vault report.
 """
 from __future__ import annotations
 
+import logging
 from typing import Any
 
 from pydantic import BaseModel, Field
 
 from silica.driver import DRIVER
 from silica.tools import tool
+
+logger = logging.getLogger(__name__)
 
 
 def _in_folder(path: str, folder: str) -> bool:
@@ -45,6 +48,16 @@ def silica_graph_export(output_path: str = "graph.html", folder: str = "", title
     The output file can be opened directly in any browser — no server needed.
     """
     from silica.kernel.graph_export import export_graph
+
+    # Best-effort: refresh the co-occurrence index so clusters get named labels
+    # (incremental — skips already-indexed notes). Naming degrades to "Cluster N"
+    # if this fails; the graph still renders. ponytail: full-vault refresh, scope
+    # to changed notes only if it gets slow on big vaults.
+    try:
+        silica_cooccurrence_refresh(folder=folder)
+    except Exception as exc:
+        logger.warning("silica_graph_export: cooccurrence refresh skipped (%s)", exc)
+
     return export_graph(output_path=output_path, folder=folder, title=title)
 
 

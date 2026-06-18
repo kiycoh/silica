@@ -241,3 +241,34 @@ class TestPartitionByFile:
         for group in groups:
             for chunk in group["chunks"]:
                 assert chunk.get("source_file") == "X.md"
+
+
+class TestGraphExportAutoCooccur:
+    """silica_graph_export refreshes the co-occurrence index first (best-effort)."""
+
+    def test_refreshes_cooccurrence_before_export(self, monkeypatch):
+        import silica.tools.graph as gmod
+        import silica.kernel.graph_export as gx
+
+        calls = []
+        monkeypatch.setattr(gmod, "silica_cooccurrence_refresh",
+                            lambda folder="": calls.append(("refresh", folder)))
+        monkeypatch.setattr(gx, "export_graph",
+                            lambda **kw: calls.append(("export", kw["folder"])) or {"ok": True})
+
+        result = gmod.silica_graph_export(folder="sub")
+
+        assert result == {"ok": True}
+        assert calls == [("refresh", "sub"), ("export", "sub")]  # refresh first
+
+    def test_refresh_failure_is_best_effort(self, monkeypatch):
+        import silica.tools.graph as gmod
+        import silica.kernel.graph_export as gx
+
+        def boom(folder=""):
+            raise RuntimeError("index locked")
+        monkeypatch.setattr(gmod, "silica_cooccurrence_refresh", boom)
+        monkeypatch.setattr(gx, "export_graph", lambda **kw: {"ok": True})
+
+        # Must not raise — naming degrades to "Cluster N", graph still renders.
+        assert gmod.silica_graph_export() == {"ok": True}

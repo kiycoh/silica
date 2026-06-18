@@ -11,11 +11,21 @@ Degrades gracefully to no-community mode if unavailable.
 """
 from __future__ import annotations
 
+import html
 import json
 import logging
+from dataclasses import dataclass
 from pathlib import Path
 
 import httpx
+
+
+@dataclass
+class Community:
+    id: int
+    label: str
+    color: str
+    size: int
 
 logger = logging.getLogger(__name__)
 
@@ -170,18 +180,20 @@ def build_graph_data(folder: str = "") -> tuple[list[dict], list[dict]]:
     return nodes, edges
 
 
-def detect_communities(nodes: list[dict], edges: list[dict]) -> None:
+def detect_communities(nodes: list[dict], edges: list[dict]) -> list[Community]:
     """Louvain community detection on EXTRACTED edges, in-place.
 
     Assigns node["group"] (int) and node["color"]. Ghost nodes keep group == -1.
     Degrades gracefully if networkx < 3.0.
+
+    Returns a list of Community objects with topic labels where available.
     """
     try:
         import networkx as nx
         from networkx.algorithms.community import louvain_communities
     except (ImportError, AttributeError):
         logger.warning("graph_export: louvain_communities unavailable (networkx >= 3.0 required). Skipped.")
-        return
+        return []
 
     real_ids = {n["id"] for n in nodes if n.get("type") != "ghost"}
     G = nx.Graph()
@@ -192,13 +204,13 @@ def detect_communities(nodes: list[dict], edges: list[dict]) -> None:
 
     if G.number_of_edges() == 0:
         logger.info("graph_export: no EXTRACTED edges — community detection skipped.")
-        return
+        return []
 
     try:
         communities = louvain_communities(G, seed=42)
     except Exception as exc:
         logger.warning("graph_export: louvain_communities raised %s: %s", type(exc).__name__, exc)
-        return
+        return []
 
     node_to_comm: dict[str, int] = {
         node_id: i
@@ -219,12 +231,32 @@ def detect_communities(nodes: list[dict], edges: list[dict]) -> None:
                 "highlight":  {"background": color, "border": "#ffffff"},
             }
 
+    # Fetch community labels from the co-occurrence index; degrade to {} on any failure.
+    from silica.kernel.cooccurrence import CooccurStore
+    try:
+        labels = CooccurStore().community_labels(
+            [{m.removesuffix(".md") for m in c} for c in communities]
+        )
+    except Exception:
+        labels = {}
+
     logger.info("graph_export: %d communities across %d nodes.", len(communities), len(real_ids))
+
+    return [
+        Community(
+            id=i,
+            label=labels.get(i, f"Cluster {i}"),
+            color=COMMUNITY_COLORS[i % len(COMMUNITY_COLORS)],
+            size=len(comm),
+        )
+        for i, comm in enumerate(communities)
+    ]
 
 
 def render_html(
     nodes: list[dict],
     edges: list[dict],
+    communities: "list[Community]" = (),  # type: ignore[assignment]
     title: str = "Silica Knowledge Graph",
     lib_js: str = "",
 ) -> str:
@@ -232,33 +264,28 @@ def render_html(
 
     Pass lib_js to embed the bundle inline (truly offline-capable).
     If omitted, CDN link is used as a fallback.
+    communities is a list of Community objects; legend is built from it.
     """
-    nodes_json = json.dumps(nodes, ensure_ascii=False)
-    edges_json = json.dumps(edges, ensure_ascii=False)
+    nodes_json = json.dumps(nodes, ensure_ascii=False).replace("</", "<\\/")
+    edges_json = json.dumps(edges, ensure_ascii=False).replace("</", "<\\/")
 
     n_notes      = sum(1 for n in nodes if n.get("type") != "ghost")
     n_ghost      = sum(1 for n in nodes if n.get("type") == "ghost")
     n_extracted  = sum(1 for e in edges if e.get("type") == "EXTRACTED")
     n_ambiguous  = sum(1 for e in edges if e.get("type") == "AMBIGUOUS")
-    n_communities = len({
-        n.get("group", -1) for n in nodes
-        if n.get("type") != "ghost" and n.get("group", -1) >= 0
-    })
+    n_communities = len(communities)
 
-    comm_colors: dict[int, str] = {}
-    for n in nodes:
-        g = n.get("group", -1)
-        if g >= 0:
-            c = n.get("color")
-            comm_colors[g] = c if isinstance(c, str) else (
-                c.get("border", "#888") if isinstance(c, dict) else "#888"
-            )
     legend_items = "".join(
-        f'<div class="legend-item" data-community="{cid}" onclick="filterCommunity({cid})">'
-        f'<span class="dot" style="background:{color}"></span>Cluster {cid}'
+        f'<div class="legend-item" data-community="{c.id}" onclick="filterCommunity({c.id})">'
+        f'<span class="dot" style="background:{c.color}"></span>{html.escape(c.label)} '
+        f'<span style="color:#555;font-size:11px;margin-left:auto">{c.size}</span>'
         f'</div>\n'
-        for cid, color in sorted(comm_colors.items())
+        for c in communities
     )
+
+    comm_labels_json = json.dumps(
+        {c.id: c.label for c in communities}, ensure_ascii=False
+    ).replace("</", "<\\/")
 
     return f"""<!DOCTYPE html>
 <html lang="en">
@@ -378,6 +405,7 @@ def render_html(
 <script>
 const RAW_NODES = {nodes_json};
 const RAW_EDGES = {edges_json};
+const COMM_LABELS = {comm_labels_json};
 
 const outDeg = {{}}, inDeg = {{}};
 RAW_EDGES.forEach(e => {{
@@ -441,8 +469,8 @@ function onSearch(q) {{
 Graph.onNodeClick(node => {{
   document.getElementById("drawer-title").textContent = node.label;
   document.getElementById("drawer-path").textContent  = node.path || "(ghost node)";
-  const commText = (Number.isInteger(node.group) && node.group >= 0)
-    ? ` · cluster ${{node.group}}` : "";
+  const commText = (Number.isInteger(node.group) && node.group >= 0 && COMM_LABELS[node.group])
+    ? ` · ${{COMM_LABELS[node.group]}}` : "";
   document.getElementById("drawer-meta").textContent = `${{node.type}}${{commText}}`;
   document.getElementById("drawer-out").textContent = outDeg[node.id] || 0;
   document.getElementById("drawer-in").textContent  = inDeg[node.id]  || 0;
@@ -482,21 +510,18 @@ def export_graph(
     Returns dict with keys: success, path, nodes, edges, communities, unresolved.
     """
     nodes, edges = build_graph_data(folder=folder)
-    detect_communities(nodes, edges)
+    communities = detect_communities(nodes, edges)
     lib_js = _fetch_lib_js()
-    html = render_html(nodes, edges, title=title, lib_js=lib_js)
+    html_out = render_html(nodes, edges, communities, title=title, lib_js=lib_js)
 
     out = Path(output_path)
     out.parent.mkdir(parents=True, exist_ok=True)
-    out.write_text(html, encoding="utf-8")
+    out.write_text(html_out, encoding="utf-8")
 
     n_notes       = sum(1 for n in nodes if n.get("type") != "ghost")
     n_ghost       = sum(1 for n in nodes if n.get("type") == "ghost")
     n_extracted   = sum(1 for e in edges if e.get("type") == "EXTRACTED")
-    n_communities = len({
-        n.get("group", -1) for n in nodes
-        if n.get("type") != "ghost" and n.get("group", -1) >= 0
-    })
+    n_communities = len(communities)
 
     logger.info(
         "graph_export: wrote %s — %d notes, %d links, %d clusters, %d unresolved",
