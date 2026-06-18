@@ -1,461 +1,882 @@
 <!doctype html>
 <html lang="en">
+
 <head>
-<meta charset="utf-8">
-<meta name="viewport" content="width=device-width, initial-scale=1">
-<title>Silica — a coherence engine for your vault</title>
-<meta name="description" content="Silica is a filesystem-native curation engine for Markdown vaults. Drop in raw clippings, drafts, and code — it distills atomic notes, wires the wikilinks, and refuses to land a broken graph.">
-<meta name="theme-color" content="#0B0D12">
-<meta name="color-scheme" content="dark">
-<link rel="icon" href="/favicon.svg" type="image/svg+xml">
-<meta property="og:title" content="Silica — amorphous in, coherent out">
-<meta property="og:description" content="A filesystem-native curation engine for Markdown vaults. Atomic notes, resolved wikilinks, a graph that never breaks silently.">
-<meta property="og:type" content="website">
-<link rel="preload" as="font" type="font/woff2" href="/fonts/martian-mono-latin.woff2" crossorigin>
-<style>
-@font-face{
-  font-family:"Martian Mono";
-  src:url("/fonts/martian-mono-latin.woff2") format("woff2");
-  font-weight:300 800;
-  font-style:normal;
-  font-display:swap;
-}
-:root{
-  --void:#0B0D12; --slate:#10141B; --slate-2:#151A23;
-  --line:#1E2530; --line-2:#2B3442;
-  --frost:#E7EBF1; --ash:#8A93A3; --ash-dim:#5A6372;
-  --cyan:#22D3EE; --cyan-dim:#1AA3BD; --indigo:#6366F1; --edge:#4D5575;
-  --grad:linear-gradient(100deg,var(--cyan),var(--indigo));
-  --mono:"Martian Mono",ui-monospace,"Cascadia Code",Menlo,monospace;
-  --term:ui-monospace,"SF Mono","Cascadia Code","DejaVu Sans Mono",Menlo,Consolas,monospace;
-  --maxw:1080px;
-  --pad:clamp(1.25rem,5vw,3rem);
-  --sp:clamp(4.5rem,11vw,8rem);
-}
-*{box-sizing:border-box}
-html{scroll-behavior:smooth}
-@media (prefers-reduced-motion:reduce){html{scroll-behavior:auto}}
-body{
-  margin:0;
-  background:var(--void);
-  color:var(--frost);
-  font-family:var(--mono);
-  font-weight:300;
-  font-size:clamp(0.9rem,1.6vw,0.98rem);
-  line-height:1.7;
-  letter-spacing:-0.01em;
-  -webkit-font-smoothing:antialiased;
-  text-rendering:optimizeLegibility;
-  /* faint silica lattice */
-  background-image:radial-gradient(circle at 1px 1px,rgba(34,211,238,0.05) 1px,transparent 0);
-  background-size:34px 34px;
-}
-.wrap{max-width:var(--maxw);margin-inline:auto;padding-inline:var(--pad)}
-a{color:var(--cyan);text-decoration:none}
-a:hover{text-decoration:underline;text-underline-offset:3px}
-:focus-visible{outline:2px solid var(--cyan);outline-offset:3px;border-radius:2px}
-.grad{background:var(--grad);-webkit-background-clip:text;background-clip:text;color:transparent}
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <title>Silica — a coherence engine for your notes</title>
+  <meta name="description"
+    content="Silica turns a messy pile of Markdown notes into a knowledge base you can navigate: atomic notes, resolved wikilinks, a graph that never breaks. Plain Markdown, on your disk.">
+  <meta name="theme-color" content="#0B0D12">
+  <meta name="color-scheme" content="dark">
+  <link rel="icon" href="/favicon.svg" type="image/svg+xml">
+  <meta property="og:title" content="Silica — amorphous in, coherent out">
+  <meta property="og:description"
+    content="Drop in a messy clipping; get back atomic notes wired with wikilinks. Filesystem-native curation for Markdown vaults — plain files, on your disk.">
+  <meta property="og:type" content="website">
+  <link rel="preload" as="font" type="font/woff2" href="/fonts/martian-mono-latin.woff2" crossorigin>
+  <style>
+    @font-face {
+      font-family: "Martian Mono";
+      src: url("/fonts/martian-mono-latin.woff2") format("woff2");
+      font-weight: 300 800;
+      font-style: normal;
+      font-display: swap;
+    }
 
-/* ---------- nav ---------- */
-.nav{
-  position:sticky;top:0;z-index:10;
-  backdrop-filter:blur(8px);
-  background:color-mix(in srgb,var(--void) 78%,transparent);
-  border-bottom:1px solid var(--line);
-}
-.nav .wrap{display:flex;align-items:center;justify-content:space-between;height:56px}
-.brand{font-weight:700;letter-spacing:0.42em;font-size:0.82rem;background:var(--grad);-webkit-background-clip:text;background-clip:text;color:transparent}
-.nav-links{display:flex;gap:clamp(0.9rem,3vw,2rem);align-items:center;font-size:0.78rem;letter-spacing:0.04em}
-.nav-links a{color:var(--ash)}
-.nav-links a:hover{color:var(--frost);text-decoration:none}
-.nav-links .pill{
-  color:var(--cyan);border:1px solid var(--line-2);
-  padding:0.36rem 0.8rem;border-radius:2px;
-}
-.nav-links .pill:hover{border-color:var(--cyan);background:rgba(34,211,238,0.06)}
-@media (max-width:520px){.nav-links a[href^="#"]:not(.pill){display:none}}
+    :root {
+      --void: #0B0D12;
+      --slate: #10141B;
+      --slate-2: #151A23;
+      --line: #1E2530;
+      --line-2: #2B3442;
+      --frost: #E7EBF1;
+      --ash: #8A93A3;
+      --ash-dim: #5A6372;
+      --cyan: #22D3EE;
+      --cyan-dim: #1AA3BD;
+      --indigo: #6366F1;
+      --edge: #4D5575;
+      --grad: linear-gradient(100deg, var(--cyan), var(--indigo));
+      --mono: "Martian Mono", ui-monospace, "Cascadia Code", Menlo, monospace;
+      --term: ui-monospace, "SF Mono", "Cascadia Code", "DejaVu Sans Mono", Menlo, Consolas, monospace;
+      --maxw: 1080px;
+      --pad: clamp(1.25rem, 5vw, 3rem);
+      --sp: clamp(4.5rem, 11vw, 8rem);
+    }
 
-/* ---------- hero ---------- */
-.hero{padding-block:clamp(2.5rem,7vw,5rem) var(--sp)}
-.crystal-frame{
-  border:1px solid var(--line);
-  background:linear-gradient(180deg,var(--slate),var(--void));
-  border-radius:4px;
-  padding:clamp(0.8rem,3vw,2rem) 0.6rem;
-  overflow-x:auto;
-  position:relative;
-}
-.crystal-frame::before{
-  content:"silica // graph";
-  position:absolute;top:0.55rem;left:0.85rem;
-  font-family:var(--term);font-size:0.62rem;letter-spacing:0.2em;
-  color:var(--ash-dim);
-}
-#crystal{
-  margin:0.8rem 0 0;
-  font-family:var(--term);
-  font-size:clamp(0.5rem,1.85vw,0.92rem);
-  line-height:1.32;
-  white-space:pre;
-  text-align:center;
-  color:var(--edge);
-  font-weight:400;
-}
-#crystal .nd{color:var(--frost);font-weight:600}
-#crystal .nd.core{color:var(--cyan);text-shadow:0 0 14px rgba(34,211,238,0.45)}
-#crystal .lk{color:var(--cyan);font-weight:400}
+    * {
+      box-sizing: border-box
+    }
 
-.headline{
-  font-weight:700;
-  font-size:clamp(2rem,7vw,3.7rem);
-  line-height:1.02;
-  letter-spacing:-0.03em;
-  text-transform:uppercase;
-  margin:clamp(2rem,6vw,3.4rem) 0 0;
-}
-.headline .out{background:var(--grad);-webkit-background-clip:text;background-clip:text;color:transparent}
-.lede{
-  max-width:54ch;
-  margin:1.4rem 0 0;
-  color:var(--ash);
-  font-size:clamp(0.95rem,1.8vw,1.08rem);
-  line-height:1.65;
-}
-.lede b{color:var(--frost);font-weight:400}
+    html {
+      scroll-behavior: smooth
+    }
 
-.cmd{
-  margin-top:2.2rem;
-  display:flex;flex-wrap:wrap;gap:0.7rem;align-items:stretch;
-}
-.cmd-line{
-  flex:1 1 360px;min-width:0;
-  display:flex;align-items:center;gap:0.6rem;
-  border:1px solid var(--line-2);border-radius:3px;
-  background:var(--slate);
-  padding:0.7rem 0.9rem;
-  font-family:var(--term);font-size:0.78rem;
-  overflow-x:auto;white-space:nowrap;
-}
-.cmd-line .pr{color:var(--cyan);font-weight:600}
-.cmd-line code{color:var(--frost)}
-.btn{
-  font-family:var(--mono);font-size:0.74rem;font-weight:600;
-  letter-spacing:0.08em;text-transform:lowercase;
-  color:var(--void);background:var(--cyan);
-  border:1px solid var(--cyan);border-radius:3px;
-  padding:0.7rem 1.2rem;cursor:pointer;white-space:nowrap;
-  transition:transform .12s ease,background .15s ease;
-}
-.btn:hover{background:var(--frost);border-color:var(--frost);transform:translateY(-1px)}
-.btn:active{transform:translateY(0)}
-.btn.ghost{background:transparent;color:var(--cyan);border-color:var(--line-2)}
-.btn.ghost:hover{background:rgba(34,211,238,0.06);border-color:var(--cyan);color:var(--cyan)}
-.btn.ok{background:var(--cyan-dim);border-color:var(--cyan-dim);color:var(--void)}
+    @media (prefers-reduced-motion:reduce) {
+      html {
+        scroll-behavior: auto
+      }
+    }
 
-/* ---------- section scaffold ---------- */
-.section{padding-block:var(--sp);border-top:1px solid var(--line)}
-.eyebrow{
-  font-family:var(--term);
-  font-size:0.72rem;letter-spacing:0.28em;text-transform:lowercase;
-  color:var(--ash-dim);margin:0 0 2.4rem;
-}
-.eyebrow b{color:var(--cyan);font-weight:400}
-.section h2{
-  font-weight:600;font-size:clamp(1.4rem,3.4vw,2rem);
-  letter-spacing:-0.02em;margin:0 0 0.6rem;
-}
-.section .sub{color:var(--ash);max-width:56ch;margin:0 0 3rem}
+    body {
+      margin: 0;
+      background: var(--void);
+      color: var(--frost);
+      font-family: var(--mono);
+      font-weight: 300;
+      font-size: clamp(0.9rem, 1.6vw, 0.98rem);
+      line-height: 1.7;
+      letter-spacing: -0.01em;
+      -webkit-font-smoothing: antialiased;
+      text-rendering: optimizeLegibility;
+      /* faint silica lattice */
+      background-image: radial-gradient(circle at 1px 1px, rgba(34, 211, 238, 0.05) 1px, transparent 0);
+      background-size: 34px 34px;
+    }
 
-/* ---------- the run (panes) ---------- */
-.panes{display:grid;grid-template-columns:repeat(2,1fr);gap:1px;background:var(--line);border:1px solid var(--line);border-radius:4px;overflow:hidden}
-@media (max-width:720px){.panes{grid-template-columns:1fr}}
-.pane{background:var(--slate);padding:clamp(1.1rem,3vw,1.6rem);display:flex;flex-direction:column;gap:0.9rem}
-.pane:hover{background:var(--slate-2)}
-.pane pre{
-  margin:0;font-family:var(--term);
-  font-size:clamp(0.62rem,1.5vw,0.76rem);line-height:1.55;
-  white-space:pre;overflow-x:auto;color:var(--ash);
-}
-.pane pre .pr{color:var(--cyan);font-weight:600}
-.pane pre .ok{color:var(--frost)}
-.pane pre .add{color:var(--cyan-dim)}
-.pane pre .am{color:var(--indigo)}
-.pane .cap{font-size:0.82rem;color:var(--frost);margin:0;border-left:2px solid var(--cyan);padding-left:0.8rem}
-.pane .cap span{color:var(--ash)}
+    .wrap {
+      max-width: var(--maxw);
+      margin-inline: auto;
+      padding-inline: var(--pad)
+    }
 
-/* ---------- principles ---------- */
-.cols{display:grid;grid-template-columns:repeat(3,1fr);gap:clamp(1.4rem,4vw,2.6rem)}
-@media (max-width:720px){.cols{grid-template-columns:1fr;gap:2.4rem}}
-.col h3{
-  font-family:var(--term);font-size:0.82rem;font-weight:600;
-  letter-spacing:0.16em;text-transform:uppercase;color:var(--cyan);
-  margin:0 0 0.9rem;
-}
-.col .ix{font-family:var(--term);color:var(--ash-dim);font-size:0.72rem;display:block;margin-bottom:0.7rem}
-.col p{margin:0;color:var(--ash);font-size:0.92rem;line-height:1.7}
-.col p b{color:var(--frost);font-weight:400}
+    a {
+      color: var(--cyan);
+      text-decoration: none
+    }
 
-/* ---------- install ---------- */
-.install{
-  border:1px solid var(--line-2);border-radius:4px;
-  background:linear-gradient(180deg,var(--slate),var(--void));
-  padding:clamp(1.2rem,4vw,2rem);
-}
-.install pre{
-  margin:0 0 1.4rem;font-family:var(--term);
-  font-size:clamp(0.7rem,1.7vw,0.86rem);line-height:1.9;
-  white-space:pre;overflow-x:auto;color:var(--frost);
-}
-.install pre .pr{color:var(--cyan);font-weight:600;user-select:none}
-.install pre .cm{color:var(--ash-dim)}
-.install-actions{display:flex;flex-wrap:wrap;gap:0.7rem;align-items:center}
-.install-note{color:var(--ash);font-size:0.82rem;margin-left:auto}
-.install-note a{color:var(--ash)}
-.install-note a:hover{color:var(--frost)}
+    a:hover {
+      text-decoration: underline;
+      text-underline-offset: 3px
+    }
 
-/* ---------- footer ---------- */
-.foot{border-top:1px solid var(--line);padding-block:3rem;color:var(--ash-dim);font-size:0.76rem}
-.foot .wrap{display:flex;flex-wrap:wrap;gap:0.5rem 1.4rem;align-items:center;justify-content:space-between}
-.foot a{color:var(--ash)}
-.foot .mark{letter-spacing:0.3em;color:var(--ash);font-weight:600}
+    :focus-visible {
+      outline: 2px solid var(--cyan);
+      outline-offset: 3px;
+      border-radius: 2px
+    }
 
-.sr{position:absolute;width:1px;height:1px;overflow:hidden;clip:rect(0 0 0 0);white-space:nowrap}
-</style>
+    .grad {
+      background: var(--grad);
+      -webkit-background-clip: text;
+      background-clip: text;
+      color: transparent
+    }
+
+    /* ---------- nav ---------- */
+    .nav {
+      position: sticky;
+      top: 0;
+      z-index: 10;
+      backdrop-filter: blur(8px);
+      background: color-mix(in srgb, var(--void) 78%, transparent);
+      border-bottom: 1px solid var(--line);
+    }
+
+    .nav .wrap {
+      display: flex;
+      align-items: center;
+      justify-content: space-between;
+      height: 56px
+    }
+
+    .brand {
+      font-weight: 700;
+      letter-spacing: 0.42em;
+      font-size: 0.82rem;
+      background: var(--grad);
+      -webkit-background-clip: text;
+      background-clip: text;
+      color: transparent
+    }
+
+    .nav-links {
+      display: flex;
+      gap: clamp(0.9rem, 3vw, 2rem);
+      align-items: center;
+      font-size: 0.78rem;
+      letter-spacing: 0.04em
+    }
+
+    .nav-links a {
+      color: var(--ash)
+    }
+
+    .nav-links a:hover {
+      color: var(--frost);
+      text-decoration: none
+    }
+
+    .nav-links .pill {
+      color: var(--cyan);
+      border: 1px solid var(--line-2);
+      padding: 0.36rem 0.8rem;
+      border-radius: 2px;
+    }
+
+    .nav-links .pill:hover {
+      border-color: var(--cyan);
+      background: rgba(34, 211, 238, 0.06)
+    }
+
+    @media (max-width:520px) {
+      .nav-links a[href^="#"]:not(.pill) {
+        display: none
+      }
+    }
+
+    /* ---------- hero ---------- */
+    .hero {
+      padding-block: clamp(2.4rem, 6vw, 4rem) var(--sp)
+    }
+
+    .hero .eyebrow {
+      margin: 0 0 1.5rem
+    }
+
+    .headline {
+      font-weight: 700;
+      font-size: clamp(2rem, 7vw, 3.7rem);
+      line-height: 1.02;
+      letter-spacing: -0.03em;
+      text-transform: uppercase;
+      margin: 0;
+    }
+
+    .headline .out {
+      background: var(--grad);
+      -webkit-background-clip: text;
+      background-clip: text;
+      color: transparent
+    }
+
+    .lede {
+      max-width: 56ch;
+      margin: 1.4rem 0 0;
+      color: var(--ash);
+      font-size: clamp(0.95rem, 1.8vw, 1.08rem);
+      line-height: 1.65;
+    }
+
+    .lede b {
+      color: var(--frost);
+      font-weight: 400
+    }
+
+    .lede .lk {
+      color: var(--cyan)
+    }
+
+    /* before -> after demo (the signature) */
+    .xform {
+      display: grid;
+      grid-template-columns: 1fr auto 1fr;
+      align-items: stretch;
+      gap: clamp(0.7rem, 2.4vw, 1.3rem);
+      margin-top: clamp(2.2rem, 6vw, 3.2rem);
+    }
+
+    @media (max-width:640px) {
+      .xform {
+        grid-template-columns: 1fr
+      }
+    }
+
+    .card {
+      position: relative;
+      min-width: 0;
+      border: 1px solid var(--line);
+      border-radius: 4px;
+      background: linear-gradient(180deg, var(--slate), var(--void));
+      padding: 2.1rem 1rem 1.2rem;
+    }
+
+    .card .label {
+      position: absolute;
+      top: 0.6rem;
+      left: 0.9rem;
+      font-family: var(--term);
+      font-size: 0.62rem;
+      letter-spacing: 0.18em;
+      color: var(--ash-dim);
+    }
+
+    .card.before {
+      filter: saturate(0.55)
+    }
+
+    .card.before pre {
+      margin: 0;
+      font-family: var(--term);
+      font-size: clamp(0.62rem, 1.5vw, 0.78rem);
+      line-height: 1.7;
+      white-space: pre-wrap;
+      overflow-wrap: break-word;
+      color: var(--ash);
+      text-transform: lowercase;
+    }
+
+    .card.after {
+      display: flex;
+      flex-direction: column;
+      gap: 0.18rem;
+      justify-content: center
+    }
+
+    .card.after .ln {
+      font-family: var(--term);
+      font-size: clamp(0.62rem, 1.5vw, 0.78rem);
+      line-height: 1.55
+    }
+
+    .card.after .ttl {
+      color: var(--frost);
+      font-weight: 600;
+      margin-top: 0.55rem
+    }
+
+    .card.after .ttl:first-of-type {
+      margin-top: 0
+    }
+
+    .card.after .sub {
+      color: var(--ash);
+      padding-left: 0.9rem
+    }
+
+    .card.after .sub .ar {
+      color: var(--ash-dim)
+    }
+
+    .card.after .sub .lk {
+      color: var(--cyan)
+    }
+
+    .xform .arrow {
+      display: flex;
+      flex-direction: column;
+      align-items: center;
+      justify-content: center;
+      gap: 0.35rem;
+    }
+
+    .xform .arrow .g {
+      font-family: var(--term);
+      font-size: 1.6rem;
+      line-height: 1;
+      background: var(--grad);
+      -webkit-background-clip: text;
+      background-clip: text;
+      color: transparent;
+    }
+
+    .xform .arrow small {
+      font-family: var(--term);
+      font-size: 0.6rem;
+      letter-spacing: 0.14em;
+      color: var(--ash-dim)
+    }
+
+    @media (max-width:640px) {
+      .xform .arrow {
+        padding: 0.2rem 0
+      }
+
+      .xform .arrow .g {
+        transform: rotate(90deg)
+      }
+    }
+
+    .xform-cap {
+      margin: 1.2rem 0 0;
+      text-align: center;
+      color: var(--ash);
+      font-size: 0.84rem
+    }
+
+    .xform-cap b {
+      color: var(--frost);
+      font-weight: 400
+    }
+
+    /* coherence reveal: the wikilinks settle in on load — quick, never hides the payload */
+    @media (prefers-reduced-motion:no-preference) {
+      .card.after .ln {
+        opacity: 0;
+        transform: translateY(4px);
+        animation: rise .32s ease forwards
+      }
+
+      .card.after .ln:nth-child(3) {
+        animation-delay: .05s
+      }
+
+      .card.after .ln:nth-child(4) {
+        animation-delay: .10s
+      }
+
+      .card.after .ln:nth-child(5) {
+        animation-delay: .15s
+      }
+
+      .card.after .ln:nth-child(6) {
+        animation-delay: .20s
+      }
+
+      .card.after .ln:nth-child(7) {
+        animation-delay: .25s
+      }
+    }
+
+    @keyframes rise {
+      to {
+        opacity: 1;
+        transform: none
+      }
+    }
+
+    .cmd {
+      margin-top: 2.4rem;
+      display: flex;
+      flex-wrap: wrap;
+      gap: 0.7rem;
+      align-items: stretch;
+    }
+
+    .cmd-line {
+      flex: 1 1 360px;
+      min-width: 0;
+      display: flex;
+      align-items: center;
+      gap: 0.6rem;
+      border: 1px solid var(--line-2);
+      border-radius: 3px;
+      background: var(--slate);
+      padding: 0.7rem 0.9rem;
+      font-family: var(--term);
+      font-size: 0.78rem;
+      overflow-x: auto;
+      white-space: nowrap;
+    }
+
+    .cmd-line .pr {
+      color: var(--cyan);
+      font-weight: 600
+    }
+
+    .cmd-line code {
+      color: var(--frost)
+    }
+
+    .btn {
+      font-family: var(--mono);
+      font-size: 0.74rem;
+      font-weight: 600;
+      letter-spacing: 0.08em;
+      text-transform: lowercase;
+      color: var(--void);
+      background: var(--cyan);
+      border: 1px solid var(--cyan);
+      border-radius: 3px;
+      padding: 0.7rem 1.2rem;
+      cursor: pointer;
+      white-space: nowrap;
+      transition: transform .12s ease, background .15s ease;
+    }
+
+    .btn:hover {
+      background: var(--frost);
+      border-color: var(--frost);
+      transform: translateY(-1px)
+    }
+
+    .btn:active {
+      transform: translateY(0)
+    }
+
+    .btn.ghost {
+      background: transparent;
+      color: var(--cyan);
+      border-color: var(--line-2)
+    }
+
+    .btn.ghost:hover {
+      background: rgba(34, 211, 238, 0.06);
+      border-color: var(--cyan);
+      color: var(--cyan)
+    }
+
+    .btn.ok {
+      background: var(--cyan-dim);
+      border-color: var(--cyan-dim);
+      color: var(--void)
+    }
+
+    /* ---------- section scaffold ---------- */
+    .section {
+      padding-block: var(--sp);
+      border-top: 1px solid var(--line)
+    }
+
+    .eyebrow {
+      font-family: var(--term);
+      font-size: 0.72rem;
+      letter-spacing: 0.28em;
+      text-transform: lowercase;
+      color: var(--ash-dim);
+      margin: 0 0 2.4rem;
+    }
+
+    .eyebrow b {
+      color: var(--cyan);
+      font-weight: 400
+    }
+
+    .section h2 {
+      font-weight: 600;
+      font-size: clamp(1.4rem, 3.4vw, 2rem);
+      letter-spacing: -0.02em;
+      margin: 0 0 0.6rem;
+    }
+
+    .section .sub {
+      color: var(--ash);
+      max-width: 56ch;
+      margin: 0 0 3rem
+    }
+
+    /* ---------- the run (panes) ---------- */
+    .panes {
+      display: grid;
+      grid-template-columns: repeat(2, 1fr);
+      gap: 1px;
+      background: var(--line);
+      border: 1px solid var(--line);
+      border-radius: 4px;
+      overflow: hidden
+    }
+
+    @media (max-width:720px) {
+      .panes {
+        grid-template-columns: 1fr
+      }
+    }
+
+    .pane {
+      background: var(--slate);
+      padding: clamp(1.1rem, 3vw, 1.6rem);
+      display: flex;
+      flex-direction: column;
+      gap: 0.9rem
+    }
+
+    .pane:hover {
+      background: var(--slate-2)
+    }
+
+    .pane pre {
+      margin: 0;
+      font-family: var(--term);
+      font-size: clamp(0.62rem, 1.5vw, 0.76rem);
+      line-height: 1.55;
+      white-space: pre;
+      overflow-x: auto;
+      color: var(--ash);
+    }
+
+    .pane pre .pr {
+      color: var(--cyan);
+      font-weight: 600
+    }
+
+    .pane pre .ok {
+      color: var(--frost)
+    }
+
+    .pane pre .add {
+      color: var(--cyan-dim)
+    }
+
+    .pane pre .am {
+      color: var(--indigo)
+    }
+
+    .pane .cap {
+      font-size: 0.82rem;
+      color: var(--frost);
+      margin: 0;
+      border-left: 2px solid var(--cyan);
+      padding-left: 0.8rem
+    }
+
+    .pane .cap span {
+      color: var(--ash)
+    }
+
+    /* ---------- principles ---------- */
+    .cols {
+      display: grid;
+      grid-template-columns: repeat(3, 1fr);
+      gap: clamp(1.4rem, 4vw, 2.6rem)
+    }
+
+    @media (max-width:720px) {
+      .cols {
+        grid-template-columns: 1fr;
+        gap: 2.4rem
+      }
+    }
+
+    .col h3 {
+      font-family: var(--term);
+      font-size: 0.82rem;
+      font-weight: 600;
+      letter-spacing: 0.16em;
+      text-transform: uppercase;
+      color: var(--cyan);
+      margin: 0 0 0.9rem;
+    }
+
+    .col .ix {
+      font-family: var(--term);
+      color: var(--ash-dim);
+      font-size: 0.72rem;
+      display: block;
+      margin-bottom: 0.7rem
+    }
+
+    .col p {
+      margin: 0;
+      color: var(--ash);
+      font-size: 0.92rem;
+      line-height: 1.7
+    }
+
+    .col p b {
+      color: var(--frost);
+      font-weight: 400
+    }
+
+    /* ---------- install ---------- */
+    .install {
+      border: 1px solid var(--line-2);
+      border-radius: 4px;
+      background: linear-gradient(180deg, var(--slate), var(--void));
+      padding: clamp(1.2rem, 4vw, 2rem);
+    }
+
+    .install pre {
+      margin: 0 0 1.4rem;
+      font-family: var(--term);
+      font-size: clamp(0.7rem, 1.7vw, 0.86rem);
+      line-height: 1.9;
+      white-space: pre;
+      overflow-x: auto;
+      color: var(--frost);
+    }
+
+    .install pre .pr {
+      color: var(--cyan);
+      font-weight: 600;
+      user-select: none
+    }
+
+    .install pre .cm {
+      color: var(--ash-dim)
+    }
+
+    .install-actions {
+      display: flex;
+      flex-wrap: wrap;
+      gap: 0.7rem;
+      align-items: center
+    }
+
+    .install-note {
+      color: var(--ash);
+      font-size: 0.82rem;
+      margin-left: auto
+    }
+
+    .install-note a {
+      color: var(--ash)
+    }
+
+    .install-note a:hover {
+      color: var(--frost)
+    }
+
+    /* ---------- footer ---------- */
+    .foot {
+      border-top: 1px solid var(--line);
+      padding-block: 3rem;
+      color: var(--ash-dim);
+      font-size: 0.76rem
+    }
+
+    .foot .wrap {
+      display: flex;
+      flex-wrap: wrap;
+      gap: 0.5rem 1.4rem;
+      align-items: center;
+      justify-content: space-between
+    }
+
+    .foot a {
+      color: var(--ash)
+    }
+
+    .foot .mark {
+      letter-spacing: 0.3em;
+      color: var(--ash);
+      font-weight: 600
+    }
+
+    .sr {
+      position: absolute;
+      width: 1px;
+      height: 1px;
+      overflow: hidden;
+      clip: rect(0 0 0 0);
+      white-space: nowrap
+    }
+  </style>
 </head>
+
 <body>
 
-<header class="nav">
-  <div class="wrap">
-    <span class="brand">SILICA</span>
-    <nav class="nav-links" aria-label="primary">
-      <a href="#run">the run</a>
-      <a href="#trust">why</a>
-      <a href="https://github.com/kiycoh/silica-agent" rel="noopener">source</a>
-      <a class="pill" href="#install">install</a>
-    </nav>
-  </div>
-</header>
-
-<main>
-  <!-- HERO -->
-  <section class="hero wrap" aria-labelledby="h1">
-    <div class="crystal-frame">
-<pre id="crystal" role="img" aria-label="A field of amorphous characters crystallizing into a labeled knowledge graph: sources — notes, draft, code, pdf — converge on the Silica core, branch into ingest, distill, autolink and graph, and resolve into a single coherent vault.">[ notes ]   [ draft ]   [ code ]   [ pdf ]
-    |           |           |         |
-    +-----------+----+------+---------+
-                     |
-              [ SILICA core ]
-                     |
-     +------------+--+-----------+------------+
-     |            |              |            |
-[ ingest ]   [ distill ]   [ autolink ]   [ graph ]
-     |            |              |            |
-     +------------+--+-----------+------------+
-                     |
-            [ coherent vault ]</pre>
-    </div>
-
-    <h1 class="headline" id="h1">Amorphous in.<br><span class="out">Coherent out.</span></h1>
-    <p class="lede">Silica is a filesystem-native curation engine for Markdown vaults. Drop in raw clippings, drafts, and code — it <b>distills atomic notes</b>, <b>wires the wikilinks</b>, and <b>refuses to land a broken graph</b>.</p>
-
-    <div class="cmd">
-      <div class="cmd-line" id="quick-install"><span class="pr">$</span> <code>git clone …/silica-agent &amp;&amp; uv pip install -e . &amp;&amp; silica init</code></div>
-      <button class="btn" data-copy="#install-block">copy install</button>
-      <a class="btn ghost" href="https://github.com/kiycoh/silica-agent" rel="noopener">source</a>
-    </div>
-  </section>
-
-  <!-- THE RUN -->
-  <section class="section" id="run">
+  <header class="nav">
     <div class="wrap">
-      <p class="eyebrow">// <b>the run</b> — what one session looks like</p>
-      <h2>Invoke it. Watch it curate.</h2>
-      <p class="sub">No daemon, no watcher. Silica works when you call it — then leaves your vault plain Markdown on disk.</p>
+      <span class="brand">SILICA</span>
+      <nav class="nav-links" aria-label="primary">
+        <a href="#run">the run</a>
+        <a href="#trust">why</a>
+        <a href="https://github.com/kiycoh/silica-agent" rel="noopener">source</a>
+        <a class="pill" href="#install">install</a>
+      </nav>
+    </div>
+  </header>
 
-      <div class="panes">
-        <article class="pane">
-<pre><span class="pr">silica ></span> /ingest Inbox/clip.md --target=Concepts
+  <main>
+    <!-- HERO -->
+    <section class="hero wrap" aria-labelledby="h1">
+      <p class="eyebrow">local-first · plain markdown · no daemon</p>
+      <h1 class="headline" id="h1">Messy docs in.<br><span class="out">Structured out.</span></h1>
+      <p class="lede">Silica turns a messy pile of notes into a knowledge base you can actually navigate. Drop in a raw
+        clipping — it splits it into <b>atomic notes</b>, resolves the <span class="lk">[[wikilinks]]</span> between
+        them, and <b>refuses to land a broken graph</b>. Plain Markdown, on your disk.</p>
+
+      <figure class="xform">
+        <div class="card before">
+          <span class="label">Inbox/clip.md · raw</span>
+          <pre>read about spaced repetition today. the
+testing effect — recalling a fact beats
+rereading it. anki schedules reviews with
+SM-2. forgetting curve, ebbinghaus. space
+your reviews at growing intervals. https://…</pre>
+        </div>
+
+        <div class="arrow" aria-hidden="true">
+          <span class="g">→</span>
+          <small>crystallize</small>
+        </div>
+
+        <div class="card after">
+          <span class="label">Concepts/ · curated</span>
+          <div class="ln ttl">Spaced Repetition.md</div>
+          <div class="ln sub"><span class="ar">↳</span> <span class="lk">[[Forgetting Curve]]</span></div>
+          <div class="ln sub"><span class="ar">↳</span> <span class="lk">[[Active Recall]]</span></div>
+          <div class="ln ttl">Active Recall.md</div>
+          <div class="ln sub"><span class="ar">↳</span> <span class="lk">[[Testing Effect]]</span></div>
+          <div class="ln ttl">Testing Effect.md</div>
+        </div>
+
+        <figcaption class="xform-cap">One clipping in. <b>Three atomic notes, wired together,</b> out.</figcaption>
+      </figure>
+
+      <div class="cmd">
+        <div class="cmd-line" id="quick-install"><span class="pr">$</span>
+          <code>git clone …/silica-agent &amp;&amp; uv pip install -e . &amp;&amp; silica init</code>
+        </div>
+        <button class="btn" data-copy="#install-block">copy install</button>
+        <a class="btn ghost" href="https://github.com/kiycoh/silica-agent" rel="noopener">source</a>
+      </div>
+    </section>
+
+    <!-- THE RUN -->
+    <section class="section" id="run">
+      <div class="wrap">
+        <p class="eyebrow">// <b>the run</b> — what one session looks like</p>
+        <h2>Invoke it. Watch it curate.</h2>
+        <p class="sub">No daemon, no watcher. Silica works when you call it — then leaves your vault plain Markdown on
+          disk.</p>
+
+        <div class="panes">
+          <article class="pane">
+            <pre><span class="pr">silica ></span> /ingest Inbox/clip.md --target=Concepts
   recon ..... 3 concepts
   distill ... 3 atomic notes
   link ...... 7 wikilinks resolved
   guard ..... <span class="ok">graph intact · 0 orphans</span>
   <span class="add">+ Concepts/Spaced Repetition.md</span>
   <span class="add">+ Concepts/Active Recall.md</span></pre>
-          <p class="cap">raw material → atomic, linked notes. <span>recon, distill, guard.</span></p>
-        </article>
+            <p class="cap">raw material → atomic, linked notes. <span>recon, distill, guard.</span></p>
+          </article>
 
-        <article class="pane">
-<pre><span class="pr">silica ></span> /find "what do I know about memory?"
+          <article class="pane">
+            <pre><span class="pr">silica ></span> /find "what do I know about memory?"
   Spaced Repetition.md     <span class="ok">embed .82</span>  cooc .77
   Active Recall.md         <span class="ok">embed .79</span>  cooc .71
   ~ neighborhood: Forgetting Curve,
                   Testing Effect</pre>
-          <p class="cap">ask what you know. <span>every answer carries its evidence — per leg.</span></p>
-        </article>
+            <p class="cap">ask what you know. <span>every answer carries its evidence — per leg.</span></p>
+          </article>
 
-        <article class="pane">
-<pre><span class="pr">silica ></span> /graph
+          <article class="pane">
+            <pre><span class="pr">silica ></span> /graph
   142 notes · 389 links · 6 communities
   community 2: "retrieval practice"
   community 5: "note-taking systems"
   -> graph.html  <span class="ok">(Louvain modularity)</span></pre>
-          <p class="cap">see the structure. <span>communities named from your own words.</span></p>
-        </article>
+            <p class="cap">see the structure. <span>communities named from your own words.</span></p>
+          </article>
 
-        <article class="pane">
-<pre><span class="pr">silica ></span> /undo Concepts/Active Recall.md
+          <article class="pane">
+            <pre><span class="pr">silica ></span> /undo Concepts/Active Recall.md
   <span class="am">reverted last patch</span>  (undo journal)
   vault unchanged elsewhere
   <span class="ok">nothing lands that you can't take back</span></pre>
-          <p class="cap">every write is journaled. <span>so you can let it work.</span></p>
-        </article>
-      </div>
-    </div>
-  </section>
-
-  <!-- TRUST / PRINCIPLES -->
-  <section class="section" id="trust">
-    <div class="wrap">
-      <p class="eyebrow">// <b>why</b> you can let it work</p>
-      <h2>Built to be trusted with your notes.</h2>
-      <p class="sub">The structure that makes a vault legible to you is the same structure that makes it queryable by agents. Silica protects it.</p>
-
-      <div class="cols">
-        <div class="col">
-          <h3>Local-first</h3>
-          <span class="ix">[ fs ]</span>
-          <p><b>Plain Markdown on your disk.</b> No daemon, no server, no cloud round-trip. Obsidian-compatible, but it doesn't need Obsidian to run.</p>
-        </div>
-        <div class="col">
-          <h3>Reversible</h3>
-          <span class="ix">[ journal ]</span>
-          <p><b>Snapshots before, gates after, undo for everything.</b> Uncertain edits go to a review queue, not your vault. A regression never lands silently.</p>
-        </div>
-        <div class="col">
-          <h3>Human-first</h3>
-          <span class="ix">[ vault ]</span>
-          <p><b>The vault stays legible to you.</b> Embeddings and co-occurrence are derived indexes — rebuildable, never the source of truth. No parallel store.</p>
+            <p class="cap">every write is journaled. <span>so you can let it work.</span></p>
+          </article>
         </div>
       </div>
-    </div>
-  </section>
+    </section>
 
-  <!-- INSTALL -->
-  <section class="section" id="install">
-    <div class="wrap">
-      <p class="eyebrow">// <b>install</b> — python 3.11+, apache-2.0</p>
-      <h2>Point it at a vault.</h2>
-      <p class="sub">Clone, install editable, run the wizard. It writes your <code>.env</code> and ends with a diagnostic so you know it's healthy.</p>
+    <!-- TRUST / PRINCIPLES -->
+    <section class="section" id="trust">
+      <div class="wrap">
+        <p class="eyebrow">// <b>why</b> you can let it work</p>
+        <h2>Built to be trusted with your notes.</h2>
+        <p class="sub">The structure that makes a vault legible to you is the same structure that makes it queryable by
+          agents. Silica protects it.</p>
 
-      <div class="install">
-<pre id="install-block"><span class="pr">$</span> git clone https://github.com/kiycoh/silica-agent.git
+        <div class="cols">
+          <div class="col">
+            <h3>Local-first</h3>
+            <span class="ix">[ fs ]</span>
+            <p><b>Plain Markdown on your disk.</b> No daemon, no server, no cloud round-trip. Obsidian-compatible, but
+              it doesn't need Obsidian to run.</p>
+          </div>
+          <div class="col">
+            <h3>Reversible</h3>
+            <span class="ix">[ journal ]</span>
+            <p><b>Snapshots before, gates after, undo for everything.</b> Uncertain edits go to a review queue, not your
+              vault. A regression never lands silently.</p>
+          </div>
+          <div class="col">
+            <h3>Human-first</h3>
+            <span class="ix">[ vault ]</span>
+            <p><b>The vault stays legible to you.</b> Embeddings and co-occurrence are derived indexes — rebuildable,
+              never the source of truth. No parallel store.</p>
+          </div>
+        </div>
+      </div>
+    </section>
+
+    <!-- INSTALL -->
+    <section class="section" id="install">
+      <div class="wrap">
+        <p class="eyebrow">// <b>install</b> — python 3.11+, apache-2.0</p>
+        <h2>Point it at a vault.</h2>
+        <p class="sub">Clone, install editable, run the wizard. It writes your <code>.env</code> and ends with a
+          diagnostic so you know it's healthy.</p>
+
+        <div class="install">
+          <pre id="install-block"><span class="pr">$</span> git clone https://github.com/kiycoh/silica-agent.git
 <span class="pr">$</span> cd silica-agent
 <span class="pr">$</span> uv pip install -e .
 <span class="pr">$</span> uv run silica init     <span class="cm"># wizard: vault, backend, models</span>
 <span class="pr">$</span> uv run silica          <span class="cm"># start the REPL</span></pre>
-        <div class="install-actions">
-          <button class="btn" data-copy="#install-block">copy</button>
-          <a class="btn ghost" href="https://github.com/kiycoh/silica-agent" rel="noopener">read the source</a>
-          <span class="install-note"><a href="https://github.com/kiycoh/silica-agent#readme" rel="noopener">docs &amp; charter →</a></span>
+          <div class="install-actions">
+            <button class="btn" data-copy="#install-block">copy</button>
+            <a class="btn ghost" href="https://github.com/kiycoh/silica-agent" rel="noopener">read the source</a>
+            <span class="install-note"><a href="https://github.com/kiycoh/silica-agent#readme" rel="noopener">docs &amp;
+                charter →</a></span>
+          </div>
         </div>
       </div>
+    </section>
+  </main>
+
+  <footer class="foot">
+    <div class="wrap">
+      <span><span class="mark">SILICA</span> — a coherence engine for a vault you can still read.</span>
+      <span>Apache-2.0 · <a href="https://github.com/kiycoh/silica-agent"
+          rel="noopener">github.com/kiycoh/silica-agent</a></span>
     </div>
-  </section>
-</main>
+  </footer>
 
-<footer class="foot">
-  <div class="wrap">
-    <span><span class="mark">SILICA</span> — a coherence engine for a vault you can still read.</span>
-    <span>Apache-2.0 · <a href="https://github.com/kiycoh/silica-agent" rel="noopener">github.com/kiycoh/silica-agent</a></span>
-  </div>
-</footer>
+  <div class="sr" aria-live="polite" id="live"></div>
 
-<div class="sr" aria-live="polite" id="live"></div>
-
-<script type="module">
-// ---------- crystallization: amorphous ASCII -> knowledge graph ----------
-const reduce = matchMedia('(prefers-reduced-motion: reduce)').matches;
-const pre = document.getElementById('crystal');
-const raw = pre.textContent.replace(/\s+$/,'').split('\n');
-const cols = Math.max(...raw.map(l => l.length));
-const lines = raw.map(l => l.padEnd(cols, ' '));
-const rows = lines.length;
-const target = lines.join('\n');
-
-function esc(s){ return s.replace(/&/g,'&amp;').replace(/</g,'&lt;'); }
-function highlight(){
-  // wrap every [ node ] first, then upgrade the core node — avoids double-wrapping
-  let html = esc(target)
-    .replace(/\[([^\[\]]+)\]/g, '<span class="nd">[$1]</span>')
-    .replace(/<span class="nd">\[ SILICA core \]<\/span>/,
-             '<span class="nd core">[ SILICA core ]</span>');
-  pre.innerHTML = html;
-  pre.style.color = '';
-}
-
-if (reduce) {
-  highlight();
-} else {
-  // freeze threshold: nucleate from centre (the core), grow outward + jitter
-  const cy = (rows - 1) / 2, cx = (cols - 1) / 2;
-  const maxd = Math.hypot(cy, cx) || 1;
-  const fr = lines.map((line, y) => [...line].map((ch, x) =>
-    ch === ' ' ? 0 : Math.min(1, (Math.hypot(y - cy, x - cx) / maxd) * 0.82 + Math.random() * 0.26)
-  ));
-  const NOISE = '.:~=+*-_^';
-  let noise = lines.map(l => [...l]);
-  let lastNoise = 0;
-  const reNoise = (ts) => {
-    if (ts - lastNoise < 55) return;
-    lastNoise = ts;
-    for (let y = 0; y < rows; y++)
-      for (let x = 0; x < cols; x++)
-        if (lines[y][x] !== ' ') noise[y][x] = NOISE[(Math.random()*NOISE.length)|0];
-  };
-  const lerp = (a,b,t) => a.map((v,i)=>Math.round(v+(b[i]-v)*t));
-  // melt glows brand indigo, crystallizes toward brand cyan
-  const INDIGO=[0x63,0x66,0xF1], CYAN=[0x22,0xD3,0xEE];
-  const DUR = 1900;
-  let start = null;
-  const ease = t => 1 - Math.pow(1 - t, 3);
-
-  function frame(ts){
-    if (start == null) start = ts;
-    reNoise(ts);
-    const p = ease(Math.min(1, (ts - start) / DUR));
-    let out = '';
-    for (let y = 0; y < rows; y++){
-      for (let x = 0; x < cols; x++){
-        const ch = lines[y][x];
-        out += (ch === ' ') ? ' ' : (p >= fr[y][x] ? ch : noise[y][x]);
-      }
-      if (y < rows - 1) out += '\n';
+  <script type="module">
+    // ---------- copy buttons ----------
+    const live = document.getElementById('live');
+    for (const btn of document.querySelectorAll('[data-copy]')) {
+      btn.addEventListener('click', async () => {
+        const el = document.querySelector(btn.dataset.copy);
+        const txt = el.innerText.replace(/^\s*\$\s?/gm, '').replace(/\s+#.*$/gm, '').trim();
+        try {
+          await navigator.clipboard.writeText(txt);
+          const old = btn.textContent;
+          btn.textContent = 'copied';
+          btn.classList.add('ok');
+          live.textContent = 'Install command copied to clipboard.';
+          setTimeout(() => { btn.textContent = old; btn.classList.remove('ok'); }, 1500);
+        } catch { live.textContent = 'Copy failed — select the text manually.'; }
+      });
     }
-    pre.textContent = out;
-    const c = lerp(INDIGO, CYAN, Math.min(1, p*1.15));
-    pre.style.color = `rgb(${c[0]},${c[1]},${c[2]})`;
-    if (p < 1) requestAnimationFrame(frame);
-    else highlight();
-  }
-  requestAnimationFrame(frame);
-}
-
-// ---------- copy buttons ----------
-const live = document.getElementById('live');
-for (const btn of document.querySelectorAll('[data-copy]')){
-  btn.addEventListener('click', async () => {
-    const el = document.querySelector(btn.dataset.copy);
-    const txt = el.innerText.replace(/^\s*\$\s?/gm,'').replace(/\s+#.*$/gm,'').trim();
-    try {
-      await navigator.clipboard.writeText(txt);
-      const old = btn.textContent;
-      btn.textContent = 'copied';
-      btn.classList.add('ok');
-      live.textContent = 'Install command copied to clipboard.';
-      setTimeout(() => { btn.textContent = old; btn.classList.remove('ok'); }, 1500);
-    } catch { live.textContent = 'Copy failed — select the text manually.'; }
-  });
-}
-</script>
+  </script>
 </body>
+
 </html>
