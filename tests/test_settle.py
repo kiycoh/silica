@@ -104,6 +104,56 @@ def test_fs_create_into_inbox_not_indexed(tmp_path, monkeypatch):
 
 
 # ---------------------------------------------------------------------------
+# Hidden-path guard — Obsidian ignores any path component starting with '.'
+# so a create()/overwrite() on such a path could never settle (read-back
+# never sees an indexed file → full 20s SettleTimeout). Reject fast instead.
+# ---------------------------------------------------------------------------
+
+def test_cli_create_rejects_dotfile_without_settle():
+    backend = ObsidianCLIBackend(vault_name="test_vault")
+    with patch.object(backend, "_run_cli") as run, \
+         patch.object(backend, "_settle") as settle:
+        with pytest.raises(RuntimeError) as exc:
+            backend.create("Foo/.silica_placeholder.md", "---\n---\n# x")
+    msg = str(exc.value).lower()
+    assert "hidden" in msg or "ignore" in msg or "." in msg
+    # The whole point: no CLI write and no settle poll happened.
+    run.assert_not_called()
+    settle.assert_not_called()
+    # And it is NOT the slow SettleTimeout path.
+    assert not isinstance(exc.value, SettleTimeout)
+
+
+def test_cli_create_rejects_hidden_folder_component():
+    backend = ObsidianCLIBackend(vault_name="test_vault")
+    with patch.object(backend, "_run_cli") as run:
+        with pytest.raises(RuntimeError):
+            backend.create(".trash/note.md", "body")
+    run.assert_not_called()
+
+
+def test_cli_overwrite_rejects_dotfile():
+    backend = ObsidianCLIBackend(vault_name="test_vault")
+    with patch.object(backend, "_run_cli") as run, \
+         patch.object(backend, "_eval") as ev:
+        with pytest.raises(RuntimeError):
+            backend.overwrite("Bar/.hidden.md", "body")
+    run.assert_not_called()
+    ev.assert_not_called()
+
+
+def test_cli_create_allows_normal_path():
+    """Regression: a normal path must still reach the CLI (no false positive)."""
+    backend = ObsidianCLIBackend(vault_name="test_vault")
+    with patch.object(backend, "_run_cli"), \
+         patch.object(backend, "_wait_for_content_reflects"), \
+         patch.object(backend, "_wait_for_resolved_event"), \
+         patch.object(backend, "_patch_graph_add"):
+        ref = backend.create("Agenti Autonomi/Robotica/__init__.md", "---\n---\n# Robotica")
+    assert ref.name == "__init__"
+
+
+# ---------------------------------------------------------------------------
 # _settle — backoff primitive
 # ---------------------------------------------------------------------------
 from silica.driver.cli_backend import ObsidianCLIBackend as _CLI

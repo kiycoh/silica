@@ -733,8 +733,27 @@ class ObsidianCLIBackend:
         for title_lower, paths_set in self._mention_index.items():
             paths_set.discard(path)
 
+    @staticmethod
+    def _reject_hidden(path: str) -> None:
+        """Reject writes to paths Obsidian ignores (any component starting '.').
+
+        Obsidian never indexes dotfiles/dot-folders, so a read-back after the
+        write can never observe an indexed file and the settle poll burns its
+        full deadline (~20s/write) before timing out. Fail fast with an
+        actionable message so an agent self-corrects instead of looping.
+        """
+        for component in str(path).split("/"):
+            if component.startswith("."):
+                raise RuntimeError(
+                    f"Hidden path rejected: '{path}'. Obsidian ignores files and "
+                    "folders starting with '.', so this write can never be indexed. "
+                    "Use a normal name; to create a folder, move/create a note into "
+                    "it directly (the folder is made implicitly)."
+                )
+
     def create(self, path: str, content: str) -> NoteRef:
         """Create a new note at the given vault-relative path."""
+        self._reject_hidden(path)
         if len(content) > 30000:
             self._write_large_content(path, content, append_mode=False)
         else:
@@ -847,6 +866,7 @@ class ObsidianCLIBackend:
 
     def overwrite(self, path: str, content: str) -> NoteRef:
         """Overwrite an existing note in-place, preserving Obsidian version history."""
+        self._reject_hidden(path)
         name = path.rsplit("/", 1)[-1].removesuffix(".md")
         ref = NoteRef(name=name, path=path)
         if len(content) > 30000:
