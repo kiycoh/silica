@@ -11,6 +11,7 @@ Degrades gracefully to no-community mode if unavailable.
 """
 from __future__ import annotations
 
+import colorsys
 import html
 import json
 import logging
@@ -49,18 +50,26 @@ def _fetch_lib_js() -> str:
             "Check your internet connection and try again."
         ) from exc
 
-COMMUNITY_COLORS = [
-    "#FF6B6B", "#4ECDC4", "#45B7D1", "#96CEB4", "#FFEAA7",
-    "#DDA0DD", "#98D8C8", "#F7DC6F", "#BB8FCE", "#85C1E9",
-    "#F0B27A", "#82E0AA", "#F1948A", "#AED6F1", "#A9DFBF",
-    "#F8C471", "#7FB3D3", "#A3E4D7", "#F9E79F", "#D7BDE2",
-]
-_EDGE_COLOR_EXTRACTED = "#4a9eff"
-_EDGE_COLOR_AMBIGUOUS = "#ffaa33"
-_NODE_DEFAULT_COLOR = {"background": "#2d4a6e", "border": "#4a9eff",
-                       "highlight": {"background": "#3a5f8a", "border": "#7ec8ff"}}
-_NODE_GHOST_COLOR   = {"background": "#3d2020", "border": "#ff6b6b",
-                       "highlight": {"background": "#4d2a2a", "border": "#ff9999"}}
+# Cluster colors: one distinct, vivid hue per community — the color encodes
+# Louvain membership (real structure), so it must be unique per community and
+# stable for a given id. Golden-angle hue rotation from brand cyan spreads hues
+# evenly for any count; fixed high saturation + mid lightness keep them vivid and
+# guarantee no color is ever black or white.
+def _community_color(i: int) -> str:
+    hue = (187.0 + i * 137.508) % 360.0          # 187° = brand cyan; 137.508° = golden angle
+    r, g, b = colorsys.hls_to_rgb(hue / 360.0, 0.56, 0.72)
+    return "#%02x%02x%02x" % (round(r * 255), round(g * 255), round(b * 255))
+
+
+# Precomputed prefix for the legend default + tests; live code calls _community_color.
+COMMUNITY_COLORS = [_community_color(i) for i in range(12)]
+
+_EDGE_COLOR_EXTRACTED = "#22d3ee"   # cyan — resolved links
+_EDGE_COLOR_AMBIGUOUS = "#6366f1"   # indigo — unresolved (web/ uses indigo for ambiguous)
+_NODE_DEFAULT_COLOR = {"background": "#4d5575", "border": "#22d3ee",
+                       "highlight": {"background": "#5a6372", "border": "#e7ebf1"}}
+_NODE_GHOST_COLOR   = {"background": "#151a23", "border": "#6366f1",
+                       "highlight": {"background": "#1e2530", "border": "#8a93a3"}}
 
 
 def _infer_type(path: str) -> str:
@@ -108,7 +117,7 @@ def build_graph_data(folder: str = "") -> tuple[list[dict], list[dict]]:
             "group": -1,
             "color": dict(_NODE_DEFAULT_COLOR),
             "path":  path,
-            "font":  {"color": "#e0e0e0", "size": 13},
+            "font":  {"color": "#e7ebf1", "size": 13},
             "size":  16,
         })
 
@@ -155,7 +164,7 @@ def build_graph_data(folder: str = "") -> tuple[list[dict], list[dict]]:
                 "group":        -1,
                 "color":        dict(_NODE_GHOST_COLOR),
                 "path":         "",
-                "font":         {"color": "#ff9999", "size": 11},
+                "font":         {"color": "#8a93a3", "size": 11},
                 "size":         10,
                 "borderWidth":  2,
                 "borderDashes": True,
@@ -224,11 +233,11 @@ def detect_communities(nodes: list[dict], edges: list[dict]) -> list[Community]:
         comm_id = node_to_comm.get(node["id"], -1)
         node["group"] = comm_id
         if comm_id >= 0:
-            color = COMMUNITY_COLORS[comm_id % len(COMMUNITY_COLORS)]
+            color = _community_color(comm_id)
             node["color"] = {
                 "background": color,
                 "border":     color,
-                "highlight":  {"background": color, "border": "#ffffff"},
+                "highlight":  {"background": color, "border": "#e7ebf1"},
             }
 
     # Fetch community labels from the co-occurrence index; degrade to {} on any failure.
@@ -246,7 +255,7 @@ def detect_communities(nodes: list[dict], edges: list[dict]) -> list[Community]:
         Community(
             id=i,
             label=labels.get(i, f"Cluster {i}"),
-            color=COMMUNITY_COLORS[i % len(COMMUNITY_COLORS)],
+            color=_community_color(i),
             size=len(comm),
         )
         for i, comm in enumerate(communities)
@@ -257,7 +266,7 @@ def render_html(
     nodes: list[dict],
     edges: list[dict],
     communities: "list[Community]" = (),  # type: ignore[assignment]
-    title: str = "Silica Knowledge Graph",
+    title: str = "Vault Graph",
     lib_js: str = "",
 ) -> str:
     """Produce a fully self-contained 3d-force-graph HTML string.
@@ -278,7 +287,7 @@ def render_html(
     legend_items = "".join(
         f'<div class="legend-item" data-community="{c.id}" onclick="filterCommunity({c.id})">'
         f'<span class="dot" style="background:{c.color}"></span>{html.escape(c.label)} '
-        f'<span style="color:#555;font-size:11px;margin-left:auto">{c.size}</span>'
+        f'<span style="color:#5a6372;font-size:11px;margin-left:auto">{c.size}</span>'
         f'</div>\n'
         for c in communities
     )
@@ -295,48 +304,59 @@ def render_html(
   <title>{title}</title>
   {f'<script>{lib_js}</script>' if lib_js else '<script src="' + _VIS_JS_URL + '"></script>'}
   <style>
+    :root{{
+      --void:#0B0D12;--slate:#10141B;--slate-2:#151A23;
+      --line:#1E2530;--line-2:#2B3442;
+      --frost:#E7EBF1;--ash:#8A93A3;--ash-dim:#5A6372;
+      --cyan:#22D3EE;--indigo:#6366F1;--edge:#4D5575;
+      --grad:linear-gradient(100deg,var(--cyan),var(--indigo));
+      --mono:ui-monospace,"Cascadia Code","SF Mono",Menlo,Consolas,"DejaVu Sans Mono",monospace;
+    }}
     *{{box-sizing:border-box;margin:0;padding:0}}
-    body{{display:flex;height:100vh;font-family:-apple-system,BlinkMacSystemFont,"Segoe UI",sans-serif;
-          background:#0f0f1a;color:#d4d4d4;overflow:hidden}}
-    #sidebar{{width:240px;flex-shrink:0;background:#141427;border-right:1px solid #2a2a4a;
-              display:flex;flex-direction:column;padding:14px 12px;gap:14px;overflow-y:auto}}
-    #sidebar h1{{font-size:13px;color:#7ec8ff;font-weight:600;letter-spacing:.5px}}
+    body{{display:flex;height:100vh;font-family:var(--mono);font-weight:300;letter-spacing:-.01em;
+          background:var(--void);color:var(--frost);overflow:hidden;-webkit-font-smoothing:antialiased}}
+    #sidebar{{width:240px;flex-shrink:0;background:var(--slate);border-right:1px solid var(--line);
+              display:flex;flex-direction:column;padding:16px 14px;gap:16px;overflow-y:auto;
+              background-image:radial-gradient(circle at 1px 1px,rgba(34,211,238,.05) 1px,transparent 0);
+              background-size:34px 34px}}
+    #sidebar h1{{font-size:.82rem;font-weight:700;letter-spacing:.28em;text-transform:uppercase;
+                 background:var(--grad);-webkit-background-clip:text;background-clip:text;color:transparent}}
     .stat-grid{{display:grid;grid-template-columns:1fr 1fr;gap:6px}}
-    .stat{{background:#1e1e38;border-radius:6px;padding:8px;text-align:center}}
-    .stat .val{{font-size:20px;font-weight:700;color:#7ec8ff}}
-    .stat .lbl{{font-size:10px;color:#888;margin-top:2px}}
-    #search{{width:100%;padding:7px 10px;background:#1e1e38;border:1px solid #2a2a4a;
-             border-radius:6px;color:#d4d4d4;font-size:13px;outline:none}}
-    #search:focus{{border-color:#4a9eff}}
-    .section-title{{font-size:11px;color:#666;text-transform:uppercase;letter-spacing:.8px}}
-    .filter-row{{display:flex;align-items:center;gap:7px;font-size:12px;cursor:pointer;
+    .stat{{background:var(--slate-2);border:1px solid var(--line);border-radius:3px;padding:9px;text-align:center}}
+    .stat .val{{font-size:20px;font-weight:700;color:var(--cyan)}}
+    .stat .lbl{{font-size:10px;color:var(--ash-dim);margin-top:2px;letter-spacing:.04em}}
+    #search{{width:100%;padding:8px 10px;background:var(--slate-2);border:1px solid var(--line-2);
+             border-radius:3px;color:var(--frost);font-family:var(--mono);font-size:13px;outline:none}}
+    #search:focus{{border-color:var(--cyan)}}
+    .section-title{{font-size:10px;color:var(--ash-dim);text-transform:uppercase;letter-spacing:.18em}}
+    .filter-row{{display:flex;align-items:center;gap:7px;font-size:12px;color:var(--ash);cursor:pointer;
                  padding:3px 0;user-select:none}}
-    .filter-row input{{cursor:pointer;accent-color:#4a9eff}}
+    .filter-row input{{cursor:pointer;accent-color:var(--cyan)}}
     .dot-edge{{width:24px;height:3px;border-radius:2px;flex-shrink:0}}
     #legend-box{{display:flex;flex-direction:column;gap:2px;max-height:200px;overflow-y:auto}}
-    .legend-item{{display:flex;align-items:center;gap:6px;font-size:12px;cursor:pointer;
-                  padding:3px 6px;border-radius:4px}}
-    .legend-item:hover{{background:#1e1e38}}
-    .legend-item.active{{background:#1e2a3a;outline:1px solid #4a9eff}}
+    .legend-item{{display:flex;align-items:center;gap:6px;font-size:12px;color:var(--ash);cursor:pointer;
+                  padding:3px 6px;border-radius:3px}}
+    .legend-item:hover{{background:var(--slate-2);color:var(--frost)}}
+    .legend-item.active{{background:var(--slate-2);outline:1px solid var(--cyan);color:var(--frost)}}
     .dot{{width:10px;height:10px;border-radius:50%;flex-shrink:0}}
-    .btn{{padding:7px 10px;background:#1e1e38;border:1px solid #2a2a4a;border-radius:6px;
-           color:#aaa;font-size:12px;cursor:pointer;text-align:center}}
-    .btn:hover{{border-color:#4a9eff;color:#7ec8ff}}
+    .btn{{padding:8px 10px;background:var(--slate-2);border:1px solid var(--line-2);border-radius:3px;
+           color:var(--ash);font-family:var(--mono);font-size:12px;cursor:pointer;text-align:center}}
+    .btn:hover{{border-color:var(--cyan);color:var(--cyan)}}
     #graph-wrap{{flex:1;position:relative}}
     #graph{{width:100%;height:100%}}
-    #drawer{{width:260px;flex-shrink:0;background:#141427;border-left:1px solid #2a2a4a;
-             padding:16px 14px;overflow-y:auto;display:none;flex-direction:column;gap:12px}}
+    #drawer{{width:260px;flex-shrink:0;background:var(--slate);border-left:1px solid var(--line);
+             padding:18px 16px;overflow-y:auto;display:none;flex-direction:column;gap:12px}}
     #drawer.open{{display:flex}}
-    #drawer-title{{font-size:15px;font-weight:600;color:#7ec8ff;word-break:break-word}}
-    #drawer-path{{font-size:11px;color:#555;word-break:break-all}}
-    #drawer-meta{{font-size:12px;color:#aaa}}
+    #drawer-title{{font-size:15px;font-weight:600;color:var(--frost);word-break:break-word}}
+    #drawer-path{{font-size:11px;color:var(--ash-dim);word-break:break-all}}
+    #drawer-meta{{font-size:12px;color:var(--cyan)}}
     .drawer-section{{display:flex;flex-direction:column;gap:4px}}
-    .drawer-label{{font-size:10px;color:#555;text-transform:uppercase;letter-spacing:.8px}}
-    .drawer-val{{font-size:13px;color:#ccc}}
-    .tag{{display:inline-block;padding:2px 7px;background:#1e1e38;border-radius:10px;
-           font-size:11px;color:#4a9eff;margin:2px}}
-    #close-drawer{{align-self:flex-end;cursor:pointer;color:#555;font-size:18px;line-height:1}}
-    #close-drawer:hover{{color:#ccc}}
+    .drawer-label{{font-size:10px;color:var(--ash-dim);text-transform:uppercase;letter-spacing:.18em}}
+    .drawer-val{{font-size:13px;color:var(--frost)}}
+    .tag{{display:inline-block;padding:2px 7px;background:var(--slate-2);border:1px solid var(--line);
+           border-radius:10px;font-size:11px;color:var(--cyan);margin:2px}}
+    #close-drawer{{align-self:flex-end;cursor:pointer;color:var(--ash-dim);font-size:18px;line-height:1}}
+    #close-drawer:hover{{color:var(--frost)}}
   </style>
 </head>
 <body>
@@ -357,15 +377,15 @@ def render_html(
     <div class="section-title" style="margin-bottom:8px">Edge types</div>
     <label class="filter-row">
       <input type="checkbox" id="cb-extracted" checked onchange="updateEdgeFilter()">
-      <div class="dot-edge" style="background:#4a9eff"></div>
+      <div class="dot-edge" style="background:#22d3ee"></div>
       Resolved
-      <span style="color:#555;font-size:11px;margin-left:auto">{n_extracted}</span>
+      <span style="color:#5a6372;font-size:11px;margin-left:auto">{n_extracted}</span>
     </label>
     <label class="filter-row" style="margin-top:4px">
       <input type="checkbox" id="cb-ambiguous" onchange="updateEdgeFilter()">
-      <div class="dot-edge" style="background:#ffaa33"></div>
+      <div class="dot-edge" style="background:#6366f1"></div>
       Unresolved
-      <span style="color:#555;font-size:11px;margin-left:auto">{n_ambiguous}</span>
+      <span style="color:#5a6372;font-size:11px;margin-left:auto">{n_ambiguous}</span>
     </label>
   </div>
 
@@ -373,7 +393,7 @@ def render_html(
     <div class="section-title" style="margin-bottom:6px">Communities</div>
     <div id="legend-box">
 {legend_items}      <div class="legend-item active" id="legend-all" onclick="filterCommunity(-2)">
-        <span class="dot" style="background:#555"></span>Show all
+        <span class="dot" style="background:#4d5575"></span>Show all
       </div>
     </div>
   </div>
@@ -418,16 +438,28 @@ let showExtracted = true;
 let showAmbiguous = false;
 let searchQuery = "";
 
+// --- Node color = its community color, flat -------------------------------
+// One hue per community: every node in a community shares the exact color,
+// hub or leaf. Degree is shown by size, never by washing the hue out.
+function nodeColor(n) {{
+  if (n.type === 'ghost') return '#4a5468';   // muted slate — dimmed, never black
+  return (n.color && n.color.background) || '#5a6372';
+}}
+
 const Graph = new ForceGraph3D(document.getElementById("graph"))
-  .backgroundColor("#0f0f1a")
+  .backgroundColor("#0B0D12")
   .graphData({{ nodes: RAW_NODES, links: RAW_EDGES }})
   .linkSource("from").linkTarget("to")
   .nodeLabel("label").nodeVal("size")
-  .nodeColor(n => (n.color && n.color.background) || "#888")
-  .linkColor(l => (l.color && l.color.color) || "#4a9eff")
-  .linkWidth(l => l.width || 1)
-  .linkDirectionalArrowLength(l => l.type === "AMBIGUOUS" ? 2.5 : 3.5)
-  .linkDirectionalArrowRelPos(1)
+  .nodeColor(nodeColor)
+  .linkColor(l => (l.color && l.color.color) || "#22d3ee")
+  // Perf on big vaults (1200+ notes): linkWidth>0 makes every edge a cylinder
+  // mesh and arrows add a cone per edge — thousands of meshes. Width 0 ⇒ cheap
+  // GL lines; no arrows; fewer sphere segments; finite cooldown so the sim
+  // settles and stops reflowing instead of re-laying-out every frame.
+  .linkWidth(0)
+  .nodeResolution(6)
+  .cooldownTicks(100)
   .nodeVisibility(n => !n._hidden)
   .linkVisibility(l => !l._hidden);
 
@@ -503,7 +535,7 @@ applyFilters();
 def export_graph(
     output_path: str,
     folder: str = "",
-    title: str = "Silica Knowledge Graph",
+    title: str = "Vault Graph",
 ) -> dict:
     """Build and write the graph HTML to output_path.
 

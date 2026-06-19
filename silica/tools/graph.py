@@ -35,12 +35,12 @@ class GraphExportArgs(BaseModel):
         description="Vault-relative folder to restrict scope (empty = entire vault)",
     )
     title: str = Field(
-        default="Silica Knowledge Graph",
+        default="Vault Graph",
         description="Title shown in the visualization header",
     )
 
 @tool(GraphExportArgs, cls="composed")
-def silica_graph_export(output_path: str = "graph.html", folder: str = "", title: str = "Silica Knowledge Graph") -> dict[str, Any]:
+def silica_graph_export(output_path: str = "graph.html", folder: str = "", title: str = "Vault Graph") -> dict[str, Any]:
     """Generates a self-contained vis.js knowledge graph HTML file from the vault's wikilink structure.
 
     Runs Louvain community detection to cluster notes by topic.

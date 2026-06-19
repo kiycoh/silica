@@ -208,3 +208,33 @@ class TestRenderSanity:
         """render_html with empty node/edge lists should not raise."""
         html = render_html([], [], lib_js="// x")
         assert "<!DOCTYPE html>" in html
+
+
+# ---------------------------------------------------------------------------
+# 5. Perf knobs for big vaults — keep WebGL geometry count low
+# ---------------------------------------------------------------------------
+
+class TestBigVaultPerfKnobs:
+    """1200-node vaults lag because 3d-force-graph defaults turn every edge into
+    a cylinder + arrow-cone mesh and never stop the layout. Lock the cheap path.
+    """
+
+    def test_links_are_zero_width_gl_lines(self, small_graph):
+        nodes, edges = small_graph
+        html = render_html(nodes, edges, lib_js="// dummy")
+        assert ".linkWidth(0)" in html
+
+    def test_no_directional_arrow_cones(self, small_graph):
+        nodes, edges = small_graph
+        html = render_html(nodes, edges, lib_js="// dummy")
+        assert "linkDirectionalArrowLength" not in html
+
+    def test_finite_cooldown(self, small_graph):
+        nodes, edges = small_graph
+        html = render_html(nodes, edges, lib_js="// dummy")
+        assert ".cooldownTicks(" in html
+
+    def test_low_node_resolution(self, small_graph):
+        nodes, edges = small_graph
+        html = render_html(nodes, edges, lib_js="// dummy")
+        assert ".nodeResolution(" in html
