@@ -33,14 +33,18 @@ class ReconArgs(BaseModel):
 @tool(ReconArgs, cls="composed")
 def silica_recon(inbox_file: str, limit: int = 0) -> dict[str, Any]:
     """Mechanical extraction of concepts from an inbox file and searching for collisions in the vault."""
-    from silica.kernel.recon import extract_concepts, is_title_match, rank_hits, collision_priority
-    
+    from silica.kernel.recon import is_title_match, rank_hits, collision_priority
+    from silica.kernel.keyphrase import extract_keyphrases
+    from silica.kernel.overlay import get_active_overlay
+    from silica.config import CONFIG
+
     try:
         nc = DRIVER.read_note(inbox_file)
     except RuntimeError:
         return {"error": f"File not found: {inbox_file}"}
-        
-    concepts = extract_concepts(nc.content)
+
+    cands = extract_keyphrases(nc.content, overlay=get_active_overlay(), lang=CONFIG.cooccurrence_lang)
+    concepts = [c.phrase for c in cands]
     if not concepts:
         return {"file": inbox_file, "collisions": [], "new_concepts": []}
 
