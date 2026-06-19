@@ -121,6 +121,10 @@ def handle_delegate(fsm: "InjectorFSM") -> None:
             enriched_chunk,
             manifest_titles=fsm.manifest.titles(),
             cleared_parents=fsm.context.get("run_cleared_parents"),
+            hub_names=[
+                v["hub"].rsplit("/", 1)[-1] for v in vault_ctx.values()
+                if isinstance(v, dict) and v.get("is_hub") and v.get("hub")
+            ],
         )
     except Exception as _sub_e:
         logger.debug("DELEGATE: substrate build failed (non-fatal): %s", _sub_e)
