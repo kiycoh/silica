@@ -1,0 +1,72 @@
+[
+  {
+    "id": "graphmind-paper",
+    "genre": "paper",
+    "lang": "english",
+    "source": "Inbox/papers/GRAPHMIND_ LLMS AS DYNAMIC KNOWLEDGE_BUILDERS FOR SEQUENTIAL DECISION-MAKING.md",
+    "body": "While the reasoning capabilities of large language models (LLMs) have advanced considerably due to their extensive internal knowledge, efficiently internalizing and leveraging new information in dynamic environments remains a significant challenge. This limitation is particularly pronounced in partially observable environments, which require agents to manage long-term memory and perform effective exploration under incomplete information. To address this, we propose an LLM agent architecture that integrates a knowledge graph as a graph-based memory module to facilitate high-level action planning. The agent incrementally constructs the knowledge graph through environmental interactions and retrieves relevant information to generate efficient plans. We evaluate our approach in complex navigation tasks specifically designed to present long-horizon and partially observable challenges. Experimental results demonstrate that incorporating a knowledge graph as an external memory significantly enhances the success rate and efficiency of the planning capabilities. Recently, research has increasingly focused on leveraging large language models for interaction with dynamic environments, exploiting their strong prior knowledge and reasoning capabilities. These approaches typically rely on a short context window over recent trajectories, limiting the agent's ability to retain and exploit long-term context during sequential decision-making. In standard natural language processing tasks such as question answering or text generation, Retrieval-Augmented Generation approaches address this issue by retrieving relevant chunks from large-scale external documentation. Yet these methods are constrained by the static nature of the external knowledge sources, which cannot account for dynamically expanding information generated through ongoing interaction with an environment. We propose GraphMind, a framework that enables agents to operate effectively in partially observable environments. GraphMind dynamically constructs a self-expanding graph-based memory from collected observations and employs adaptive planning to retrieve and exploit the knowledge required for task completion. The proposed framework operates in two iterative stages: knowledge graph construction, where observations are integrated into an incrementally expanding graph representation, and planning and execution, where a domain-specific language supports structured reasoning and action selection under partial observability. A fundamental challenge in language-model agents lies in bridging the gap between high-level planning and low-level action execution. Our framework addresses this disconnect through the use of domain-specific languages, which provide a structured interface between the symbolic reasoning of the model and the concrete action space of the environment. We adopt and extend BabyAI, a partially observable gridworld that combines object manipulation, navigation, and exploration. To evaluate the constructed knowledge graphs we adopt graph edit distance as a proxy for structural similarity to the ground-truth graph.",
+    "gold": [
+      "large language models",
+      "knowledge graph",
+      "graph-based memory",
+      "partially observable environments",
+      "external memory",
+      "long-term memory",
+      "exploration",
+      "sequential decision-making",
+      "planning",
+      "domain-specific language",
+      "retrieval-augmented generation",
+      "graph edit distance",
+      "BabyAI"
+    ],
+    "must_appear": ["knowledge graph", "large language models", "partially observable"]
+  },
+  {
+    "id": "magentic-one-paper",
+    "genre": "paper",
+    "lang": "english",
+    "source": "Inbox/papers/Magentic-One: A Generalist Multi-Agent System for Solving Complex Tasks.md",
+    "body": "Modern AI agents, driven by advances in large foundation models, promise to enhance our productivity by augmenting our knowledge and capabilities. To achieve this vision, AI agents must effectively plan, perform multi-step reasoning and actions, respond to novel observations, and recover from errors, to successfully complete complex tasks. In this work, we introduce Magentic-One, a high-performing open-source agentic system for solving such tasks. Magentic-One uses a multi-agent architecture where a lead agent, the Orchestrator, plans, tracks progress, and re-plans to recover from errors. Throughout task execution, the Orchestrator directs other specialized agents to perform tasks as needed, such as operating a web browser, navigating local files, or writing and executing Python code. Our experiments show that Magentic-One achieves statistically competitive performance to the state-of-the-art on three diverse and challenging agentic benchmarks: GAIA, AssistantBench, and WebArena. Moreover, Magentic-One's modular design allows agents to be added or removed from the team without additional prompt tuning or training. We provide an open-source implementation of Magentic-One, and we include AutoGenBench, a standalone tool for agentic evaluation. By leveraging the powerful reasoning and generative capabilities of large language models, agentic systems are already making strides in fields like software engineering, data analysis, scientific research and web navigation. The team is directed by an Orchestrator agent which guides progress towards a high-level goal by iteratively planning, maintaining working memory of progress, assigning tasks to other agents, and retrying upon encountering errors. The Orchestrator uses two structured ledgers to decide which agent should take the next action. The multi-agent paradigm offers numerous advantages over monolithic single-agent approaches. This setting can be described as a Partially Observable Markov Decision Process, similar to formalizations used by prior work.",
+    "gold": [
+      "Magentic-One",
+      "multi-agent architecture",
+      "Orchestrator",
+      "agentic system",
+      "large language models",
+      "foundation models",
+      "planning",
+      "working memory",
+      "error recovery",
+      "agentic benchmarks",
+      "GAIA",
+      "WebArena",
+      "AssistantBench",
+      "AutoGenBench",
+      "Partially Observable Markov Decision Process",
+      "web browser"
+    ],
+    "must_appear": ["multi-agent", "Orchestrator", "Magentic-One"]
+  },
+  {
+    "id": "acon-lecture",
+    "genre": "lecture",
+    "lang": "italian",
+    "source": "testing/ACON (Agent Context Optimization).md",
+    "body": "# ACON (Agent Context Optimization)\n\n> **Contesto** Questo framework introduce **ACON**, un approccio unificato per la compressione ottimizzata della storia (history) e delle osservazioni (observations) negli **Agenti basati su LLM per compiti long-horizon**.\n\n**Obiettivo:** fornire un'architettura generica che comprima in modo efficiente il contesto di interazione dell'agente, bilanciando fedeltà delle informazioni e consumo di risorse computazionali.\n\n- Definizione del **compito dell'agente** come processo decisionale markoviano a osservabilità parziale (POMDP).\n- **Compressione contestuale:** interpretazione del contesto e dell'osservazione corrente come input per un LLM agentico, dove i parametri pre-addestrati del modello e il **prompt agentico** descrivono ambiente, strumenti, formato di output e few-shot examples.\n- **Funzione di costo del contesto:** introdotta per quantificare la necessità di compressione in funzione della lunghezza della storia e delle osservazioni, ottimizzando il trade-off tra performance e consumo di risorse.\n- **Applicazione:** metodologia applicabile a compiti long-horizon che richiedono interazioni multi-step in ambienti eterogenei (AppWorld, OfficeBench, QA multi-obiettivo).",
+    "gold": [
+      "ACON",
+      "compressione contestuale",
+      "POMDP",
+      "agenti basati su LLM",
+      "compiti long-horizon",
+      "compito dell'agente",
+      "funzione di costo del contesto",
+      "prompt agentico",
+      "compressione della storia",
+      "AppWorld",
+      "OfficeBench"
+    ],
+    "must_appear": ["ACON", "compressione contestuale", "POMDP"]
+  }
+]

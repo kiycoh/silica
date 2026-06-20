@@ -35,6 +35,7 @@ ALLOWED = {
     "kernel/graph_report/cooccur_delta.py": "co-occurrence delta + cosine-band filter + store injection",
     "kernel/graph_export.py":       "cluster labels via CooccurStore.community_labels, not relatedness ranking",
     "kernel/classify.py":           "L1 tokenizer/concept matching, not relatedness ranking",
+    "kernel/keyphrase.py":          "pairwise cosine (candidate phrase vs document theme) for concept reranking, not note ranking",
     "router/coordinator.py":        "constructs stores to inject into the facade",
     "router/organize_fsm.py":       "L1 co-occurrence classification, not relatedness ranking",
     "router/orchestrator.py":       "co-occurrence index freshness hook (build_index)",

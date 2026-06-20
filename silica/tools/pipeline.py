@@ -17,6 +17,20 @@ from silica.kernel.ops import OpType
 from silica.kernel.ops_io import load_ops, dump_ops
 
 
+def _recon_embedder():
+    """Pool ranker for recon; None (=> YAKE-rank fallback) when unavailable.
+
+    Module-level seam so tests can disable the network embedder (see conftest)
+    and keep recon deterministic; production uses the real embedder.
+    """
+    try:
+        from silica.agent.providers import get_embedder
+        from silica.config import CONFIG
+        return get_embedder(CONFIG)
+    except Exception:
+        return None
+
+
 def _same_note(ref_a, ref_b) -> bool:
     """Path-safe comparison between two NoteRefs — handles slashes, casing, and .md suffix."""
     import os
@@ -43,7 +57,10 @@ def silica_recon(inbox_file: str, limit: int = 0) -> dict[str, Any]:
     except RuntimeError:
         return {"error": f"File not found: {inbox_file}"}
 
-    cands = extract_keyphrases(nc.content, overlay=get_active_overlay(), lang=CONFIG.cooccurrence_lang)
+    cands = extract_keyphrases(
+        nc.content, overlay=get_active_overlay(),
+        lang=CONFIG.cooccurrence_lang, embedder=_recon_embedder(),
+    )
     concepts = [c.phrase for c in cands]
     if not concepts:
         return {"file": inbox_file, "collisions": [], "new_concepts": []}

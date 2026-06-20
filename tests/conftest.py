@@ -14,6 +14,15 @@ def _fresh_bus(monkeypatch: pytest.MonkeyPatch) -> None:
 
 
 @pytest.fixture(autouse=True)
+def _no_recon_embedder(monkeypatch: pytest.MonkeyPatch) -> None:
+    """Disable silica_recon's network embedder by default: recon falls back to the
+    deterministic YAKE rank. Keeps the suite fast and offline; the rerank path is
+    covered by test_keyphrase (FakeEmbedder) and the SILICA_EVAL golden eval."""
+    import silica.tools.pipeline as pipe_mod
+    monkeypatch.setattr(pipe_mod, "_recon_embedder", lambda: None)
+
+
+@pytest.fixture(autouse=True)
 def _isolate_embed_legacy_path(tmp_path, monkeypatch: pytest.MonkeyPatch) -> None:
     """Guard against the real ~/.silica/index/embeddings.json leaking into tests
     via the legacy-migration fallback. Any test that redirects _index_path to a
