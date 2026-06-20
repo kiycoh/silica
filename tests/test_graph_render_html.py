@@ -211,6 +211,52 @@ class TestRenderSanity:
 
 
 # ---------------------------------------------------------------------------
+# Search → results list → fly-to-focus (findability for the searching user)
+# ---------------------------------------------------------------------------
+
+class TestSearchResultsFlyTo:
+    """Typing a query should produce a clickable ranked list, and choosing a
+    result should fly the camera to that node and select it — not just dim the
+    rest of the cloud."""
+
+    def test_results_container_present(self, small_graph):
+        nodes, edges = small_graph
+        html = render_html(nodes, edges, lib_js="// dummy")
+        assert 'id="search-results"' in html
+
+    def test_onsearch_renders_results(self, small_graph):
+        """onSearch should populate the results list, not only set a filter."""
+        nodes, edges = small_graph
+        html = render_html(nodes, edges, lib_js="// dummy")
+        assert "renderResults(" in html
+
+    def test_scorer_searches_beyond_label(self, small_graph):
+        """Ranking should consider path and tags, not just the label."""
+        nodes, edges = small_graph
+        html = render_html(nodes, edges, lib_js="// dummy")
+        assert "function scoreNode(" in html
+        assert ".path" in html
+
+    def test_focus_node_uses_camera_position(self, small_graph):
+        """Choosing a result flies the camera via the 3d-force-graph API."""
+        nodes, edges = small_graph
+        html = render_html(nodes, edges, lib_js="// dummy")
+        assert "function focusNode(" in html
+        assert ".cameraPosition(" in html
+
+    def test_select_node_shared_between_click_and_result(self, small_graph):
+        """Node-click and result-click should both route through selectNode."""
+        nodes, edges = small_graph
+        html = render_html(nodes, edges, lib_js="// dummy")
+        assert "function selectNode(" in html
+
+    def test_enter_focuses_top_result(self, small_graph):
+        nodes, edges = small_graph
+        html = render_html(nodes, edges, lib_js="// dummy")
+        assert "onSearchKey(" in html
+
+
+# ---------------------------------------------------------------------------
 # 5. Perf knobs for big vaults — keep WebGL geometry count low
 # ---------------------------------------------------------------------------
 

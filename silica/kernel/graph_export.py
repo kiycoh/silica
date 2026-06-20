@@ -357,6 +357,15 @@ def render_html(
            border-radius:10px;font-size:11px;color:var(--cyan);margin:2px}}
     #close-drawer{{align-self:flex-end;cursor:pointer;color:var(--ash-dim);font-size:18px;line-height:1}}
     #close-drawer:hover{{color:var(--frost)}}
+    #search-results{{display:none;flex-direction:column;gap:1px;max-height:260px;overflow-y:auto;
+                     margin-top:6px;border:1px solid var(--line);border-radius:3px;background:var(--slate-2)}}
+    #search-results.open{{display:flex}}
+    #search-count{{font-size:10px;color:var(--ash-dim);letter-spacing:.04em;padding:6px 8px 2px}}
+    .result-item{{display:flex;flex-direction:column;gap:1px;padding:6px 8px;cursor:pointer;border-left:2px solid transparent}}
+    .result-item:hover,.result-item.sel{{background:var(--slate);border-left-color:var(--cyan)}}
+    .result-name{{font-size:12px;color:var(--frost);white-space:nowrap;overflow:hidden;text-overflow:ellipsis}}
+    .result-sub{{font-size:10px;color:var(--ash-dim);white-space:nowrap;overflow:hidden;text-overflow:ellipsis}}
+    .result-sub em{{color:var(--cyan);font-style:normal}}
   </style>
 </head>
 <body>
@@ -371,7 +380,9 @@ def render_html(
     <div class="stat"><div class="val">{n_ghost}</div><div class="lbl">Unresolved</div></div>
   </div>
 
-  <input id="search" type="text" placeholder="Search notes&#8230;" oninput="onSearch(this.value)">
+  <input id="search" type="text" placeholder="Search notes, paths, #tags&#8230;"
+         oninput="onSearch(this.value)" onkeydown="onSearchKey(event)" autocomplete="off">
+  <div id="search-results"></div>
 
   <div>
     <div class="section-title" style="margin-bottom:8px">Edge types</div>
@@ -436,7 +447,6 @@ RAW_EDGES.forEach(e => {{
 let activeCommunity = -2;
 let showExtracted = true;
 let showAmbiguous = false;
-let searchQuery = "";
 
 // --- Node color = its community color, flat -------------------------------
 // One hue per community: every node in a community shares the exact color,
@@ -465,8 +475,7 @@ const Graph = new ForceGraph3D(document.getElementById("graph"))
 
 function applyFilters() {{
   RAW_NODES.forEach(n => {{
-    n._hidden = (activeCommunity !== -2 && n.group !== activeCommunity) ||
-                (!!searchQuery && !n.label.toLowerCase().includes(searchQuery));
+    n._hidden = (activeCommunity !== -2 && n.group !== activeCommunity);
   }});
   RAW_EDGES.forEach(e => {{
     e._hidden = (e.type === "EXTRACTED" && !showExtracted) ||
@@ -493,12 +502,91 @@ function filterCommunity(cid) {{
   applyFilters();
 }}
 
-function onSearch(q) {{
-  searchQuery = q.trim().toLowerCase();
-  applyFilters();
+// --- Search → ranked results → fly-to-focus -------------------------------
+// Search by what people actually remember: title first, then path, then
+// #tags, then the cluster they were browsing. Choosing a result flies the
+// camera to the node and selects it — the graph answers "where is it", not
+// just "is it somewhere in this cloud".
+let results = [], selIdx = -1;
+
+function scoreNode(n, q) {{
+  if (n.type === 'ghost') return 0;
+  const label = (n.label || '').toLowerCase();
+  if (label === q)            return 5;
+  if (label.startsWith(q))    return 4;
+  if (label.includes(q))      return 3;
+  if ((n.path || '').toLowerCase().includes(q)) return 2;
+  if ((n.tags || []).some(t => t.toLowerCase().includes(q))) return 2;
+  const cl = COMM_LABELS[n.group];
+  if (cl && cl.toLowerCase().includes(q)) return 1;
+  return 0;
 }}
 
-Graph.onNodeClick(node => {{
+function renderResults(q) {{
+  const box = document.getElementById("search-results");
+  if (!q) {{ box.className = ""; box.innerHTML = ""; results = []; selIdx = -1; return; }}
+  results = RAW_NODES
+    .map(n => [scoreNode(n, q), n])
+    .filter(p => p[0] > 0)
+    .sort((a, b) => b[0] - a[0] || a[1].label.localeCompare(b[1].label))
+    .slice(0, 12)
+    .map(p => p[1]);
+  selIdx = results.length ? 0 : -1;
+
+  const esc = s => String(s).replace(/[&<>]/g, c => ({{'&':'&amp;','<':'&lt;','>':'&gt;'}}[c]));
+  const sub = n => {{
+    const cl = COMM_LABELS[n.group];
+    return cl ? '<em>' + esc(cl) + '</em>' : esc(n.path || n.type);
+  }};
+  box.innerHTML =
+    '<div id="search-count">' + (results.length || 'no') +
+      ' result' + (results.length === 1 ? '' : 's') + '</div>' +
+    results.map((n, i) =>
+      '<div class="result-item' + (i === selIdx ? ' sel' : '') +
+        '" onclick="chooseResult(' + i + ')">' +
+        '<span class="result-name">' + esc(n.label) + '</span>' +
+        '<span class="result-sub">' + sub(n) + '</span>' +
+      '</div>').join("");
+  box.className = "open";
+}}
+
+function chooseResult(i) {{
+  const n = results[i];
+  if (!n) return;
+  selIdx = i;
+  selectNode(n);
+  focusNode(n);
+}}
+
+function moveSel(d) {{
+  if (!results.length) return;
+  selIdx = (selIdx + d + results.length) % results.length;
+  document.querySelectorAll("#search-results .result-item")
+    .forEach((el, i) => el.classList.toggle("sel", i === selIdx));
+}}
+
+function onSearch(q) {{ renderResults(q.trim().toLowerCase()); }}
+
+function onSearchKey(e) {{
+  if (e.key === "Enter")          {{ e.preventDefault(); chooseResult(selIdx); }}
+  else if (e.key === "ArrowDown") {{ e.preventDefault(); moveSel(1); }}
+  else if (e.key === "ArrowUp")   {{ e.preventDefault(); moveSel(-1); }}
+  else if (e.key === "Escape")    {{ document.getElementById("search").value = ""; renderResults(""); }}
+}}
+
+// Fly the camera to a node along its outward radial, looking at it. Coords
+// (node.x/y/z) exist once the layout has run (cooldownTicks); before that they
+// default to 0 and the camera simply recentres — harmless.
+function focusNode(node) {{
+  const r = Math.hypot(node.x || 0, node.y || 0, node.z || 0) || 1;
+  const k = 1 + 90 / r;
+  Graph.cameraPosition(
+    {{ x: (node.x || 0) * k, y: (node.y || 0) * k, z: (node.z || 0) * k }},
+    node, 900
+  );
+}}
+
+function selectNode(node) {{
   document.getElementById("drawer-title").textContent = node.label;
   document.getElementById("drawer-path").textContent  = node.path || "(ghost node)";
   const commText = (Number.isInteger(node.group) && node.group >= 0 && COMM_LABELS[node.group])
@@ -518,8 +606,9 @@ Graph.onNodeClick(node => {{
   }}
 
   document.getElementById("drawer").classList.add("open");
-}});
+}}
 
+Graph.onNodeClick(selectNode);
 Graph.onBackgroundClick(closeDrawer);
 
 function closeDrawer() {{
