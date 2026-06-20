@@ -86,3 +86,41 @@ def test_ingest_unsupported_extension_is_skipped(repo_vault, capsys):
     assert not (vault / "Inbox" / "data.md").exists()
     out = capsys.readouterr().out
     assert "data.csv" in out and "Skipped" in out  # warning is part of the contract
+
+
+def test_ingest_pdf_converts_and_forwards_converted_md(repo_vault, monkeypatch):
+    """No adapter claims .pdf → convert() runs and the CONVERTED .md is what
+    the FSM is told to re-read (not the .pdf)."""
+    import silica.sources.convert as conv_mod
+
+    monkeypatch.setattr(conv_mod, "convert", lambda f, dest_dir="": "Inbox/paper.md")
+    msg = _expand_workflow_shortcut("/ingest paper.pdf --target=Concepts/AI")
+    assert msg is not None and "silica_run_injector" in msg
+    assert '"Inbox/paper.md"' in msg   # converted .md forwarded
+    assert "paper.pdf" not in msg      # original .pdf is NOT re-read
+
+
+def test_ingest_pdf_converter_error_is_caught(repo_vault, monkeypatch, capsys):
+    import silica.sources.convert as conv_mod
+
+    def boom(f, dest_dir=""):
+        raise ValueError("mineru not installed")
+
+    monkeypatch.setattr(conv_mod, "convert", boom)
+    msg = _expand_workflow_shortcut("/ingest paper.pdf --target=Concepts/AI")
+    assert msg == ""  # nothing to run; batch did not crash
+    assert "mineru not installed" in capsys.readouterr().out
+
+
+def test_convert_command_returns_sentinel_and_reports(repo_vault, monkeypatch, capsys):
+    import silica.sources.convert as conv_mod
+
+    monkeypatch.setattr(conv_mod, "convert", lambda f, dest_dir="": "Inbox/paper.md")
+    msg = _expand_workflow_shortcut("/convert paper.pdf")
+    assert msg == ""  # fully handled inline
+    assert "Converted" in capsys.readouterr().out
+
+
+def test_convert_command_no_files_errors():
+    msg = _expand_workflow_shortcut("/convert --target=X")
+    assert msg is not None and msg.startswith("Error:")

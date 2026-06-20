@@ -8,6 +8,7 @@ from __future__ import annotations
 
 import json
 import logging
+import shlex
 import sys
 from typing import NamedTuple
 
@@ -75,7 +76,10 @@ def _setup_logging(debug: bool = False) -> None:
         bg_handler.addFilter(lambda r: threading.current_thread() is not main_thread)
         root.addHandler(bg_handler)
     else:
-        handler = logging.StreamHandler(sys.stderr)
+        from silica.ui.logging import LiveAwareStreamHandler
+        # Live-aware: follows rich.Live's stderr redirect so warnings during the
+        # injector/batch live region print above it instead of tearing the panel.
+        handler = LiveAwareStreamHandler()
         handler.setFormatter(
             logging.Formatter(
                 fmt="%(asctime)s [%(name)s] %(levelname)s: %(message)s",
@@ -488,6 +492,7 @@ def _expand_workflow_shortcut(user_input: str) -> str | None:
     Syntax:
         /report [folder] [--top-k=N] [--embeddings]
         /ingest <file...> [--target=DIR] [--hub=H]
+        /convert <file...> [--target=DIR]
 
     Examples:
         /report
@@ -496,8 +501,14 @@ def _expand_workflow_shortcut(user_input: str) -> str | None:
         /report Inbox --embeddings
         /ingest Inbox/notes.md --target=Concepts/AI
         /ingest silica/cli.py
+        /ingest paper.pdf --target=Concepts/AI
+        /ingest "Inbox/papers/With Spaces.pdf" --target=Concepts/AI
+        /convert paper.pdf
     """
-    parts = user_input.strip().split()
+    try:
+        parts = shlex.split(user_input.strip())  # honours quoted paths with spaces
+    except ValueError:
+        return "Error: unbalanced quotes in command. Wrap paths with spaces in \"...\"."
     if not parts:
         return None
 
@@ -519,6 +530,7 @@ def _expand_workflow_shortcut(user_input: str) -> str | None:
             return "Error: /ingest requires at least one file path. Usage: /ingest <file...> [--target=DIR]"
 
         from silica.kernel.vault_manifest import get_active_manifest
+        from silica.sources.convert import convert
         from silica.sources.registry import adapter_for, stage
 
         enabled = get_active_manifest().sources
@@ -526,7 +538,12 @@ def _expand_workflow_shortcut(user_input: str) -> str | None:
         for f in files:
             adapter = adapter_for(f, enabled=enabled)
             if adapter is None:
-                CONSOLE.print(f"  [yellow]Skipped {f}: no enabled source handles this file type.[/]")
+                # No source claims this file type → try the converter fallback
+                # (PDF today). The CONVERTED .md is what the FSM re-reads.
+                try:
+                    md_files.append(convert(f, dest_dir=target_dir))
+                except ValueError as e:
+                    CONSOLE.print(f"  [yellow]Skipped {f}: {e}[/]")
                 continue
             result = stage(adapter, f)
             if result["status"] == "distill":
@@ -554,6 +571,20 @@ def _expand_workflow_shortcut(user_input: str) -> str | None:
             msg += f", hub={json.dumps(hub)}"
         msg += "."
         return msg
+
+    if cmd == "/convert":
+        args = parts[1:]
+        files = [a for a in args if not a.startswith("-")]
+        target_dir = next((a[len("--target="):] for a in args if a.startswith("--target=")), "")
+        if not files:
+            return "Error: /convert requires at least one file path. Usage: /convert <file...> [--target=DIR]"
+        from silica.sources.convert import convert
+        for f in files:
+            try:
+                CONSOLE.print(f"  Converted {f} → [bold]{convert(f, dest_dir=target_dir)}[/]")
+            except ValueError as e:
+                CONSOLE.print(f"  [yellow]Skipped {f}: {e}[/]")
+        return ""  # fully handled inline — sentinel: nothing for the agent
 
     if cmd == "/report":
         args = parts[1:]

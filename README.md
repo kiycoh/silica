@@ -206,6 +206,7 @@ Run the ingestion pipeline from inside the REPL:
 | Command | Usage | Description |
 | :--- | :--- | :--- |
 | `/status` | `[run_id]` | Progress digest of the last run |
+| `/convert` | `<file...> [--target=DIR]` | Transcode a non-`.md` file (PDF) into a markdown note in the inbox |
 | `/embed` | `[folder] [--force]` | Build/update the embedding index |
 | `/cooccur` | `[folder] [--force]` | Build/update the co-occurrence index (no embedder needed) |
 | `/graph` | `[out.html] [folder]` | Export the knowledge graph |

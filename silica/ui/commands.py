@@ -35,8 +35,19 @@ COMMANDS: tuple[Command, ...] = (
         examples=(
             "/ingest Inbox/note.md --target=Concepts/AI",
             "/ingest silica/cli.py",
+            "/ingest paper.pdf --target=Concepts/AI",
         ),
         home_pin=True,
+    ),
+    Command(
+        name="/convert",
+        group="direct",
+        usage="<file...> [--target=DIR]",
+        summary="transcode a non-.md file (PDF) into a markdown note in the inbox",
+        examples=(
+            "/convert paper.pdf",
+            "/convert paper.pdf --target=Concepts/AI",
+        ),
     ),
     Command(
         name="/organize",
