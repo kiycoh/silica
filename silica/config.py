@@ -116,6 +116,13 @@ class SilicaConfig:
         default_factory=lambda: os.getenv("SILICA_INBOX_DIR", "Inbox")
     )
 
+    # PDF→Markdown converter (ADR-0011 provider seam): "pymupdf4llm" (default,
+    # pure-Python, fast on text PDFs) or "mineru" (heavyweight OCR/layout CLI,
+    # shelled out as a subprocess).
+    pdf_provider: str = field(
+        default_factory=lambda: os.getenv("SILICA_PDF_PROVIDER", "pymupdf4llm")
+    )
+
     # Maximum context tokens before the agent warns.
     max_context_tokens: int = field(
         default_factory=lambda: int(os.getenv("SILICA_MAX_CONTEXT", "60000"))
