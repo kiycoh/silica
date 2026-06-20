@@ -15,23 +15,32 @@ def slugify(s: str) -> str:
     return s.strip()
 
 
+def _link_name(name: str) -> str:
+    """Bare note name for a wikilink target — strips brackets the distiller may
+    already have wrapped around it, so f'[[{name}]]' never becomes '[[[[X]]]]'
+    (a quadruple-bracket frontmatter link Obsidian reads as unresolved)."""
+    return name.strip().strip("[]").strip()
+
+
 def template_spoke(heading: str, snippet: str, hub: str, title: str | None = None, tags: list[str] | None = None, related: list[str] | None = None, parent: str | None = None) -> str:
     today = datetime.date.today().strftime("%Y, %m, %d")
     body = snippet.strip() or "(da espandere)"
     h1 = title or heading  # title wins: filename and H1 stay in sync
 
+    hub_link = _link_name(hub)
     # parent note link — specific parent overrides hub when provided
     if parent:
-        parent_note = f'"[[{parent}]]"'
-        related_items = [f'"[[{parent}]]"', f'"[[{hub}]]"']
+        parent_link = _link_name(parent)
+        parent_note = f'"[[{parent_link}]]"'
+        related_items = [f'"[[{parent_link}]]"', f'"[[{hub_link}]]"']
     else:
-        parent_note = f'"[[{hub}]]"'
-        related_items = [f'"[[{hub}]]"']
+        parent_note = f'"[[{hub_link}]]"'
+        related_items = [f'"[[{hub_link}]]"']
 
     # related list
     if related:
         for r in related:
-            r_link = f'"[[{r}]]"'
+            r_link = f'"[[{_link_name(r)}]]"'
             if r_link not in related_items:
                 related_items.append(r_link)
 

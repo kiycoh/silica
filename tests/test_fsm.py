@@ -1201,6 +1201,53 @@ def test_hub_inverse_appears_in_chunk_ctx_snapshot(tmp_path):
         "Hub inverse was written to stale context['snapshot']"
 
 
+def test_hub_update_writes_parent_at_its_real_vault_path(tmp_path):
+    """An existing parent note in another folder must be patched where it lives,
+    not at target_dir/<parent>.md (which would read as 'File not found')."""
+    import json
+    from unittest.mock import patch, MagicMock
+    from silica.router.orchestrator import InjectorFSM
+    from silica.driver.base import NoteRef, Txn
+
+    ops_path = str(tmp_path / "ops.json")
+    with open(ops_path, "w") as f:
+        json.dump([{
+            "op": "write", "path": "testing/SomeNote.md",
+            "heading": "SomeNote", "source_basename": "test.md",
+            "content": "# SomeNote\n", "snippet": "Some snippet",
+            "hub": None, "parent": "lezione_7",
+        }], f)
+
+    fsm = InjectorFSM("Inbox/test.md", "testing", hub="Hub")
+    fsm.context["chunk"] = {
+        "ops_path": ops_path,
+        "snapshot": {"txn_id": "txn-001", "inverses": [], "created_paths": []},
+        "snapshot_domain": [],
+    }
+    fsm._current_chunk_idx = 0
+    fsm._chunk_flat_to_fi_ci = {0: (0, 0)}
+    fsm._file_chunks = [{"source_file": "Inbox/test.md", "chunks": [{}]}]
+    fsm._txn = Txn(id="txn-001", created_paths=[], inverses=[])
+
+    note = MagicMock()
+    note.content = "# lezione_7\n\nExisting\n"
+
+    with patch("silica.router.orchestrator.DRIVER") as mock_driver, \
+         patch("silica.router.orchestrator.time") as mock_time:
+        mock_driver.read_note.return_value = note
+        mock_driver.overwrite.return_value = None
+        # lezione_7 lives in 'Lezioni/', NOT under target_dir 'testing/'.
+        mock_driver.search_names.return_value = [NoteRef(name="lezione_7", path="Lezioni/lezione_7.md")]
+        mock_time.monotonic.side_effect = [0.0, 10.0, 20.0, 30.0]
+        mock_time.sleep.return_value = None
+        fsm._handle_hub_update()
+
+    overwritten_paths = [c.args[0] for c in mock_driver.overwrite.call_args_list]
+    assert "Lezioni/lezione_7.md" in overwritten_paths, \
+        f"parent not patched at its real path; overwrote: {overwritten_paths}"
+    assert "testing/lezione_7.md" not in overwritten_paths
+
+
 def test_refiner_default_recipe_includes_backlink():
     """RefinerFSM default recipe (loaded from YAML) includes backlink after write and before lint."""
     from silica.router.refiner_fsm import RefinerFSM

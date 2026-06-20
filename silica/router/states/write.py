@@ -58,6 +58,24 @@ def _merge_moc_section(content: str, heading: str, note_lines: list[str]) -> str
     return content.rstrip() + "\n" + moc_block
 
 
+def _resolve_vault_path(name: str) -> str | None:
+    """Real vault-relative path of an existing note by name, searched vault-wide.
+
+    Mirrors validate._resolve_parent's `search_names` check so HUB_UPDATE writes
+    the parent where it actually lives instead of assuming `target_dir/<name>.md`.
+    Returns None when the note doesn't exist yet (caller falls back to target_dir).
+    """
+    name_l = name.lower()
+    try:
+        matches = [r for r in orch.DRIVER.search_names(name) if r.name.lower() == name_l and r.path]
+    except Exception:
+        return None
+    if not matches:
+        return None
+    # Deterministic pick on duplicate names: shallowest path, then lexical.
+    return sorted(matches, key=lambda r: (r.path.count("/"), r.path.lower()))[0].path
+
+
 def handle_snapshot(fsm: "InjectorFSM") -> None:
     idx = fsm._current_chunk_idx
     fsm._progress_note(fsm._chunk_task_id("snapshot"), "snapshot", "running")
@@ -423,7 +441,11 @@ def handle_hub_update(fsm: "InjectorFSM") -> None:
     if parent_notes:
         from silica.kernel.ops import InverseOp, InverseOpKind
         for parent_name, p_new_notes in parent_notes.items():
-            parent_path = f"{fsm.target_dir}/{parent_name}.md".replace("//", "/")
+            # Resolve the parent wherever it actually lives in the vault (mirrors
+            # validate's search_names check) instead of assuming it sits under
+            # target_dir — otherwise an existing parent in another folder reads
+            # as "File not found". Fall back to target_dir only for a new note.
+            parent_path = _resolve_vault_path(parent_name) or f"{fsm.target_dir}/{parent_name}.md".replace("//", "/")
             try:
                 from silica.driver.base import NoteRef as _NR
                 p_ref = _NR(name=parent_name, path=parent_path)
