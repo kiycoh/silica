@@ -279,6 +279,11 @@ def _stage_track(pipeline_phases: list[dict], console_width: int) -> "Text":
             t.append("  ")
     if end < len(_PHASE_ORDER):
         t.append("  …", style="dim")
+    # Keep the track on a single line: on a narrow console the ±3 window would wrap,
+    # changing the panel height between frames and tearing the Live region. Crop with
+    # an ellipsis instead of wrapping so the panel height stays constant at any width.
+    t.no_wrap = True
+    t.overflow = "ellipsis"
     return t
 
 
@@ -348,7 +353,14 @@ class _ProgressRenderer:
             else:
                 self._pipeline_phases.append({"phase": label, "status": status, "elapsed": dur})
             if self._inject_progress is not None and self._inject_task_id is not None:
-                self._inject_progress.update(self._inject_task_id, advance=1)
+                # Count DISTINCT completed phases, not raw done/failed events: a phase
+                # can re-fire `done` within one run (retries / deferred reprocessing),
+                # and bare advance=1 overflowed the bar (e.g. 68/16). _pipeline_phases
+                # is deduped by label, so this is naturally idempotent. Cap belt-and-braces.
+                completed = sum(1 for e in self._pipeline_phases if e["status"] in ("done", "failed"))
+                self._inject_progress.update(
+                    self._inject_task_id, completed=min(completed, len(_PHASE_LABELS))
+                )
         self._update_live()
 
     def _on_work_feedback(self, event) -> None:
@@ -530,7 +542,8 @@ class _ProgressRenderer:
                 auto_refresh=False,
             )
             task_id = progress_obj.add_task("", total=event.total)
-            progress_obj.start()
+            # Not started on purpose — embedded in self._live (see injector note); a
+            # Progress.start() here would open a second Live and orphan the bar.
             self._batch = {
                 "run_id": event.run_id,
                 "kind": event.kind,
@@ -571,7 +584,10 @@ class _ProgressRenderer:
                         auto_refresh=False,
                     )
                     self._inject_task_id = self._inject_progress.add_task("", total=len(_PHASE_LABELS))
-                    self._inject_progress.start()
+                    # Do NOT start() it: Progress.start() spins up its own Live on the
+                    # global console, which double-renders the bar (an orphan above the
+                    # panel on small consoles). We embed it as a renderable in self._live,
+                    # which drives the rendering.
                 self._update_live()
             else:
                 # Non-interactive fallback: print immediately

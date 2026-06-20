@@ -365,6 +365,32 @@ def test_stage_track_empty_shows_pending_from_start():
     assert "· cross-dedup" in plain
 
 
+def test_injector_panel_height_constant_across_widths():
+    """Regression: the injector panel (Panel > Group > stage track) must keep the same
+    height on a narrow vs wide console. A wrapping track grew the panel between frames
+    and tore the Live region on a small / non-fullscreen terminal."""
+    import io
+    from rich.console import Console, Group
+    from rich.panel import Panel
+    from rich.text import Text
+    from silica.ui.renderer import _stage_track
+    phases = [
+        {"phase": "payload",   "status": "done",    "elapsed": 0.8},
+        {"phase": "salience",  "status": "done",    "elapsed": 0.3},
+        {"phase": "collision", "status": "running", "elapsed": None},
+    ]
+
+    def panel_height(width: int) -> int:
+        buf = io.StringIO()
+        c = Console(file=buf, width=width)
+        c.print(Panel(Group(Text("  spinner…"), _stage_track(phases, width)),
+                      title="injector · some/long/inbox/path/with a long file name.md"))
+        return len(buf.getvalue().rstrip("\n").split("\n"))
+
+    heights = {w: panel_height(w) for w in (30, 50, 80, 120)}
+    assert len(set(heights.values())) == 1, f"panel height varies with width: {heights}"
+
+
 def test_stage_track_failed_phase_shown():
     from silica.ui.renderer import _stage_track
     phases = [
@@ -461,6 +487,92 @@ def test_batch_micro_phase_resets_on_ledger_next_complete():
         cb.close()
         bus_mod.BUS = orig_bus
         CONFIG.tool_progress = orig_mode
+
+
+def test_live_aware_handler_resolves_stderr_dynamically():
+    """Regression for torn panels: a log handler that caches ``sys.stderr`` at
+    construction writes raw bytes while a ``rich.Live`` has redirected stderr to its
+    coordinating proxy → the live region tears. The handler must resolve ``sys.stderr``
+    at emit time so Live can print the log above the region cleanly."""
+    import sys, io
+    from silica.ui.logging import LiveAwareStreamHandler
+
+    h = LiveAwareStreamHandler()
+    orig = sys.stderr
+    proxy = io.StringIO()  # stand-in for rich.Live's FileProxy
+    try:
+        sys.stderr = proxy  # simulate Live.start() redirect
+        assert h.stream is proxy
+    finally:
+        sys.stderr = orig
+    # Live.stop() restores stderr → handler follows it back, no stale reference.
+    assert h.stream is orig
+
+
+def test_injector_progress_not_given_its_own_live():
+    """Regression: the embedded Progress must NOT own an active Live. Progress.start()
+    opens a second Live on the global console that double-renders the bar — an orphan
+    progress bar above the panel on small consoles. The outer self._live drives it."""
+    from unittest.mock import patch, PropertyMock
+    from rich.console import Console
+    from silica.agent.events import ToolStartEvent
+    from silica.ui.renderer import make_progress_callback
+
+    orig_mode = CONFIG.tool_progress
+    cb = make_progress_callback()
+    try:
+        CONFIG.tool_progress = "all"
+        with patch.object(Console, "is_terminal", new_callable=PropertyMock, return_value=True), \
+             patch.object(cb, "_update_live", lambda: None):  # isolate: no real outer Live
+            cb(ToolStartEvent(name="silica_run_injector",
+                              args={"inbox_files": ["a.md"]}, call_id="1", iteration=1))
+        assert cb._inject_progress is not None
+        assert cb._inject_progress.live.is_started is False
+    finally:
+        cb.close()
+        CONFIG.tool_progress = orig_mode
+
+
+def test_inject_progress_does_not_overflow_on_phase_refires():
+    """Regression: a phase can transition to `done` more than once within a single
+    injector run (retries / deferred reprocessing). The progress counter must track
+    DISTINCT completed phases, not accumulate every `done` event — otherwise it shows
+    nonsense like 68/16."""
+    from rich.progress import (
+        Progress, SpinnerColumn, BarColumn, MofNCompleteColumn, TimeElapsedColumn,
+    )
+    from silica.ui.renderer import make_progress_callback, _PHASE_LABELS
+
+    cb = make_progress_callback()
+    try:
+        # Mimic what ToolStartEvent(silica_run_injector) sets up, without the
+        # terminal-gated path.
+        cb._inject_progress = Progress(
+            SpinnerColumn(), BarColumn(), MofNCompleteColumn(), TimeElapsedColumn(),
+            auto_refresh=False,
+        )
+        cb._inject_task_id = cb._inject_progress.add_task("", total=len(_PHASE_LABELS))
+        cb._pipeline_phases = []
+        cb._phase_start_times = {}
+
+        phases = ["payload", "salience", "collision"]
+
+        def run_pass():
+            for p in phases:
+                cb._on_pipeline_phase(p, "running", None)
+                cb._on_pipeline_phase(p, "done", 0.1)
+
+        # Three passes over the same phases (e.g. validate fallback re-runs the chain).
+        run_pass()
+        run_pass()
+        run_pass()
+
+        completed = cb._inject_progress.tasks[cb._inject_task_id].completed
+        # 3 distinct phases completed — NOT 9 (3 passes × 3), and never above total.
+        assert completed == len(phases)
+        assert completed <= len(_PHASE_LABELS)
+    finally:
+        cb.close()
 
 
 def test_print_banner_styles(capsys):

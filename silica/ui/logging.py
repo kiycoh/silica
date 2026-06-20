@@ -1,4 +1,24 @@
 import logging
+import sys
+
+
+class LiveAwareStreamHandler(logging.StreamHandler):
+    """StreamHandler that resolves ``sys.stderr`` at emit time instead of caching it.
+
+    A ``rich.live.Live`` redirects ``sys.stderr`` to a proxy that prints above the
+    live region; a handler holding the original stream writes raw and tears the
+    render. Reading ``sys.stderr`` dynamically lets the log flow through that proxy
+    while a Live is active, and through the real stream otherwise.
+    """
+
+    @property
+    def stream(self):
+        return sys.stderr
+
+    @stream.setter
+    def stream(self, _value):
+        pass  # always dynamic — ignore the value StreamHandler.__init__ assigns
+
 
 # Italian translations/explanations mapping for standard log messages
 FRIENDLY_TEMPLATES = {
