@@ -30,9 +30,13 @@ dependencies = [
   "tree-sitter>=0.23",
   "tree-sitter-language-pack",
   "yake>=0.7.3",
+  "pdfminer-six>=20260107",
 ]
 
 [project.optional-dependencies]
+# AGPL-3.0 (or Artifex commercial) — kept OUT of the Apache-2.0 core. Opt-in:
+# `pip install silica[pdf]`. Using it makes the running combination AGPL for you.
+pdf = ["pymupdf4llm>=1.27.2.3"]
 dev = ["pytest>=8.0", "mypy>=1.10", "import-linter>=2.0"]
 
 [project.scripts]
