@@ -1,7 +1,7 @@
 """commit_ops — the reusable validate→snapshot→write→lint micro-gate.
 
-Extracted from the RefinerFSM gate (refiner_fsm.py) so bounded sub-agents can
-commit their proposed ops through the *same* deterministic safety machinery the
+Lets bounded sub-agents commit their proposed ops through the *same*
+deterministic safety machinery the
 main pipeline uses: structural validation, an inverse-op snapshot, the bulk
 write, a lint gate, and automatic rollback on failure.
 

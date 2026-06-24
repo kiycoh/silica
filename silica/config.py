@@ -217,6 +217,17 @@ class SilicaConfig:
         default_factory=lambda: os.getenv("SILICA_SALIENCE_GATE", "True").lower() in ("true", "1", "t")
     )
 
+    # Defer uncorroborated concepts on degraded (embedder-down) extraction.
+    # When the embedder is configured but unavailable, the salience gate can't run;
+    # with this ON, single-signal (INFERRED) concepts are held back for a later
+    # embedder-up pass instead of admitted ungated. Only structurally-corroborated
+    # (EXTRACTED) concepts pass — author markup needs no embedder.
+    # OFF by default: an embedder-free vault has no "later pass", so deferral there
+    # would lose concepts permanently. Turn ON only with a real, occasionally-flaky embedder.
+    defer_uncorroborated_concepts: bool = field(
+        default_factory=lambda: os.getenv("SILICA_DEFER_UNCORROBORATED", "False").lower() in ("true", "1", "t")
+    )
+
     # Image handling mode:
     #   strip (default) — remove image embeds from text before embedding / LLM context
     #   vlm             — replace embeds with VLM-generated descriptions (requires vlm_model)
