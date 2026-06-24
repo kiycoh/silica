@@ -967,9 +967,30 @@ class ObsidianCLIBackend:
                           f"name={name}", f"value={value}", f"type={type_}")
             self._wait_for_prop(ref, name, str(value))
 
+    def _vault_base_path(self) -> str | None:
+        """Absolute FS root of the vault (cached). None if Obsidian can't report it."""
+        if getattr(self, "_base_path", None) is None:
+            self._base_path = self._eval(
+                "JSON.stringify(app.vault.adapter.basePath)", default=None
+            )
+        return self._base_path
+
+    def _ensure_dest_dir(self, to: str) -> None:
+        """mkdir -p the destination's parent before a move.
+
+        Obsidian's move is Node `fs.rename`, which (unlike fs_backend.move's
+        Path.mkdir) won't create a not-yet-existing target subfolder — the move
+        would otherwise fail ENOENT. Best-effort: skip if the FS root is unknown.
+        """
+        parent = os.path.dirname(to.replace("\\", "/").strip("/"))
+        base = self._vault_base_path()
+        if parent and base:
+            os.makedirs(os.path.join(base, *parent.split("/")), exist_ok=True)
+
     def move(self, ref: NoteRef | str, to: str) -> None:
         """Move/rename a note. Obsidian updates all wikilinks (graph-safe)."""
         old_path = ref.path if isinstance(ref, NoteRef) else None
+        self._ensure_dest_dir(to)
         self._run_cli("move", self._ref_arg(ref), f"to={to}")
         self._wait_for_move(ref, to)
         # Obsidian rewrites all incoming wikilinks on move, so edges from

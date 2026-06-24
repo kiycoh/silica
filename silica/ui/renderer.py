@@ -46,6 +46,27 @@ def emit_pipeline_phase(phase: str, status: str, elapsed: float | None = None) -
             pass
 
 
+# Module-level hook for files-processed progress emitted by InjectorFSM.
+_run_progress_hook: Callable[[int, int, str], None] | None = None
+
+
+def _set_run_progress_hook(hook: Callable[[int, int, str], None] | None) -> None:
+    global _run_progress_hook
+    _run_progress_hook = hook
+
+
+def emit_run_progress(done: int, total: int, label: str = "") -> None:
+    """Called by InjectorFSM to surface files-processed progress. No-op if not registered.
+
+    `label` is the document currently being processed; it drives the panel title.
+    """
+    if _run_progress_hook is not None:
+        try:
+            _run_progress_hook(done, total, label)
+        except Exception:
+            pass
+
+
 _batch_run_hook: Callable[[RenderEvent], None] | None = None
 
 
@@ -297,8 +318,9 @@ class _ProgressRenderer:
         self._injector_desc: str = ""
         self._pipeline_phases: list[dict] = []   # ordered: {phase, status, elapsed}
         self._phase_start_times: dict[str, float] = {}
-        # Inject progress bar
+        # Inject progress bar (tracks files processed / total)
         self._inject_inbox_label: str = ""
+        self._inject_file_count: int = 0
         self._inject_progress: Progress | None = None
         self._inject_task_id = None
         # Batch run progress (refine/enrich)
@@ -352,15 +374,22 @@ class _ProgressRenderer:
                     break
             else:
                 self._pipeline_phases.append({"phase": label, "status": status, "elapsed": dur})
-            if self._inject_progress is not None and self._inject_task_id is not None:
-                # Count DISTINCT completed phases, not raw done/failed events: a phase
-                # can re-fire `done` within one run (retries / deferred reprocessing),
-                # and bare advance=1 overflowed the bar (e.g. 68/16). _pipeline_phases
-                # is deduped by label, so this is naturally idempotent. Cap belt-and-braces.
-                completed = sum(1 for e in self._pipeline_phases if e["status"] in ("done", "failed"))
-                self._inject_progress.update(
-                    self._inject_task_id, completed=min(completed, len(_PHASE_LABELS))
-                )
+        self._update_live()
+
+    def _on_run_progress(self, done: int, total: int, label: str = "") -> None:
+        """Drive the injector bar by FILES processed (monotonic, always completes).
+
+        Unlike the old phase-count bar, this never stalls below 100%: the FSM
+        iterates every chunk, so files done reaches the file total. Clamp to
+        guard against a stale total. `label`, when non-empty, retitles the panel
+        with the document currently being processed.
+        """
+        if label:
+            self._inject_inbox_label = label
+        if self._inject_progress is not None and self._inject_task_id is not None:
+            self._inject_progress.update(
+                self._inject_task_id, completed=min(done, total), total=total
+            )
         self._update_live()
 
     def _on_work_feedback(self, event) -> None:
@@ -567,15 +596,18 @@ class _ProgressRenderer:
                 self._active_tools[event.call_id] = {"name": event.name, "args": event.args}
                 if event.name == "silica_run_injector":
                     self._injector_call_id = event.call_id
-                    inbox_file = event.args.get("inbox_file", "")
-                    if not inbox_file:
-                        files = event.args.get("inbox_files", [])
-                        inbox_file = files[0] if isinstance(files, list) and files else "?"
-                    self._inject_inbox_label = str(inbox_file)
+                    files = event.args.get("inbox_files", [])
+                    files = files if isinstance(files, list) else []
+                    single = event.args.get("inbox_file", "")
+                    if single and single not in files:
+                        files = [single, *files]
+                    self._inject_file_count = max(1, len(files))
+                    self._inject_inbox_label = str(files[0] if files else "?")
                     self._injector_desc = _synthetic_tool_desc(event.name, event.args)
                     self._pipeline_phases = []
                     self._phase_start_times = {}
                     _set_pipeline_hook(self._on_pipeline_phase)
+                    _set_run_progress_hook(self._on_run_progress)
                     self._inject_progress = Progress(
                         SpinnerColumn(),
                         BarColumn(),
@@ -583,7 +615,7 @@ class _ProgressRenderer:
                         TimeElapsedColumn(),
                         auto_refresh=False,
                     )
-                    self._inject_task_id = self._inject_progress.add_task("", total=len(_PHASE_LABELS))
+                    self._inject_task_id = self._inject_progress.add_task("", total=self._inject_file_count)
                     # Do NOT start() it: Progress.start() spins up its own Live on the
                     # global console, which double-renders the bar (an orphan above the
                     # panel on small consoles). We embed it as a renderable in self._live,
@@ -632,31 +664,42 @@ class _ProgressRenderer:
                 desc = _synthetic_tool_desc(event.name, event.args)
 
                 if event.name == "silica_run_injector" and self._injector_call_id == event.call_id:
-                    # Deregister pipeline hook; print compact single-line summary
+                    # Deregister hooks; print compact single-line summary
                     _set_pipeline_hook(None)
+                    _set_run_progress_hook(None)
                     self._injector_call_id = None
                     if self._inject_progress is not None:
                         self._inject_progress.stop()
                         self._inject_progress = None
                         self._inject_task_id = None
-                    done_phases = [e for e in self._pipeline_phases if e["status"] == "done"]
                     failed_phases = [e for e in self._pipeline_phases if e["status"] == "failed"]
-                    total_count = len(self._pipeline_phases)
                     lbl = escape(self._inject_inbox_label)
                     inject_dur = f"{event.duration_s:.1f}s"
+                    # Brief numeric yield from the run result (files always; notes/links if any).
+                    try:
+                        _data = json.loads(event.result) if isinstance(event.result, str) else {}
+                    except Exception:
+                        _data = {}
+                    bits = [f"{self._inject_file_count or 1} file"]
+                    if _data.get("yield_notes"):
+                        bits.append(f"{_data['yield_notes']} note")
+                    if _data.get("yield_links"):
+                        bits.append(f"{_data['yield_links']} link")
+                    yield_str = " [dim]·[/] ".join(bits)
                     if failed_phases:
                         last_phase = self._pipeline_phases[-1]["phase"] if self._pipeline_phases else "?"
                         CONSOLE.print(
                             f"  [tool.err]✗[/] [bold]injector[/] [dim]·[/] {lbl}"
-                            f"   {last_phase} [dim]·[/] {inject_dur}"
+                            f"   {yield_str} [dim]·[/] failed at {last_phase} [dim]·[/] {inject_dur}"
                         )
                     else:
                         CONSOLE.print(
                             f"  [tool.ok]✓[/] [bold]injector[/] [dim]·[/] {lbl}"
-                            f"   {len(done_phases)}/{total_count} phases [dim]·[/] {inject_dur}"
+                            f"   {yield_str} [dim]·[/] {inject_dur}"
                         )
                     self._pipeline_phases = []
                     self._inject_inbox_label = ""
+                    self._inject_file_count = 0
                 else:
                     CONSOLE.print(f"  [tool.ok]✓[/] {desc} [dim]({dur})[/]")
                     if mode == "verbose":
@@ -695,6 +738,7 @@ class _ProgressRenderer:
         global _batch_run_hook
         _batch_run_hook = None
         _set_pipeline_hook(None)
+        _set_run_progress_hook(None)
         from silica.agent.bus import BUS
         BUS.unsubscribe("work/feedback", self._on_work_feedback)
         if self._batch is not None:
