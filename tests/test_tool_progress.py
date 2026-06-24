@@ -3,6 +3,7 @@ import pytest
 from silica.config import CONFIG
 from silica.cli import _handle_slash_command
 from silica.ui.renderer import make_progress_callback, _redact, _cap
+from silica.ui.console import CONSOLE
 from silica.agent.events import ToolStartEvent, ToolCompleteEvent, ToolErrorEvent
 from silica.agent.loop import run_agent
 from silica.agent.llm import LLMResponse, ToolCall
@@ -116,10 +117,13 @@ def test_tool_error_event_always_emitted(capsys):
         CONFIG.tool_progress = orig_mode
 
 
-def test_callback_modes_output(capsys):
+def test_callback_modes_output(capsys, monkeypatch):
     orig_mode = CONFIG.tool_progress
+    # This test exercises the non-interactive (plain print) branch; pin the console
+    # off-terminal so it doesn't take the Live branch when FORCE_COLOR/a TTY is present.
+    monkeypatch.setattr(CONSOLE, "_force_terminal", False)
     cb = make_progress_callback()
-    
+
     try:
         # Test "new" mode
         CONFIG.tool_progress = "new"
@@ -413,11 +417,14 @@ def _make_mock_batch(kind: str = "refine") -> dict:
     }
 
 
-def test_batch_micro_phase_tracked_from_work_feedback():
+def test_batch_micro_phase_tracked_from_work_feedback(monkeypatch):
     import silica.agent.bus as bus_mod
     from silica.agent.events import WorkFeedbackEvent
     from silica.ui.renderer import make_progress_callback
 
+    # Logic-only test: pin off-terminal so the batch panel (full of MagicMocks)
+    # is never rendered via the Live branch when FORCE_COLOR/a TTY is present.
+    monkeypatch.setattr(CONSOLE, "_force_terminal", False)
     orig_bus = bus_mod.BUS
     bus_mod.BUS = bus_mod.EventBus()
     try:
@@ -453,12 +460,14 @@ def test_batch_micro_phase_ignored_for_wrong_kind():
         bus_mod.BUS = orig_bus
 
 
-def test_batch_micro_phase_resets_on_ledger_next_complete():
+def test_batch_micro_phase_resets_on_ledger_next_complete(monkeypatch):
     import json
     import silica.agent.bus as bus_mod
     from silica.agent.events import WorkFeedbackEvent, ToolCompleteEvent
     from silica.ui.renderer import make_progress_callback
 
+    # Logic-only test: pin off-terminal (see sibling) to avoid rendering MagicMocks.
+    monkeypatch.setattr(CONSOLE, "_force_terminal", False)
     orig_bus = bus_mod.BUS
     orig_mode = CONFIG.tool_progress
     bus_mod.BUS = bus_mod.EventBus()
@@ -533,46 +542,134 @@ def test_injector_progress_not_given_its_own_live():
         CONFIG.tool_progress = orig_mode
 
 
-def test_inject_progress_does_not_overflow_on_phase_refires():
-    """Regression: a phase can transition to `done` more than once within a single
-    injector run (retries / deferred reprocessing). The progress counter must track
-    DISTINCT completed phases, not accumulate every `done` event — otherwise it shows
-    nonsense like 68/16."""
+def test_phase_refires_do_not_touch_file_bar():
+    """The bar tracks FILES processed, not phases — so phase re-fires (retries /
+    deferred reprocessing) never move it. The phase track still dedups by label."""
     from rich.progress import (
         Progress, SpinnerColumn, BarColumn, MofNCompleteColumn, TimeElapsedColumn,
     )
-    from silica.ui.renderer import make_progress_callback, _PHASE_LABELS
+    from silica.ui.renderer import make_progress_callback
 
     cb = make_progress_callback()
     try:
-        # Mimic what ToolStartEvent(silica_run_injector) sets up, without the
-        # terminal-gated path.
         cb._inject_progress = Progress(
             SpinnerColumn(), BarColumn(), MofNCompleteColumn(), TimeElapsedColumn(),
             auto_refresh=False,
         )
-        cb._inject_task_id = cb._inject_progress.add_task("", total=len(_PHASE_LABELS))
+        cb._inject_task_id = cb._inject_progress.add_task("", total=3)  # 3 files
         cb._pipeline_phases = []
         cb._phase_start_times = {}
 
         phases = ["payload", "salience", "collision"]
-
-        def run_pass():
+        for _ in range(3):  # three passes over the same phases
             for p in phases:
                 cb._on_pipeline_phase(p, "running", None)
                 cb._on_pipeline_phase(p, "done", 0.1)
 
-        # Three passes over the same phases (e.g. validate fallback re-runs the chain).
-        run_pass()
-        run_pass()
-        run_pass()
-
-        completed = cb._inject_progress.tasks[cb._inject_task_id].completed
-        # 3 distinct phases completed — NOT 9 (3 passes × 3), and never above total.
-        assert completed == len(phases)
-        assert completed <= len(_PHASE_LABELS)
+        # Bar untouched by phase events; track deduped to 3 distinct phases.
+        assert cb._inject_progress.tasks[cb._inject_task_id].completed == 0
+        assert len(cb._pipeline_phases) == len(phases)
     finally:
         cb.close()
+
+
+def test_count_files_done():
+    from silica.router.orchestrator import _count_files_done
+    # file 0 → chunks 0,1 ; file 1 → chunk 2 ; file 2 → chunk 3
+    flat_map = {0: (0, 0), 1: (0, 1), 2: (1, 0), 3: (2, 0)}
+    assert _count_files_done(flat_map, upto_idx=0) == 0   # nothing past 0
+    assert _count_files_done(flat_map, upto_idx=2) == 1   # file 0 fully behind
+    assert _count_files_done(flat_map, upto_idx=4) == 3   # all done
+    assert _count_files_done({}, upto_idx=5) == 0
+
+
+def test_injector_bar_total_is_file_count():
+    from unittest.mock import patch, PropertyMock
+    from rich.console import Console
+    from silica.agent.events import ToolStartEvent
+    from silica.ui.renderer import make_progress_callback
+
+    orig_mode = CONFIG.tool_progress
+    cb = make_progress_callback()
+    try:
+        CONFIG.tool_progress = "all"
+        with patch.object(Console, "is_terminal", new_callable=PropertyMock, return_value=True), \
+             patch.object(cb, "_update_live", lambda: None):
+            cb(ToolStartEvent(name="silica_run_injector",
+                              args={"inbox_files": ["a.md", "b.md", "c.md"]},
+                              call_id="1", iteration=1))
+        task = cb._inject_progress.tasks[cb._inject_task_id]
+        assert task.total == 3  # files, not 16 phases
+    finally:
+        cb.close()
+        CONFIG.tool_progress = orig_mode
+
+
+def test_run_progress_advances_file_bar():
+    from rich.progress import (
+        Progress, SpinnerColumn, BarColumn, MofNCompleteColumn, TimeElapsedColumn,
+    )
+    from silica.ui.renderer import make_progress_callback
+
+    cb = make_progress_callback()
+    try:
+        cb._inject_progress = Progress(
+            SpinnerColumn(), BarColumn(), MofNCompleteColumn(), TimeElapsedColumn(),
+            auto_refresh=False,
+        )
+        cb._inject_task_id = cb._inject_progress.add_task("", total=3)
+        cb._on_run_progress(2, 3)
+        assert cb._inject_progress.tasks[cb._inject_task_id].completed == 2
+        cb._on_run_progress(9, 3)  # clamp: never overflow
+        assert cb._inject_progress.tasks[cb._inject_task_id].completed == 3
+    finally:
+        cb.close()
+
+
+def test_run_progress_updates_inbox_label():
+    """Regression: the panel title must follow the document currently processed,
+    not stay frozen on the first file."""
+    from silica.ui.renderer import make_progress_callback
+
+    cb = make_progress_callback()
+    try:
+        cb._inject_inbox_label = "a.md"
+        cb._on_run_progress(1, 2, label="b.md")
+        assert cb._inject_inbox_label == "b.md"
+        cb._on_run_progress(2, 2, label="")  # empty label must not clobber
+        assert cb._inject_inbox_label == "b.md"
+    finally:
+        cb.close()
+
+
+def test_injector_summary_shows_yield(capsys):
+    import json
+    from unittest.mock import patch, PropertyMock
+    from rich.console import Console
+    from silica.agent.events import ToolCompleteEvent
+    from silica.ui.renderer import make_progress_callback
+
+    orig_mode = CONFIG.tool_progress
+    cb = make_progress_callback()
+    try:
+        CONFIG.tool_progress = "all"
+        cb._injector_call_id = "1"
+        cb._inject_file_count = 3
+        cb._inject_inbox_label = "a.md"
+        cb._pipeline_phases = [{"phase": "write", "status": "done", "elapsed": 0.1}]
+        with patch.object(Console, "is_terminal", new_callable=PropertyMock, return_value=True):
+            cb(ToolCompleteEvent(
+                name="silica_run_injector", args={}, call_id="1",
+                result=json.dumps({"yield_notes": 7, "yield_links": 12}),
+                duration_s=4.2, iteration=1,
+            ))
+        out = capsys.readouterr().out
+        assert "3 file" in out
+        assert "7 note" in out
+        assert "12 link" in out
+    finally:
+        cb.close()
+        CONFIG.tool_progress = orig_mode
 
 
 def test_print_banner_styles(capsys):

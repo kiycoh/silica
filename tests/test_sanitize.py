@@ -179,3 +179,37 @@ def test_strip_degenerate_normalized_in_ops():
     assert "/" in result[0]["content"]
     assert "/////" not in result[0]["content"]
 
+
+# ---------------------------------------------------------------------------
+# collapse_nested_wikilinks — [[[[X]]]] → [[X]]
+# ---------------------------------------------------------------------------
+
+from silica.kernel.sanitize import collapse_nested_wikilinks
+
+
+def test_collapse_quadruple_brackets():
+    assert collapse_nested_wikilinks("see [[[[Reti (DL)]]]] here") == "see [[Reti (DL)]] here"
+
+
+def test_collapse_triple_brackets():
+    assert collapse_nested_wikilinks("[[[X]]]") == "[[X]]"
+
+
+def test_collapse_leaves_valid_wikilink_untouched():
+    assert collapse_nested_wikilinks("a [[X]] and x[[1]] code") == "a [[X]] and x[[1]] code"
+
+
+def test_collapse_leaves_single_brackets_untouched():
+    assert collapse_nested_wikilinks("[label](url) and [^1]") == "[label](url) and [^1]"
+
+
+def test_collapse_nested_wikilinks_normalized_in_ops_body():
+    ops = [{"op": "write", "path": "Dir/A.md", "heading": "A",
+            "source_basename": "inbox.md",
+            "content": "Vedi [[[[Reti Neurali Profonde (Deep Learning)]]]] nel testo.",
+            "snippet": "Collega a [[[[IA Generativa]]]]."}]
+    result = normalize_ops(ops)
+    assert "[[[[" not in result[0]["content"] and "]]]]" not in result[0]["content"]
+    assert "[[Reti Neurali Profonde (Deep Learning)]]" in result[0]["content"]
+    assert "[[IA Generativa]]" in result[0]["snippet"]
+

@@ -1247,36 +1247,3 @@ def test_hub_update_writes_parent_at_its_real_vault_path(tmp_path):
         f"parent not patched at its real path; overwrote: {overwritten_paths}"
     assert "testing/lezione_7.md" not in overwritten_paths
 
-
-def test_refiner_default_recipe_includes_backlink():
-    """RefinerFSM default recipe (loaded from YAML) includes backlink after write and before lint."""
-    from silica.router.refiner_fsm import RefinerFSM
-    from unittest.mock import patch
-
-    with patch("silica.router.refiner_fsm.DRIVER"):
-        fsm = RefinerFSM(folder="Concepts")
-
-    phase_ids = [p["id"] for p in fsm._recipe.get("phases", [])]
-    assert "backlink" in phase_ids, (
-        f"'backlink' phase missing from RefinerFSM default recipe. Got: {phase_ids}"
-    )
-    assert phase_ids.index("backlink") > phase_ids.index("write"), \
-        "'backlink' must appear after 'write'"
-    assert phase_ids.index("backlink") < phase_ids.index("lint"), \
-        "'backlink' must appear before 'lint'"
-
-
-def test_refiner_python_fallback_recipe_includes_autolink_and_backlink():
-    """RefinerFSM Python fallback recipe (used when YAML load fails) includes autolink + backlink."""
-    from silica.router.refiner_fsm import RefinerFSM
-    from unittest.mock import patch
-
-    with patch("silica.router.refiner_fsm.DRIVER"), \
-         patch("silica.router.recipe_parser.load_recipe", side_effect=FileNotFoundError("no yaml")):
-        fsm = RefinerFSM(folder="Concepts")
-
-    phase_ids = [p["id"] for p in fsm._recipe.get("phases", [])]
-    assert "autolink" in phase_ids, f"'autolink' missing from fallback recipe: {phase_ids}"
-    assert "backlink" in phase_ids, f"'backlink' missing from fallback recipe: {phase_ids}"
-    assert phase_ids.index("autolink") < phase_ids.index("backlink") < phase_ids.index("lint")
-

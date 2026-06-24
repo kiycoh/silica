@@ -72,6 +72,67 @@ class TestIsConceptKeepsConcepts:
 # is_concept — overlay argument honoured
 # ---------------------------------------------------------------------------
 
+# ---------------------------------------------------------------------------
+# silica_recon — degraded (embedder-down) extraction defers uncorroborated concepts
+# ---------------------------------------------------------------------------
+
+class _FakeDriver:
+    """Driver stub: serves one note body, vault search finds nothing (all concepts new)."""
+    def __init__(self, body: str):
+        self._body = body
+
+    def read_note(self, ref):
+        from silica.driver.base import NoteContent, NoteRef
+        return NoteContent(ref=NoteRef(name="note", path="inbox/note.md"), content=self._body)
+
+    def search_context(self, query):
+        return []
+
+
+# Heading is 4 words → YAKE (n=3) can't produce it → _seed_structural prepends it,
+# so the corroborated concept survives the MIN_CONCEPTS=1 cutoff. Body is long
+# enough (k = tokens // 20 ≥ 2) for at least one prose-only (INFERRED) concept too.
+_STRUCTURAL = "knowledge graph memory system"
+_RECON_BODY = (
+    "# Knowledge Graph Memory System\n\n"
+    "The planning agent stores memory in the graph and retrieves planning context "
+    "across many tasks and domains. Memory recall improves planning, and the agent "
+    "reasons over stored knowledge for later planning tasks and decision making. "
+    "The system indexes past episodes so the planner can resume work from memory reliably."
+)
+
+
+class TestReconDeferral:
+    """Embedder is None here (autouse _no_recon_embedder) → degraded extraction."""
+
+    def test_defers_uncorroborated_when_flag_on(self, monkeypatch):
+        import silica.tools.pipeline as pipe
+        from silica.config import CONFIG
+        monkeypatch.setattr(pipe, "DRIVER", _FakeDriver(_RECON_BODY))
+        monkeypatch.setattr(CONFIG, "defer_uncorroborated_concepts", True, raising=False)
+
+        res = pipe.silica_recon("inbox/note.md")
+
+        admitted = set(res["new_concepts"]) | {c["name"] for c in res["collisions"]}
+        deferred = set(res["deferred_concepts"])
+        assert _STRUCTURAL in admitted    # structural → corroborated → admitted now
+        assert deferred                          # single-signal concepts held back
+        assert not (admitted & deferred)         # admitted XOR deferred — never both
+
+    def test_admits_everything_when_flag_off(self, monkeypatch):
+        """Default: embedder-free vaults must not defer (no later pass is coming)."""
+        import silica.tools.pipeline as pipe
+        from silica.config import CONFIG
+        monkeypatch.setattr(pipe, "DRIVER", _FakeDriver(_RECON_BODY))
+        monkeypatch.setattr(CONFIG, "defer_uncorroborated_concepts", False, raising=False)
+
+        res = pipe.silica_recon("inbox/note.md")
+
+        assert res["deferred_concepts"] == []    # nothing held back
+        admitted = set(res["new_concepts"]) | {c["name"] for c in res["collisions"]}
+        assert _STRUCTURAL in admitted     # uncorroborated concepts still admitted
+
+
 class TestIsConceptOverlayArg:
     def test_explicit_overlay_used_over_active(self):
         """is_concept uses an explicitly passed overlay, not get_active_overlay."""

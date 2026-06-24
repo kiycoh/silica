@@ -224,19 +224,33 @@ def test_graph_diff_ghost_links_from_pre_existing_note_outside_domain_not_flagge
 
 
 def test_graph_diff_broken_backlinks_rejected():
-    # If a pre-existing note has its backlink count decreased, reject it
+    # A *significant* backlink loss on a hub (>25%) is a real regression.
     pre = GraphSnapshot(
         orphans=[],
         unresolved=[],
-        backlink_counts={"NoteA": 2, "NoteB": 1}
+        backlink_counts={"NoteA": 8, "NoteB": 1}
     )
     post = GraphSnapshot(
         orphans=[],
         unresolved=[],
-        backlink_counts={"NoteA": 1, "NoteB": 1}
+        backlink_counts={"NoteA": 2, "NoteB": 1}
     )
-    
+
     success, errors = check_graph_regression(pre, post, created_paths=[])
     assert not success
     assert len(errors) == 1
-    assert "Broken backlinks detected for 'NoteA': decreased from 2 to 1" in errors[0]
+    assert "Broken backlinks detected for 'NoteA': decreased from 8 to 2" in errors[0]
+
+
+def test_graph_diff_minor_backlink_drop_is_drift_not_blocking():
+    # Losing a single incoming link on a hub is drift: surfaced as a "Backlink
+    # drift" error (non-blocking — finalize routes it to a warning, not rollback)
+    # rather than the blocking "Broken backlinks".
+    pre = GraphSnapshot(orphans=[], unresolved=[], backlink_counts={"DARPA": 8})
+    post = GraphSnapshot(orphans=[], unresolved=[], backlink_counts={"DARPA": 7})
+
+    success, errors = check_graph_regression(pre, post, created_paths=[])
+    assert not success  # still reported...
+    assert len(errors) == 1
+    assert errors[0].startswith("Backlink drift for 'DARPA'")  # ...but as drift
+    assert "Broken backlinks" not in errors[0]

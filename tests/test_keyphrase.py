@@ -64,6 +64,14 @@ def test_cutoff_scales_with_tokens_and_caps():
     assert len(_cutoff(huge, _fake_ranked(7))) == 7           # never exceed candidates
 
 
+def test_min_concepts_default_is_one_no_forced_padding():
+    """A thin note maps to as few as one concept — the floor never manufactures."""
+    from silica.kernel.keyphrase import MIN_CONCEPTS, _cutoff
+    assert MIN_CONCEPTS == 1
+    tiny = "w w w"                                  # 3 tokens → k = max(1, 3//20) = 1
+    assert len(_cutoff(tiny, _fake_ranked(50))) == 1
+
+
 def test_frontmatter_ignored(it_overlay):
     """YAML front matter is metadata, not content: it must not change concepts."""
     from silica.kernel.keyphrase import extract_keyphrases
@@ -174,6 +182,56 @@ def test_structural_phrase_beyond_yake_ngram_enters_pool():
     out = [c.phrase.lower()
            for c in extract_keyphrases(body, overlay=overlay, lang="english", embedder=None)]
     assert any("partially observable markov decision process" in p for p in out)
+
+
+# ---------------------------------------------------------------------------
+# Corroboration tier: structural markup is a *second axis*, not only a boost.
+# EXTRACTED <=> structurally corroborated (embedder-free); else INFERRED.
+# ---------------------------------------------------------------------------
+
+def test_embedder_down_structural_is_extracted_yake_only_is_inferred(it_overlay):
+    """Embedder-down — the only corroboration available is author markup.
+
+    A heading concept has a second independent signal → EXTRACTED. A prose-only
+    YAKE concept has a single (junk-prone) signal → INFERRED. This is the gate
+    the salience path cannot supply when the embedder is down.
+    """
+    from silica.kernel.keyphrase import extract_keyphrases
+
+    body = (
+        "# Discesa Del Gradiente Stocastico\n\n"
+        "La discesa del gradiente stocastico ottimizza la funzione di perdita "
+        "aggiornando i pesi della rete neurale a ogni iterazione del training. "
+        "Il tasso di apprendimento controlla l'ampiezza del passo di aggiornamento. "
+        "La retropropagazione calcola i gradienti rispetto a ciascun parametro del modello. "
+        "La regolarizzazione riduce il sovradattamento penalizzando i pesi troppo grandi. "
+        "La convalida incrociata stima la capacita di generalizzazione del modello."
+    )
+    cands = extract_keyphrases(body, overlay=it_overlay, lang="italian", embedder=None)
+    by = {c.phrase.lower(): c.confidence for c in cands}
+
+    assert by.get("discesa del gradiente stocastico") == "EXTRACTED"  # heading → second axis
+    assert any(conf == "INFERRED" for conf in by.values())           # prose-only → single signal
+
+
+def test_embedder_up_tier_independent_of_ranking_axis():
+    """With an embedder, the tier still follows markup, not the theme cosine the
+    ranker already uses: a heading concept is EXTRACTED, a theme-only one INFERRED."""
+    from silica.kernel.keyphrase import extract_keyphrases
+    from silica.kernel.overlay import DEFAULT_OVERLAY
+
+    body = (
+        "# Graph Memory\n\n"
+        "The planning module reads the graph memory and writes planning results back. "
+        "Planning over the graph memory improves planning quality and memory recall. "
+        "A planning agent stores planning state in graph memory for later planning. "
+        "The memory layer indexes planning episodes so planning can resume from memory."
+    )
+    cands = extract_keyphrases(body, overlay=DEFAULT_OVERLAY, lang="english", embedder=FakeEmbedder())
+    by = {c.phrase.lower(): c.confidence for c in cands}
+
+    assert by.get("graph memory") == "EXTRACTED"          # in a heading → corroborated
+    assert any(conf == "INFERRED" for conf in by.values())  # theme-only candidates stay single-signal
 
 
 def test_extract_keyphrases_rerank_end_to_end():

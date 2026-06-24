@@ -50,7 +50,7 @@ def test_human_friendly_formatter_mapped_warning():
 def test_human_friendly_formatter_mapped_error():
     formatter = HumanFriendlyFormatter()
     record = logging.LogRecord(
-        name="silica.router.refiner_fsm",
+        name="silica.router.orchestrator",
         level=logging.ERROR,
         pathname="fsm.py",
         lineno=200,
