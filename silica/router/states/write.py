@@ -179,6 +179,12 @@ def handle_write(fsm: "InjectorFSM") -> None:
         for inv in r.inverses:
             fsm._run_inverses.append((r.path, inv, None))
 
+    # Brief run-yield for the TUI summary: count NEW notes actually committed
+    # (created_paths ∩ committed), accumulated across chunks/files.
+    created = {p.removesuffix(".md") for p in (fsm._txn.created_paths or [])} if fsm._txn else set()
+    new_notes = sum(1 for r in result.committed if r.path.removesuffix(".md") in created)
+    fsm.context["yield_notes"] = fsm.context.get("yield_notes", 0) + new_notes
+
     if result.failed:
         try:
             _deferred = [

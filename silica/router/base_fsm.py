@@ -1,4 +1,4 @@
-"""Shared FSM mechanics for InjectorFSM and RefinerFSM."""
+"""Shared FSM mechanics for InjectorFSM."""
 from __future__ import annotations
 
 import logging

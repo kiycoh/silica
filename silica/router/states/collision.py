@@ -50,6 +50,108 @@ def _names_agree(concept: str, note_name: str) -> bool:
     return bool(nc) and nc in {norm(a) for a in acronyms if a.strip()}
 
 
+def _embedder_free_near_dups(
+    chunk: dict, corpus: dict[str, str], *, threshold: float = 0.6
+) -> list[dict]:
+    """Concepts in `chunk` that have a MinHash near-duplicate in `corpus`.
+
+    Pure: no FSM, no DRIVER. `corpus` maps note path → body text. Returns dicts
+    shaped like the borderline `deferred_concepts` entries so the existing defer
+    plumbing handles them unchanged. The returned `concept` is the same object
+    held in the chunk, so callers can drop it by identity.
+    """
+    from silica.kernel.minhash_dedup import near_duplicates
+
+    out: list[dict] = []
+    for batch in chunk.get("batches", []):
+        inbox_file = batch.get("inbox_file", "")
+        for concept in batch.get("concepts", []):
+            if isinstance(concept, dict):
+                name, excerpt = concept.get("name", ""), concept.get("excerpt", "")
+            else:
+                name, excerpt = str(concept), ""
+            query = f"{name}\n{excerpt}".strip()
+            if not query:
+                continue
+            hits = near_duplicates(query, corpus, threshold=threshold)
+            if not hits:
+                continue
+            path, score = hits[0]
+            note_name = os.path.splitext(os.path.basename(path))[0]
+            out.append({
+                "concept": concept,
+                "inbox_file": inbox_file,
+                "top_match": {"path": path, "name": note_name, "score": score},
+                "score": score,
+            })
+    return out
+
+
+def _run_embedder_free_dedup_leg(fsm: "InjectorFSM", idx: int, chunk: dict) -> None:
+    """STABLE dedup leg: MinHash near-dup pass for when the embedder is unavailable.
+
+    Near-dups are DEFERRED for review and dropped from the chunk so DELEGATE does
+    not write a duplicate note. They are never mechanically patched — the
+    embedder-free signal is weaker than a cosine, so it routes to escalate-tier,
+    not an auto-write. Best-effort: any failure leaves the chunk untouched.
+    """
+    threshold = getattr(orch.CONFIG, "minhash_dup_threshold", 0.6)
+    try:
+        corpus: dict[str, str] = {}
+        # "" matches every note name → full-vault enumeration. Acceptable on this
+        # cold path (only reached when the embedder/index is down).
+        # ponytail: rebuilds the corpus per chunk; share a MinHash index with the
+        # embed-refresh hook if this ever runs hot.
+        for ref in orch.DRIVER.search_names(""):
+            try:
+                corpus[ref.path] = orch.DRIVER.read_note(ref).content or ""
+            except Exception:
+                continue
+    except Exception as _e:
+        logger.debug("COLLISION minhash leg: corpus build failed (%s) — skipping", _e)
+        return
+    if not corpus:
+        return
+
+    deferred = _embedder_free_near_dups(chunk, corpus, threshold=threshold)
+    if not deferred:
+        return
+
+    dup_ids = {id(d["concept"]) for d in deferred}
+    new_batches: list[dict] = []
+    for batch in chunk.get("batches", []):
+        kept = [c for c in batch.get("concepts", []) if id(c) not in dup_ids]
+        if kept:
+            new_batches.append(
+                {"inbox_file": batch.get("inbox_file", fsm.inbox_file), "concepts": kept}
+            )
+    fsm._chunks[idx] = {"schema_version": chunk.get("schema_version", 1), "batches": new_batches}
+
+    deferred_op_dicts = [
+        {
+            "op": "skip",
+            "heading": (d["concept"].get("name", "") if isinstance(d["concept"], dict) else str(d["concept"])),
+            "source_basename": os.path.basename(d["inbox_file"]),
+            "reason": f"minhash_near_dup score={d['score']:.3f} candidate={d['top_match'].get('name','?')}",
+            "path": None,
+        }
+        for d in deferred
+    ]
+    fsm._defer_ops(
+        deferred_op_dicts,
+        {
+            (d["concept"].get("name", str(i)) if isinstance(d["concept"], dict) else str(i)):
+            f"minhash_near_dup score={d['score']:.3f}"
+            for i, d in enumerate(deferred)
+        },
+        phase="COLLISION",
+    )
+    logger.info(
+        "COLLISION minhash leg: deferred %d near-duplicate concept(s) (embedder-free)",
+        len(deferred),
+    )
+
+
 def handle_collision(fsm: "InjectorFSM") -> None:
     """Dedup/collision routing — Phase 5.
 
@@ -80,13 +182,17 @@ def handle_collision(fsm: "InjectorFSM") -> None:
 
         store = EmbedStore()
         if len(store) == 0:
-            logger.info("COLLISION: embedding index empty — skipping (build with silica_embed_refresh)")
+            logger.info("COLLISION: embedding index empty — falling back to MinHash dedup leg")
+            fsm._get_chunks_from_context_if_empty()
+            _run_embedder_free_dedup_leg(fsm, idx, fsm._chunks[idx])
             fsm._progress_note(fsm._chunk_task_id("collision"), "collision", "done")
             fsm._transition_success()
             return
         embedder = get_embedder(orch.CONFIG)
     except Exception as _e:
-        logger.warning("COLLISION: embedder unavailable (%s) — skipping", _e)
+        logger.warning("COLLISION: embedder unavailable (%s) — falling back to MinHash dedup leg", _e)
+        fsm._get_chunks_from_context_if_empty()
+        _run_embedder_free_dedup_leg(fsm, idx, fsm._chunks[idx])
         fsm._progress_note(fsm._chunk_task_id("collision"), "collision", "done")
         fsm._transition_success()
         return

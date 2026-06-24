@@ -109,7 +109,16 @@ def handle_lint(fsm: "InjectorFSM") -> None:
 
             if not success:
                 orphan_errors = [e for e in errors if e.startswith("Unplanned orphans")]
-                blocking_errors = [e for e in errors if not e.startswith("Unplanned orphans")]
+                drift_errors = [e for e in errors if e.startswith("Backlink drift")]
+                blocking_errors = [
+                    e for e in errors
+                    if not e.startswith("Unplanned orphans") and not e.startswith("Backlink drift")
+                ]
+                if drift_errors:
+                    logger.warning(
+                        "[Graph Regression Gate]: Backlink drift (non-blocking): %s",
+                        "; ".join(drift_errors),
+                    )
                 if orphan_errors:
                     logger.warning(
                         "[Graph Regression Gate]: Orphan warning (non-blocking): %s",

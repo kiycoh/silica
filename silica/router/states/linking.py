@@ -85,6 +85,7 @@ def handle_autolink(fsm: "InjectorFSM") -> None:
                 logger.debug("AUTOLINK: skipped '%s' (non-fatal): %s", path, _ae)
 
         logger.info("AUTOLINK: finished — %d link(s) added across %d note(s)", total_added, len(touched_paths))
+        fsm.context["yield_links"] = fsm.context.get("yield_links", 0) + total_added
     except Exception as e:
         # AUTOLINK is best-effort: log and continue to LINT
         logger.warning("AUTOLINK: phase failed (non-fatal): %s", e)
@@ -200,6 +201,7 @@ def handle_backlink(fsm: "InjectorFSM") -> None:
         logger.info(
             "BACKLINK: %d link(s) added to %d pre-existing note(s)", total_links, len(added_map)
         )
+        fsm.context["yield_links"] = fsm.context.get("yield_links", 0) + total_links
     except Exception as e:
         logger.warning("BACKLINK: phase failed (non-fatal): %s", e)
 

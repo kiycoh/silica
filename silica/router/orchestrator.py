@@ -48,6 +48,18 @@ from silica.router import states
 logger = logging.getLogger(__name__)
 
 
+def _count_files_done(flat_map: dict[int, tuple[int, int]], upto_idx: int) -> int:
+    """Number of inbox files whose every chunk's flat index is < upto_idx.
+
+    Drives the TUI file-progress bar: a file is "done" once the FSM has advanced
+    past its last chunk. Pass upto_idx=len(chunks) to mark all files done.
+    """
+    last_flat: dict[int, int] = {}
+    for flat, (fi, _ci) in flat_map.items():
+        last_flat[fi] = max(last_flat.get(fi, -1), flat)
+    return sum(1 for last in last_flat.values() if last < upto_idx)
+
+
 def _refresh_cooccurrence_for_ops(
     ops: list,
     committed_paths: set,
@@ -527,6 +539,16 @@ class InjectorFSM(BaseFSM[InjectorState]):
     def _on_cleanup_done(self) -> None:
         self._eval_loop_or_done()
 
+    def _emit_files_progress(self, upto_idx: int) -> None:
+        """Surface files-processed/total to the TUI bar (no-op without a renderer)."""
+        try:
+            from silica.ui.renderer import emit_run_progress
+            total = len(self.inbox_files)
+            done = _count_files_done(self._chunk_flat_to_fi_ci, upto_idx)
+            emit_run_progress(min(done, total), total, label=self._current_source_file)
+        except Exception:
+            pass
+
     def _eval_loop_or_done(self) -> None:
         """Check if there are more chunks to process or if the queue is empty."""
         # Clear the per-chunk volatile namespace atomically before advancing
@@ -537,6 +559,7 @@ class InjectorFSM(BaseFSM[InjectorState]):
         next_idx = self._next_uncommitted_chunk_idx(self._current_chunk_idx + 1)
         if next_idx < len(self._chunks):
             self._current_chunk_idx = next_idx
+            self._emit_files_progress(next_idx)
             logger.info(f"✔ Batch completed successfully. Advancing to batch {self._current_chunk_idx + 1}")
             # Restart per-chunk loop from COLLISION (Phase 5) if present, else DELEGATE
             has_collision = any(
@@ -545,6 +568,7 @@ class InjectorFSM(BaseFSM[InjectorState]):
             )
             self.state = InjectorState.COLLISION if has_collision else InjectorState.DELEGATE
         else:
+            self._emit_files_progress(len(self._chunks))
             logger.info("🎉 All batched chunks have been successfully injected and verified!")
             self.state = InjectorState.DONE
 
@@ -662,6 +686,7 @@ class InjectorFSM(BaseFSM[InjectorState]):
         next_idx = self._next_uncommitted_chunk_idx(self._current_chunk_idx + 1)
         if next_idx < len(self._chunks):
             self._current_chunk_idx = next_idx
+            self._emit_files_progress(next_idx)
             logger.info(
                 "Chunk f%d_c%d failed — advancing to chunk %d of %d.",
                 fi, ci, self._current_chunk_idx + 1, len(self._chunks),
@@ -672,6 +697,7 @@ class InjectorFSM(BaseFSM[InjectorState]):
             )
             self.state = InjectorState.COLLISION if has_collision else InjectorState.DELEGATE
         else:
+            self._emit_files_progress(len(self._chunks))
             logger.info(
                 "Chunk f%d_c%d failed (last uncommitted chunk). Run concludes with partial success.", fi, ci
             )

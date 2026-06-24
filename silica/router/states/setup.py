@@ -33,6 +33,16 @@ def handle_recon(fsm: "InjectorFSM") -> None:
             raise RuntimeError(f"Recon failed for {inbox_file}: {res['error']}")
         recon_list.append(res)
 
+        # Degraded extraction held back uncorroborated concepts (see silica_recon /
+        # CONFIG.defer_uncorroborated_concepts) — make it visible, never silent.
+        deferred_concepts = res.get("deferred_concepts") or []
+        if deferred_concepts:
+            logger.info(
+                "RECON: %d uncorroborated concept(s) deferred for '%s' (embedder down) "
+                "— re-inject with the embedder available to admit them.",
+                len(deferred_concepts), inbox_file,
+            )
+
         # Surface any deferred ops from a previous run of this file
         content_hash = fsm._file_content_hashes[fi] if fi < len(fsm._file_content_hashes) else ""
         if content_hash:

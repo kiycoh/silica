@@ -450,10 +450,11 @@ class OrganizerFSM(BaseFSM[OrganizerState]):
                 self._pre_graph, post_graph, created_paths, frozenset()
             )
             if not success:
-                orphan_errors = [e for e in errors if e.startswith("Unplanned orphans")]
-                blocking_errors = [e for e in errors if not e.startswith("Unplanned orphans")]
+                nonblocking = ("Unplanned orphans", "Backlink drift")
+                orphan_errors = [e for e in errors if e.startswith(nonblocking)]
+                blocking_errors = [e for e in errors if not e.startswith(nonblocking)]
                 if orphan_errors:
-                    logger.warning("LINT: orphan warning (non-blocking): %s", "; ".join(orphan_errors))
+                    logger.warning("LINT: orphan/drift warning (non-blocking): %s", "; ".join(orphan_errors))
                 if blocking_errors:
                     self.context["abort_reason"] = (
                         f"Graph regression after move: {'; '.join(blocking_errors)}"
