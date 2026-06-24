@@ -34,7 +34,7 @@ from silica.kernel.recon import _strip_frontmatter, is_concept, normalize
 # linear ratio is a compromise; a density-aware cutoff (cosine elbow) would serve
 # short dense notes better — deferred until the linear clamp proves insufficient.
 TOKENS_PER_CONCEPT = 20   # ponytail: linear clamp; tune via the eval
-MIN_CONCEPTS = 8          # ponytail: floor — short dense notes were starved at 4-5
+MIN_CONCEPTS = 1          # a note may map to a single concept — no forced padding
 MAX_CONCEPTS = 40
 YAKE_POOL = 100           # candidates YAKE proposes (also the rerank pool)
 
@@ -56,6 +56,10 @@ class ConceptCandidate:
     phrase: str
     score: float                       # ordering only (YAKE cost; lower = better). NOT calibrated.
     evidence: list[str] = field(default_factory=list)  # provenance/debug, e.g. ["yake:0.12"]
+    # Corroboration tier (vocabulary mirrors links, see analyst_plan.py):
+    #   EXTRACTED — structurally corroborated (author markup; second, embedder-free axis)
+    #   INFERRED  — single signal only (embedding cosine or YAKE rank), uncorroborated
+    confidence: str = "INFERRED"
 
 
 def _yake_leg(text: str, overlay: DomainOverlay, lang: str) -> list[ConceptCandidate] | None:
@@ -227,6 +231,16 @@ def extract_keyphrases(
     ranked = _rerank(pool, body, overlay, embedder)
     if ranked is None:
         ranked = pool  # fallback: structural-first, then YAKE rank
+
+    # Stamp the corroboration tier from the second (embedder-free) axis: a concept
+    # present in author markup is corroborated → EXTRACTED; otherwise INFERRED.
+    # One rule, both paths — survives the embedder-down fallback, where it is the
+    # only gate left (salience needs the embedder). ponytail: recompute structural
+    # here (cheap regex) rather than thread it through _rerank/_seed_structural.
+    structural = _structural_concepts(body, overlay)
+    for c in ranked:
+        if c.phrase.lower() in structural:
+            c.confidence = "EXTRACTED"
     return _cutoff(body, ranked)
 
 

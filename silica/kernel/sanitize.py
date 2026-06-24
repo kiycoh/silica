@@ -13,6 +13,17 @@ _ILLEGAL_FILENAME_CHARS_RE = re.compile(r'[/\\:*?"<>|]')
 # Degenerate run: 5+ consecutive identical characters (same char, not newline)
 _DEGENERATE_RUN_RE = re.compile(r'([^\n])\1{4,}')
 
+# Nested wikilink brackets: 3+ consecutive '[' or ']'. A valid wikilink uses
+# exactly two; 3+ only appears when an already-bracketed name was wrapped again
+# (e.g. the distiller emits "[[X]]" and a renderer makes "[[[[X]]]]"). Single and
+# double brackets — including code like x[[1]] — are left untouched.
+_NESTED_WIKILINK_RE = re.compile(r'\[{3,}|\]{3,}')
+
+
+def collapse_nested_wikilinks(text: str) -> str:
+    """Collapse [[[[X]]]] (and deeper) down to a single [[X]] wikilink."""
+    return _NESTED_WIKILINK_RE.sub(lambda m: m.group(0)[:2], text)
+
 
 def strip_degenerate_runs(text: str) -> str:
     """Collapse runs of 5+ identical characters to a single instance.
@@ -60,6 +71,7 @@ def normalize_ops(ops: list) -> list:
                             parts[i] = parts[i].replace("\\n", "\n")
                     val = "```".join(parts)
                 val = strip_degenerate_runs(val)
+                val = collapse_nested_wikilinks(val)
                 op[field] = _strip_md_ext(val)
 
         if isinstance(op.get("related"), list):

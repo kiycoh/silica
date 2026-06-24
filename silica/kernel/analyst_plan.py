@@ -19,10 +19,57 @@ from typing import Literal
 
 import networkx as nx
 
-from silica.kernel.graph_report import VaultReport
+from silica.kernel.graph_report import AutolinkCandidate, MissingLink, VaultReport
 from silica.kernel.progress import PlanStep
 
 Tier = Literal["auto", "propose", "escalate"]
+
+# Edge provenance vocabulary (ported from Graphify, MIT, © 2026 Safi Shamsi).
+# The tier follows the confidence, so it is never a loose threshold buried in a
+# call site — one mapping, one source of truth.
+#   EXTRACTED  = corroborated by structure  → auto (reversible, unambiguous)
+#   INFERRED   = single-signal / embedding  → propose (confirm before writing)
+#   AMBIGUOUS  = conflicting / needs a human → escalate
+Confidence = Literal["EXTRACTED", "INFERRED", "AMBIGUOUS"]
+
+_TIER_BY_CONFIDENCE: dict[Confidence, Tier] = {
+    "EXTRACTED": "auto",
+    "INFERRED": "propose",
+    "AMBIGUOUS": "escalate",
+}
+
+_MISSING_LINK_TAU_HIGH = 0.85  # mirrors CONFIG.sim_threshold_high default
+
+
+def tier_for_confidence(confidence: Confidence) -> Tier:
+    """Map an edge's provenance to its tier — the single confidence→tier rule."""
+    return _TIER_BY_CONFIDENCE[confidence]
+
+
+def classify_missing_link(ml: "MissingLink", *, tau_high: float = _MISSING_LINK_TAU_HIGH) -> Confidence:
+    """Confidence of an embedding-proposed link from its provenance.
+
+    Embeddings propose, the graph disposes: a proposal the graph also corroborates
+    (d_prev == 2 → source and target share a neighbour) at a high cosine is
+    EXTRACTED; anything weaker is INFERRED. Missing links are pre-filtered ≥ τ in
+    compute_report, so they never fall to AMBIGUOUS here.
+    """
+    corroborated = ml.d_prev == 2
+    if ml.cosine >= tau_high and corroborated:
+        return "EXTRACTED"
+    return "INFERRED"
+
+
+def classify_autolink(cand: "AutolinkCandidate") -> Confidence:
+    """Confidence of an embedder-free co-occurrence autolink, from its evidence.
+
+    Never EXTRACTED: an autolink is by construction the co-occurrence − wikilink
+    delta (>2 hops, unlinked), so the graph does not corroborate it as a link.
+    A directly shared concept is textual evidence the pair belongs together
+    (INFERRED → propose); a pair related only through transitive/associative
+    expansion has no shared concept and needs a human (AMBIGUOUS → escalate).
+    """
+    return "INFERRED" if cand.shared else "AMBIGUOUS"
 
 # Capability names that are IRREVERSIBLE — never allowed in plan.auto regardless
 # of confidence. Expand this set when new write tools are added.
@@ -50,6 +97,7 @@ class TaskCandidate:
     reason: str            # human-readable explanation
     tier: Tier             # auto | propose | escalate
     priority: int = 0      # 0 = highest priority
+    confidence: Confidence | None = None  # provenance that drove the tier (None = N/A)
 
 
 @dataclass
@@ -151,20 +199,75 @@ def build_task_plan(report: VaultReport) -> AnalystPlan:
         ))
 
     # 2. Missing links (embedding proposals, already filtered ≥ τ in compute_report)
-    seen_autolink_propose: set[str] = set()
-    propose_missing_by_cluster: dict[int, list[str]] = {}
+    #    Tier follows the edge's confidence, not a flat propose: a proposal the
+    #    graph corroborates (EXTRACTED) is auto-linkable (reversible, unambiguous);
+    #    an embedding-only proposal (INFERRED) needs confirmation.
+    conf_by_source: dict[str, Confidence] = {}
     for ml in report.missing_links:
-        if ml.source not in seen_autolink_propose:
-            seen_autolink_propose.add(ml.source)
-            cid = node_to_cluster.get(ml.source, -1)
-            propose_missing_by_cluster.setdefault(cid, []).append(ml.source)
+        c = classify_missing_link(ml)
+        prev = conf_by_source.get(ml.source)
+        # EXTRACTED wins: a source with any corroborated link is auto-linkable.
+        if prev is None or (c == "EXTRACTED" and prev != "EXTRACTED"):
+            conf_by_source[ml.source] = c
 
-    for chunk in _chunk_groups(propose_missing_by_cluster):
+    missing_by_tier: dict[Confidence, dict[int, list[str]]] = {"EXTRACTED": {}, "INFERRED": {}}
+    for source, c in conf_by_source.items():
+        cid = node_to_cluster.get(source, -1)
+        missing_by_tier[c].setdefault(cid, []).append(source)
+
+    for chunk in _chunk_groups(missing_by_tier["EXTRACTED"]):
+        auto.append(TaskCandidate(
+            capability_name="silica_autolink",
+            payload={"note_paths": chunk, "use_candidates": True},
+            reason=f"Embedding + graph corroborate links for {len(chunk)} source note(s) → auto-link",
+            tier="auto",
+            confidence="EXTRACTED",
+            priority=2,
+        ))
+
+    for chunk in _chunk_groups(missing_by_tier["INFERRED"]):
         propose.append(TaskCandidate(
             capability_name="silica_autolink",
             payload={"note_paths": chunk, "use_candidates": True},
-            reason=f"Embedding proposes links for {len(chunk)} source notes — confirm before writing",
+            reason=f"Embedding proposes links for {len(chunk)} source note(s) — confirm before writing",
             tier="propose",
+            confidence="INFERRED",
+            priority=2,
+        ))
+
+    # 2.6 Autolink candidates — the embedder-free co-occurrence twin of step 2.
+    #     Works even when the embedder is down (missing_links would be empty).
+    #     Tier follows evidence via classify_autolink: a shared concept is INFERRED
+    #     → propose; an associative-only pair is AMBIGUOUS → escalate (human review).
+    autolink_inferred_by_cluster: dict[int, list[str]] = {}
+    seen_inferred: set[str] = set()
+    for cand in getattr(report, "autolink_candidates", []):
+        if classify_autolink(cand) == "INFERRED":
+            if cand.source in seen_inferred:
+                continue
+            seen_inferred.add(cand.source)
+            cid = node_to_cluster.get(cand.source, -1)
+            autolink_inferred_by_cluster.setdefault(cid, []).append(cand.source)
+        else:
+            escalate.append(TaskCandidate(
+                capability_name="",  # review-only — a human decides if the association is real
+                payload={"source": cand.source, "target": cand.target},
+                reason=(
+                    f"'{cand.source}' and '{cand.target}' co-occur only associatively "
+                    f"(no shared concept) — confirm relevance before linking"
+                ),
+                tier="escalate",
+                confidence="AMBIGUOUS",
+                priority=4,
+            ))
+
+    for chunk in _chunk_groups(autolink_inferred_by_cluster):
+        propose.append(TaskCandidate(
+            capability_name="silica_autolink",
+            payload={"note_paths": chunk, "use_candidates": True},
+            reason=f"Co-occurrence proposes links for {len(chunk)} source note(s) — confirm before writing",
+            tier="propose",
+            confidence="INFERRED",
             priority=2,
         ))
 

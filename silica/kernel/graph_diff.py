@@ -119,7 +119,16 @@ def check_graph_regression(
         orig_name, pre_count = pre_lower[norm_name]
         post_count = post_lower[norm_name]
         if post_count < pre_count:
-            errors.append(f"Broken backlinks detected for '{orig_name}': decreased from {pre_count} to {post_count}")
+            # Tolerate small drops: in a small/churny vault a hub routinely
+            # loses a single incoming link when a note is rewritten or
+            # superseded — that is drift, not vandalism, and must not nuke a
+            # whole chunk. Only a drop of more than ~25% of the hub's backlinks
+            # (and always more than one) counts as a real regression.
+            # ponytail: 25%/floor-1 heuristic; tune if false blocks persist.
+            if pre_count - post_count > max(1, pre_count // 4):
+                errors.append(f"Broken backlinks detected for '{orig_name}': decreased from {pre_count} to {post_count}")
+            else:
+                errors.append(f"Backlink drift for '{orig_name}': decreased from {pre_count} to {post_count}")
             
     success = len(errors) == 0
     return success, errors

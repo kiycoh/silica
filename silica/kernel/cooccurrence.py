@@ -99,6 +99,16 @@ def tokenize(text: str, lang: str = "english") -> list[list[tuple[str, str]]]:
     return out
 
 
+def cooccur_key(path: str) -> str:
+    """Canonical key for the co-occurrence keyspace — single source of truth.
+
+    Producers store the stripped path ('notes/foo'); consumers pass graph node
+    ids that carry '.md' ('notes/foo.md'). Normalising here, at the store's own
+    boundary, means the two can no longer diverge into ghost keys. Idempotent.
+    """
+    return (path or "").replace("\\", "/").removesuffix(".md")
+
+
 def build_contribution(
     name: str,
     body: str,
@@ -207,11 +217,11 @@ class CooccurStore:
 
     # --- mutation ---
     def upsert_note(self, path: str, contribution: dict[str, Any]) -> None:
-        self._notes[path] = contribution
+        self._notes[cooccur_key(path)] = contribution
         self._invalidate()
 
     def delete_note(self, path: str) -> None:
-        self._notes.pop(path, None)
+        self._notes.pop(cooccur_key(path), None)
         self._invalidate()
 
     # --- lookup ---
@@ -228,7 +238,7 @@ class CooccurStore:
         concept->notes inverted index (granularity reconciliation lives there,
         not here).
         """
-        contrib = self._notes.get(path)
+        contrib = self._notes.get(cooccur_key(path))
         if not contrib:
             return {}
         return {
