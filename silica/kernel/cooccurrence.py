@@ -66,6 +66,10 @@ _STEMMERS: dict[str, Any] = {}
 
 
 def _get_stemmer(lang: str) -> Any:
+    # 'auto' is a config sentinel resolved at build time; if it ever reaches here
+    # (an unbuilt/empty store) Snowball would KeyError — fall back to english.
+    if lang == "auto":
+        lang = "english"
     if lang not in _STEMMERS:
         import snowballstemmer
         _STEMMERS[lang] = snowballstemmer.stemmer(lang)
@@ -75,6 +79,37 @@ def _get_stemmer(lang: str) -> Any:
 def _split_sentences(text: str) -> list[str]:
     """Split on sentence terminators and newlines; drop empties/whitespace."""
     return [s.strip() for s in _SENTENCE_SPLIT.split(text) if s.strip()]
+
+
+def detect_lang(text: str) -> str:
+    """Pick the language whose function-word set best matches `text`.
+
+    Deterministic and offline: counts stopword hits per known _STOPWORDS set and
+    returns the argmax, defaulting to 'english' on a tie or no signal. Only
+    languages with a stopword set are detectable — the function-words of e.g.
+    Italian vs English are distinctive enough to nail it on any real prose.
+    Adding a stopword set (a new language) auto-extends detection.
+    # ponytail: stopword-ratio classifier; swap for a langdetect dep only if a
+    # vault mixes many close languages and this starts misfiring.
+    """
+    words = [w.lower() for w in _TOKEN_RE.findall(text)]
+    if not words:
+        return "english"
+    best_lang, best_hits = "english", -1
+    for lang, stops in _STOPWORDS.items():
+        hits = sum(1 for w in words if w in stops)
+        if hits > best_hits:
+            best_lang, best_hits = lang, hits
+    return best_lang
+
+
+def _resolve_lang(lang: str, sample: str) -> str:
+    """Resolve the 'auto' sentinel to a concrete Snowball language via detection.
+
+    'auto' must never reach tokenize()/_get_stemmer() — Snowball has no 'auto'
+    stemmer. Callers freeze the result into the store so detection runs once.
+    """
+    return detect_lang(sample) if lang == "auto" else lang
 
 
 def tokenize(text: str, lang: str = "english") -> list[list[tuple[str, str]]]:
@@ -197,8 +232,10 @@ class CooccurStore:
     def _load(self) -> None:
         self._invalidate()
         src = self._path
-        if not src.exists() and src != _LEGACY_INDEX_PATH and _LEGACY_INDEX_PATH.exists():
-            src = _LEGACY_INDEX_PATH  # one-time soft migration: copied forward on next save()
+        # No legacy soft-migration: inheriting the global index copied old-schema
+        # keys forward, and since build_index never GCs they survived as orphans
+        # poisoning aggregations. Per-vault keying is stable; a fresh store loads
+        # empty and /cooccur rebuilds it clean.
         if src.exists():
             try:
                 data = orjson.loads(src.read_bytes())
@@ -421,7 +458,8 @@ def build_index(
     """
     if store is None:
         store = CooccurStore(lang=lang or "english")
-    use_lang = lang or store.lang
+    use_lang = _resolve_lang(lang or store.lang, "\n".join(b for _p, _n, b in notes[:50]))
+    store.lang = use_lang  # freeze resolved language (no 'auto' persisted)
     cmap = concepts_by_path or {}
     for path, name, body in notes:
         if not force and path in store.paths():
@@ -449,7 +487,8 @@ def refresh_note(
     """
     if store is None:
         store = CooccurStore(lang=lang or "english")
-    use_lang = lang or store.lang
+    use_lang = _resolve_lang(lang or store.lang, body)
+    store.lang = use_lang  # freeze resolved language (no 'auto' persisted)
     store.upsert_note(path, build_contribution(name, body, lang=use_lang))
     store.save()
     return store
