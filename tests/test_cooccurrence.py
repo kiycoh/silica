@@ -6,9 +6,10 @@ from pathlib import Path
 from silica.config import SilicaConfig
 
 
-def test_config_has_cooccurrence_lang_default_english():
+def test_config_has_cooccurrence_lang_default_auto():
+    # Default 'auto' detects the vault language at build time (no English footgun).
     cfg = SilicaConfig()
-    assert cfg.cooccurrence_lang == "english"
+    assert cfg.cooccurrence_lang == "auto"
 
 
 from silica.kernel.cooccurrence import tokenize, _split_sentences
@@ -113,6 +114,28 @@ def test_store_roundtrip(tmp_path):
     store2 = CooccurStore(path=idx)
     assert len(store2) == 1
     assert store2.lang == "english"
+
+
+def test_store_does_not_inherit_legacy_index(tmp_path):
+    """A fresh per-vault store must NOT silently inherit the legacy global index.
+
+    Landmine: the legacy soft-migration copied old-schema keys forward, and since
+    build_index never GCs, orphan keys survived and poisoned top_stems/clusters
+    (english stopword junk on an IT vault). No migration ⇒ load empty, /cooccur
+    rebuilds clean.
+    """
+    import orjson
+    import silica.kernel.cooccurrence as cooc_mod
+
+    legacy = cooc_mod._LEGACY_INDEX_PATH  # conftest redirects this to a tmp path
+    legacy.parent.mkdir(parents=True, exist_ok=True)
+    legacy.write_bytes(orjson.dumps(
+        {"version": 1, "lang": "english", "notes": {"old/note": {"nodes": {}, "edges": {}}}}
+    ))
+
+    store = CooccurStore(path=tmp_path / "per_vault" / "cooc.json")  # does not exist
+    assert "old/note" not in store.paths()
+    assert len(store) == 0
 
 
 def test_store_delete_note(tmp_path):

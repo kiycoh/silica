@@ -329,3 +329,34 @@ def test_missing_links_common_neighbors_boosts_ranking(monkeypatch):
     # …and the result list is ordered accordingly.
     pairs = [(l.source, l.target) for l in links]
     assert pairs.index(("S", "A")) < pairs.index(("S", "B"))
+
+
+def test_duplicate_pairs_split_confirmed_vs_borderline(monkeypatch):
+    """≥ τ_high → confirmed (merge candidate); τ_low..τ_high → borderline; ≤ τ_low dropped."""
+    from silica.kernel import graph_report as gr
+
+    nn = {  # each note's single nearest neighbour: (target, cosine)
+        "a": ("b", 0.92),  # ≥ 0.85  → confirmed
+        "c": ("d", 0.70),  # 0.65..0.85 → borderline
+        "e": ("f", 0.50),  # ≤ 0.65  → dropped
+    }
+
+    class _Store:
+        _notes: dict = {}
+        def __len__(self): return len(nn)
+        def paths(self): return list(nn)
+        def get_vec(self, p): return [p] if p in nn else None
+        def cosine_top_k(self, vec, k=1, exclude=None):
+            tgt, score = nn[vec[0]]
+            return [{"path": tgt, "score": score}]
+
+    monkeypatch.setattr("silica.kernel.embed.EmbedStore", _Store)
+
+    report = VaultReport(
+        generated_at="x", scope="", totals={},
+        god_nodes=[], bridges=[], orphans=[], dangling=[], clusters=[],
+    )
+    borderline, confirmed = gr._compute_duplicate_pairs(report)
+
+    assert [(d.source, d.target) for d in confirmed] == [("a", "b")]
+    assert [(d.source, d.target) for d in borderline] == [("c", "d")]
