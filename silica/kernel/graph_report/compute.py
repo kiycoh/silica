@@ -230,7 +230,7 @@ def compute_report(
 
     if with_embeddings:
         report.missing_links = _compute_missing_links(report, G_und, tau=0.82, k=top_k)
-        report.duplicate_pairs = _compute_duplicate_pairs(report)
+        report.duplicate_pairs, report.confirmed_duplicate_pairs = _compute_duplicate_pairs(report)
 
     if with_cooccurrence:
         autolinks, stale, hubs = _compute_cooccur_delta(
@@ -247,6 +247,7 @@ def compute_report(
         "dangling_links": len(dangling),
         "missing_links": len(report.missing_links),
         "duplicate_pairs": len(report.duplicate_pairs),
+        "confirmed_duplicates": len(report.confirmed_duplicate_pairs),
         "autolink_candidates": len(report.autolink_candidates),
         "stale_links": len(report.stale_links),
         "missing_hubs": len(report.missing_hubs),

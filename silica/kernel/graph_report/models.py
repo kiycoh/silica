@@ -51,7 +51,7 @@ class MissingLink:          # PROPOSED — not authoritative
 
 
 @dataclass
-class DuplicatePair:        # PROPOSED — borderline duplicates
+class DuplicatePair:        # PROPOSED — cosine-close pair (band depends on which list it lands in)
     source: str
     target: str
     score: float
@@ -91,7 +91,8 @@ class VaultReport:
     dangling: list[dict]   # [{"target": str, "refs": int}]
     clusters: list[ClusterStat]
     missing_links: list[MissingLink] = field(default_factory=list)
-    duplicate_pairs: list[DuplicatePair] = field(default_factory=list)
+    duplicate_pairs: list[DuplicatePair] = field(default_factory=list)          # borderline band (τ_low..τ_high): link, don't merge
+    confirmed_duplicate_pairs: list[DuplicatePair] = field(default_factory=list)  # ≥ τ_high: likely true duplicates (merge candidates)
     autolink_candidates: list[AutolinkCandidate] = field(default_factory=list)
     stale_links: list[StaleLink] = field(default_factory=list)
     missing_hubs: list[MissingHub] = field(default_factory=list)

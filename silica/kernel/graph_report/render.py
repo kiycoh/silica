@@ -18,112 +18,189 @@ logger = logging.getLogger(__name__)
 # ---------------------------------------------------------------------------
 
 _MEMBERS_CAP = 25  # max members shown per cluster in markdown
+_LIST_CAP = 30     # max bullet/row items for long lists (orphans, dangling, …)
+_MIN_CLUSTER = 2   # size-1 clusters are noise — summarised, never listed
+
+
+def _short(p: str) -> str:
+    return p.rsplit("/", 1)[-1].removesuffix(".md") if p else "—"
+
+
+_TOTAL_LABELS = {
+    "dangling_links": "Broken links (point nowhere)",
+    "missing_links": "Missing links (proposed)",
+    "duplicate_pairs": "Related pairs (borderline — link, not merge)",
+    "confirmed_duplicates": "Likely duplicates (merge candidates)",
+    "autolink_candidates": "Autolink candidates",
+    "lean_notes": "Thin notes (enrich?)",
+    "reformat_notes": "Notes to reformat",
+    "orphans": "Orphans (no incoming links)",
+}
 
 
 def to_markdown(r: VaultReport, title: str = "Silica Vault Report") -> str:
-    """Render a VaultReport as OFM-friendly markdown."""
+    """Render a VaultReport as OFM-friendly, human-readable markdown.
+
+    Singleton clusters are summarised (not listed) and long lists are capped;
+    the full data lives in the sibling GRAPH_REPORT.json.
+    """
     lines: list[str] = []
-    lines.append(f"# {title}")
-    lines.append(f"_Generated: {r.generated_at}_")
+    add = lines.append
+
+    add(f"# {title}")
+    add(f"_Generated: {r.generated_at}_")
     if r.scope:
-        lines.append(f"_Scope: `{r.scope}`_")
-    lines.append("")
+        add(f"_Scope: `{r.scope}`_")
+    add("")
+
+    # cluster_id -> hub name, to label god-nodes & bridges by area (not by number)
+    hub_of = {c.cluster_id: _short(c.hub) for c in r.clusters}
+    linked = sorted(
+        (c for c in r.clusters if c.size >= _MIN_CLUSTER),
+        key=lambda c: c.size, reverse=True,
+    )
+    singletons = sum(1 for c in r.clusters if c.size < _MIN_CLUSTER)
+    t = r.totals
+
+    # Summary (prose — the part a human actually reads)
+    add("## Summary")
+    add(
+        f"This vault holds **{t.get('notes', 0)} notes** connected by "
+        f"**{t.get('links', 0)} links**, forming **{len(linked)} linked areas** "
+        f"plus {singletons} standalone notes."
+    )
+    if linked:
+        top = ", ".join(f"[[{_short(c.hub)}]] ({c.size})" for c in linked[:5])
+        add(f"Largest areas: {top}.")
+    health = []
+    if t.get("orphans"):
+        health.append(f"{t['orphans']} orphans (no incoming links)")
+    if t.get("dangling_links"):
+        health.append(f"{t['dangling_links']} broken links (point to notes that don't exist)")
+    if health:
+        add("Health: " + "; ".join(health) + ".")
+    fixes = [
+        f"{t[k]} {word}"
+        for k, word in (
+            ("autolink_candidates", "autolink candidates"),
+            ("lean_notes", "notes to enrich"),
+            ("confirmed_duplicates", "likely duplicates to merge"),
+            ("duplicate_pairs", "borderline-related pairs"),
+            ("reformat_notes", "notes to reformat"),
+        )
+        if t.get(k)
+    ]
+    if fixes:
+        add("")
+        add(
+            "**Suggestions ready (not applied):** " + ", ".join(fixes)
+            + ". Nothing changes until you approve — review below, then ask Silica to apply."
+        )
+    add("")
 
     # Totals
-    lines.append("## Totals")
-    lines.append("| Metric | Count |")
-    lines.append("|---|---|")
+    add("## Totals")
+    add("| Metric | Count |")
+    add("|---|---|")
     for k, v in r.totals.items():
-        lines.append(f"| {k.capitalize()} | {v} |")
-    lines.append("")
+        add(f"| {_TOTAL_LABELS.get(k, k.replace('_', ' ').capitalize())} | {v} |")
+    add("")
 
-    # God nodes
-    lines.append("## God Nodes (High-Degree Hubs)")
+    # God nodes (PageRank dropped — it reads 0.0 at this scale; degree is the signal)
+    add("## God Nodes (High-Degree Hubs)")
     if r.god_nodes:
-        lines.append("| Note | Cluster | Degree | In | Out | PageRank |")
-        lines.append("|---|---|---|---|---|---|")
+        add("| Note | Area | Links | In | Out |")
+        add("|---|---|---|---|---|")
         for n in r.god_nodes:
-            lines.append(f"| [[{n.label}]] | {n.cluster} | {n.degree} | {n.in_degree} | {n.out_degree} | {n.pagerank} |")
+            area = hub_of.get(n.cluster, f"#{n.cluster}")
+            add(f"| [[{n.label}]] | {area} | {n.degree} | {n.in_degree} | {n.out_degree} |")
     else:
-        lines.append("_No connected notes found._")
-    lines.append("")
+        add("_No connected notes found._")
+    add("")
 
     # Surprising bridges
-    lines.append("## Surprising Cross-Cluster Connections")
+    add("## Surprising Cross-Cluster Connections")
+    add("_Links joining two otherwise-separate areas — often the most interesting._")
     if r.bridges:
-        lines.append("| Source | Target | Clusters | Surprise |")
-        lines.append("|---|---|---|---|")
+        add("| Source | Target | Areas joined | Surprise |")
+        add("|---|---|---|---|")
         for b in r.bridges:
-            src_label = b.source.rsplit("/", 1)[-1].removesuffix(".md")
-            tgt_label = b.target.rsplit("/", 1)[-1].removesuffix(".md")
-            lines.append(f"| [[{src_label}]] | [[{tgt_label}]] | {b.source_cluster}↔{b.target_cluster} | {b.weight} |")
+            sa = hub_of.get(b.source_cluster, f"#{b.source_cluster}")
+            ta = hub_of.get(b.target_cluster, f"#{b.target_cluster}")
+            add(f"| [[{_short(b.source)}]] | [[{_short(b.target)}]] | {sa} ↔ {ta} | {b.weight} |")
     else:
-        lines.append("_No cross-cluster bridges found._")
-    lines.append("")
+        add("_No cross-cluster bridges found._")
+    add("")
 
-    # Clusters
-    lines.append("## Clusters")
-    if r.clusters:
-        for c in r.clusters:
-            hub_label = c.hub.rsplit("/", 1)[-1].removesuffix(".md") if c.hub else "—"
-            lines.append(f"### Cluster {c.cluster_id} (size={c.size}, cohesion={c.cohesion})")
-            lines.append(f"**Hub:** [[{hub_label}]]")
-            members_shown = c.members[:_MEMBERS_CAP]
-            member_links = ", ".join(
-                f"[[{m.rsplit('/', 1)[-1].removesuffix('.md')}]]" for m in members_shown
-            )
+    # Clusters (named by hub, singletons collapsed, biggest first)
+    add("## Clusters (Knowledge Areas)")
+    if linked:
+        for c in linked:
+            add(f"### [[{_short(c.hub)}]] — {c.size} notes _(cohesion {c.cohesion})_")
+            member_links = ", ".join(f"[[{_short(m)}]]" for m in c.members[:_MEMBERS_CAP])
             if len(c.members) > _MEMBERS_CAP:
                 member_links += f" … (+{len(c.members) - _MEMBERS_CAP} more)"
-            lines.append(f"**Members:** {member_links}")
-            lines.append("")
+            add(member_links)
+            add("")
     else:
-        lines.append("_No clusters detected (vault has no resolved wikilinks)._")
-        lines.append("")
+        add("_No linked clusters detected (vault has no resolved wikilinks)._")
+        add("")
+    if singletons:
+        add(f"_Plus {singletons} standalone notes with no internal links (full list in GRAPH_REPORT.json)._")
+        add("")
 
     # Orphans
-    lines.append("## Orphans (No Incoming Links)")
+    add("## Orphans (No Incoming Links)")
     if r.orphans:
-        for o in r.orphans:
-            label = o.rsplit("/", 1)[-1].removesuffix(".md")
-            lines.append(f"- [[{label}]]")
+        for o in r.orphans[:_LIST_CAP]:
+            add(f"- [[{_short(o)}]]")
+        if len(r.orphans) > _LIST_CAP:
+            add(f"- _… +{len(r.orphans) - _LIST_CAP} more (see GRAPH_REPORT.json)_")
     else:
-        lines.append("_No orphans._")
-    lines.append("")
+        add("_No orphans._")
+    add("")
 
     # Dangling links
-    lines.append("## Dangling Links (Unresolved Wikilinks)")
+    add("## Dangling Links (Unresolved Wikilinks)")
     if r.dangling:
-        lines.append("| Target | References |")
-        lines.append("|---|---|")
-        for d in r.dangling:
-            lines.append(f"| `{d['target']}` | {d['refs']} |")
+        add("| Target | References |")
+        add("|---|---|")
+        for d in r.dangling[:_LIST_CAP]:
+            add(f"| `{d['target']}` | {d['refs']} |")
+        if len(r.dangling) > _LIST_CAP:
+            add(f"| _… +{len(r.dangling) - _LIST_CAP} more_ | |")
     else:
-        lines.append("_No unresolved wikilinks._")
-    lines.append("")
+        add("_No unresolved wikilinks._")
+    add("")
 
     # Missing links (proposed)
     if r.missing_links:
-        lines.append("## Proposed Missing Links _(embedding candidates — not authoritative)_")
-        lines.append("| Source | Target | Cosine | d_prev | Novelty |")
-        lines.append("|---|---|---|---|---|")
-        for ml in r.missing_links:
-            src_label = ml.source.rsplit("/", 1)[-1].removesuffix(".md")
-            tgt_label = ml.target.rsplit("/", 1)[-1].removesuffix(".md")
+        add("## Proposed Missing Links _(embedding candidates — not authoritative)_")
+        add("| Source | Target | Cosine | d_prev | Novelty |")
+        add("|---|---|---|---|---|")
+        for ml in r.missing_links[:_LIST_CAP]:
             novelty = "🔴 novel" if ml.d_prev == 0 or ml.d_prev >= 3 else "🟡 likely"
             d_str = str(ml.d_prev) if ml.d_prev > 0 else "∞"
-            lines.append(f"| [[{src_label}]] | [[{tgt_label}]] | {ml.cosine} | {d_str} | {novelty} |")
-        lines.append("")
+            add(f"| [[{_short(ml.source)}]] | [[{_short(ml.target)}]] | {ml.cosine} | {d_str} | {novelty} |")
+        add("")
 
-    # Duplicate pairs (proposed)
+    # Likely duplicates (≥ τ_high — genuine merge candidates)
+    if r.confirmed_duplicate_pairs:
+        add(f"\n### Likely Duplicates ({len(r.confirmed_duplicate_pairs)}) _(≥ τ_high — review for merge)_")
+        for dp in r.confirmed_duplicate_pairs[:_LIST_CAP]:
+            add(f"- [[{_short(dp.source)}]] vs [[{_short(dp.target)}]] (score: {dp.score:.3f})")
+        if len(r.confirmed_duplicate_pairs) > _LIST_CAP:
+            add(f"- _… +{len(r.confirmed_duplicate_pairs) - _LIST_CAP} more (see GRAPH_REPORT.json)_")
+
+    # Borderline-related pairs (τ_low..τ_high — topically close, link not merge)
     if r.duplicate_pairs:
-        lines.append(f"\n### Borderline Duplicates ({len(r.duplicate_pairs)})")
-        for dp in r.duplicate_pairs:
-            lines.append(f"- [[{dp.source}]] vs [[{dp.target}]] (score: {dp.score:.3f})")
+        add(f"\n### Related Pairs ({len(r.duplicate_pairs)}) _(borderline similarity — link, don't merge)_")
+        for dp in r.duplicate_pairs[:_LIST_CAP]:
+            add(f"- [[{_short(dp.source)}]] vs [[{_short(dp.target)}]] (score: {dp.score:.3f})")
+        if len(r.duplicate_pairs) > _LIST_CAP:
+            add(f"- _… +{len(r.duplicate_pairs) - _LIST_CAP} more (see GRAPH_REPORT.json)_")
 
     # Co-occurrence delta (proposed, embedder-free)
-    def _short(p: str) -> str:
-        return p.rsplit("/", 1)[-1].removesuffix(".md")
-
     if r.autolink_candidates:
         lines.append("\n## Autolink Candidates _(co-occurrence − wikilink — not authoritative)_")
         lines.append("| Source | Target | Weight | Hubs | Shared Concepts |")
@@ -146,13 +223,17 @@ def to_markdown(r: VaultReport, title: str = "Silica Vault Report") -> str:
 
     if r.lean_notes:
         lines.append(f"\n### Lean Notes (Enrichment Candidates) ({len(r.lean_notes)})")
-        for n in r.lean_notes:
-            lines.append(f"- [[{n}]]")
+        for n in r.lean_notes[:_LIST_CAP]:
+            lines.append(f"- [[{_short(n)}]]")
+        if len(r.lean_notes) > _LIST_CAP:
+            lines.append(f"- _… +{len(r.lean_notes) - _LIST_CAP} more (see GRAPH_REPORT.json)_")
 
     if r.reformat_notes:
         lines.append(f"\n### Reformat Notes (Stylistic Refinement) ({len(r.reformat_notes)})")
-        for n in r.reformat_notes:
-            lines.append(f"- [[{n}]]")
+        for n in r.reformat_notes[:_LIST_CAP]:
+            lines.append(f"- [[{_short(n)}]]")
+        if len(r.reformat_notes) > _LIST_CAP:
+            lines.append(f"- _… +{len(r.reformat_notes) - _LIST_CAP} more (see GRAPH_REPORT.json)_")
 
     return "\n".join(lines)
 
@@ -225,12 +306,19 @@ def to_digest(report: VaultReport, *, max_items: int = 8) -> str:
         )
         lines.append(f"PROPOSED  {ml}")
 
+    if report.confirmed_duplicate_pairs:
+        cd_list = ", ".join(
+            f"{dp.source.rsplit('/',1)[-1].removesuffix('.md')}↔{dp.target.rsplit('/',1)[-1].removesuffix('.md')}(cos={dp.score})"
+            for dp in report.confirmed_duplicate_pairs[:max_items]
+        )
+        lines.append(f"DUPS  {cd_list}")
+
     if report.duplicate_pairs:
         dp_list = ", ".join(
             f"{dp.source.rsplit('/',1)[-1].removesuffix('.md')}↔{dp.target.rsplit('/',1)[-1].removesuffix('.md')}(cos={dp.score})"
             for dp in report.duplicate_pairs[:max_items]
         )
-        lines.append(f"DEDUP  {dp_list}")
+        lines.append(f"RELATED  {dp_list}")
 
     return "\n".join(lines)
 

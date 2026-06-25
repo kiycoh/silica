@@ -114,23 +114,36 @@ def _compute_missing_links(
     return results[:k]
 
 
-def _compute_duplicate_pairs(report: VaultReport) -> list[DuplicatePair]:
-    """Find near-duplicate note pairs using embedding index (PROPOSED — not authoritative)."""
+def _compute_duplicate_pairs(
+    report: VaultReport,
+) -> tuple[list[DuplicatePair], list[DuplicatePair]]:
+    """Find cosine-close note pairs (PROPOSED — not authoritative).
+
+    Returns ``(borderline, confirmed)``:
+      - borderline (τ_low < score < τ_high): topically related but distinct —
+        the "link, don't merge" band. This is what the old report mislabelled
+        as "possible duplicates"; it scales with vault size and domain coherence.
+      - confirmed (score ≥ τ_high): bodies cover the same topic → likely true
+        duplicates and genuine merge candidates.
+
+    One cosine pass over the vault feeds both bands; a pair lands in exactly one.
+    """
     try:
         from silica.config import CONFIG
         from silica.kernel.embed import EmbedStore
 
         store = EmbedStore()
         if len(store) == 0:
-            return []
+            return [], []
     except Exception as exc:
         logger.debug("graph_report: embeddings unavailable for dedup (%s)", exc)
-        return []
+        return [], []
 
     tau_high = getattr(CONFIG, "sim_threshold_high", 0.85)
     tau_low = getattr(CONFIG, "sim_threshold_low", 0.65)
 
-    results: list[DuplicatePair] = []
+    borderline: list[DuplicatePair] = []
+    confirmed: list[DuplicatePair] = []
     seen: set[tuple[str, str]] = set()
 
     def _in_folder(path: str, folder: str) -> bool:
@@ -158,11 +171,16 @@ def _compute_duplicate_pairs(report: VaultReport) -> list[DuplicatePair]:
         tgt = cand["path"]
         score = cand.get("score", 0.0)
 
-        if tau_low < score < tau_high:
-            key = (min(p, tgt), max(p, tgt))
-            if key not in seen:
-                seen.add(key)
-                results.append(DuplicatePair(source=p, target=tgt, score=round(score, 4)))
+        if score <= tau_low:
+            continue
+        key = (min(p, tgt), max(p, tgt))
+        if key in seen:
+            continue
+        seen.add(key)
+        pair = DuplicatePair(source=p, target=tgt, score=round(score, 4))
+        (confirmed if score >= tau_high else borderline).append(pair)
 
-    results.sort(key=lambda d: (-d.score, d.source, d.target))
-    return results
+    sort_key = lambda d: (-d.score, d.source, d.target)
+    borderline.sort(key=sort_key)
+    confirmed.sort(key=sort_key)
+    return borderline, confirmed
