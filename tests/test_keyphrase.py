@@ -9,7 +9,7 @@ from pathlib import Path
 
 import pytest
 
-_EXAMPLE_OVERLAYS = Path(__file__).resolve().parent.parent / "examples" / "overlays"
+_BUNDLED_OVERLAYS = Path(__file__).resolve().parent.parent / "silica" / "overlays"
 
 # Italian prose, NO markup: the case that broke the old markup-only recon.
 _PROSE = (
@@ -22,9 +22,9 @@ _PROSE = (
 
 @pytest.fixture
 def it_overlay():
-    path = _EXAMPLE_OVERLAYS / "it-academic.yaml"
+    path = _BUNDLED_OVERLAYS / "italian.yaml"
     if not path.exists():
-        pytest.skip(f"examples overlay not found: {path}")
+        pytest.skip(f"bundled overlay not found: {path}")
     from silica.kernel.overlay import load_overlay
     return load_overlay(path)
 
@@ -246,3 +246,100 @@ def test_extract_keyphrases_rerank_end_to_end():
 
     assert with_emb and no_emb
     assert with_emb != no_emb  # reranking actually changed the order
+
+
+def test_latex_body_yields_no_math_token_concepts():
+    """LaTeX commands in the body never surface as concepts (stripped pre-YAKE)."""
+    from silica.kernel.keyphrase import extract_keyphrases
+    body = (
+        "# Gradient descent\n\n"
+        "The loss function $\\mathcal{L}$ is minimized by gradient descent. "
+        "We compute $$\\sum_{i} \\nabla_w \\mathcal{L}_i \\leq \\epsilon$$ each step, "
+        "updating the weights of the neural network until convergence. " * 3
+    )
+    cands = extract_keyphrases(body)  # default overlay/lang, no embedder
+    phrases = " ".join(c.phrase.lower() for c in cands)
+    for junk in ("mathcal", "sum", "nabla", "leq", "epsilon"):
+        assert junk not in phrases, f"{junk!r} leaked from LaTeX"
+    assert cands, "prose should still yield concepts"
+
+
+def test_auto_lang_resolves_so_yake_drops_italian_function_words():
+    """lang='auto' is resolved to a real Snowball language before YAKE, so YAKE
+    drops Italian function words at candidate generation (no bogus 'au' ISO)."""
+    from silica.kernel.keyphrase import extract_keyphrases
+    from silica.kernel.overlay import DomainOverlay
+    # Empty overlay isolates the YAKE-language effect: is_concept filters nothing,
+    # so a leaked function word would survive to the output if lang were wrong.
+    empty = DomainOverlay(stopwords=frozenset(), noise_patterns=())
+    # Longer body ensures "della" survives _cutoff and makes it to the final output
+    # if YAKE doesn't filter it (which happens with bogus "au" code).
+    body = (
+        "La discesa del gradiente della rete neurale aggiorna i pesi della rete. "
+        "La funzione di perdita della rete dipende dai pesi della rete neurale. "
+        "Il tasso di apprendimento della rete regola il passo. "
+        "La retropropagazione della rete calcola i gradienti. " * 8
+    )
+    cands = extract_keyphrases(body, overlay=empty, lang="auto")
+    phrases = {c.phrase.lower() for c in cands}
+    assert "della" not in phrases  # IT function word dropped by YAKE(it), not 'au'
+
+
+def test_yake_leg_augments_not_replaces_builtin_stopwords():
+    """YAKE's built-in Italian stopword 'ancora' is filtered even though it is
+    absent from the Italian overlay — proving union semantics, not replace.
+
+    Word verified:
+      'ancora' in yake.KeywordExtractor(lan='it').stopword_set  → True
+      'ancora' in overlay_for_lang('italian').stopwords          → False
+
+    With replace semantics (the bug): 'ancora' is NOT in the stopword set
+    → YAKE produces it as a candidate → it leaks to output.
+    With union semantics (the fix): 'ancora' IS in the unioned stopword set
+    → YAKE never proposes it → it cannot appear in output.
+    """
+    from silica.kernel.keyphrase import extract_keyphrases
+    from silica.kernel.overlay import overlay_for_lang
+
+    overlay = overlay_for_lang("italian")
+    # Precondition: 'ancora' is in YAKE's built-in Italian set but not the overlay
+    import yake as _yake
+    assert "ancora" in _yake.KeywordExtractor(lan="it", n=3, top=100, dedupLim=0.9).stopword_set
+    assert "ancora" not in overlay.stopwords
+
+    # Body: 'ancora' repeated many times alongside a real content word so that
+    # if YAKE doesn't filter it, it would rank highly and survive _cutoff.
+    body = (
+        "Il percettrone e ancora un modello ancora usato ancora nella rete neurale. "
+        "Ancora oggi il percettrone e ancora studiato e ancora applicato ancora. "
+        "La regola di apprendimento del percettrone e ancora fondamentale ancora. " * 6
+    )
+    cands = extract_keyphrases(body, overlay=overlay, lang="italian")
+    phrases = {c.phrase.lower() for c in cands}
+
+    # 'ancora' must not surface as a standalone concept (built-in stopword)
+    assert not any(p == "ancora" or p.startswith("ancora ") or p.endswith(" ancora")
+                   for p in phrases), f"'ancora' leaked as concept: {phrases}"
+    # Real content word must still appear
+    assert any("percettrone" in p for p in phrases), f"content word lost: {phrases}"
+
+
+def test_recon_italian_drops_latex_and_structural_keeps_content():
+    """End-to-end (overlay=None -> overlay_for_lang('italian')): LaTeX, the
+    'Lezione' heading, and the CFU acronym are gone; an Italian content word
+    survives."""
+    from silica.kernel.keyphrase import extract_keyphrases
+    from silica.kernel.overlay import reset_overlay_cache
+    reset_overlay_cache()
+    body = (
+        "## Lezione 10\n\n"
+        "Il percettrone e un modello della rete neurale. "
+        "Per ogni CFU si studia il percettrone e la sua regola di apprendimento. "
+        "La funzione $\\mathbb{R} \\to \\mathbb{R}$ con $\\sum_i w_i x_i \\leq \\theta$ "
+        "definisce l'attivazione del percettrone. " * 3
+    )
+    cands = extract_keyphrases(body, lang="italian")  # overlay=None on purpose
+    phrases = " ".join(c.phrase.lower() for c in cands)
+    for junk in ("mathbb", "lezione", "cfu", "sum", "leq", "theta"):
+        assert junk not in phrases, f"{junk!r} should be filtered"
+    assert "percettrone" in phrases, "content word lost"

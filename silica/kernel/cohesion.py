@@ -20,7 +20,7 @@ under-linking for note discovery.
 CONFIG: language-specific stopwords (function words, structural-academic terms) come
 from the active DomainOverlay (``silica.kernel.overlay.get_active_overlay()`` or
 the overlay passed explicitly). English-generic stopwords live in DEFAULT_OVERLAY;
-Italian academic stopwords live in examples/overlays/it-academic.yaml.
+Italian academic stopwords live in silica/overlays/italian.yaml.
 """
 from __future__ import annotations
 

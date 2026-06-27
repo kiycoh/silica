@@ -1,9 +1,8 @@
-# Italian academic domain overlay.
-# Install by copying to <vault>/_silica/overlay.yaml
+# Italian academic domain overlay (bundled). Selected automatically by
+# overlay_for_lang("italian"); also installable as <vault>/overlay.yaml.
 #
-# Contains the complete Italian-academic vocabulary previously hardcoded in
-# silica/kernel/recon.py, including Italian function words, course-metadata
-# structural headings, and Italian-specific noise patterns.
+# Italian function words, course-metadata structural headings, and
+# Italian-specific noise patterns. Filename = Snowball language name.
 
 extends_default: true
 
@@ -96,6 +95,7 @@ stopwords:
   - corso
   - appunti
   - lezione
+  - cfu
   - capitolo
   - studio
   - domande

@@ -45,6 +45,20 @@ def _strip_frontmatter(content: str) -> str:
     return _FRONTMATTER_RE.sub('', content, count=1)
 
 
+# Math spans first (so commands *inside* them vanish with the content), then any
+# residual \command outside a span. Strips only the transient extraction string —
+# the note on disk keeps its LaTeX.
+_MATH_SPANS = re.compile(
+    r"\$\$.*?\$\$|\$[^$\n]*?\$|\\\[.*?\\\]|\\\(.*?\\\)", re.DOTALL
+)
+_LATEX_CMD = re.compile(r"\\[a-zA-Z]+\*?")
+
+
+def _strip_math(text: str) -> str:
+    text = _MATH_SPANS.sub(" ", text)
+    return _LATEX_CMD.sub(" ", text)
+
+
 def is_title_match(c: str, stem: str) -> bool:
     c_lower, stem_lower = c.lower(), stem.lower()
     if c_lower == stem_lower: return True

@@ -5,7 +5,7 @@ The default overlay is English-generic. Per-domain overlays are YAML files
 that extend or replace it; the active overlay for a vault lives at
   <vault>/overlay.yaml  (legacy fallback: <vault>/_silica/overlay.yaml)
 
-See also: examples/overlays/it-academic.yaml for an Italian-academic overlay.
+See also: silica/overlays/italian.yaml (bundled) and overlay_for_lang().
 """
 from __future__ import annotations
 
@@ -14,7 +14,17 @@ from dataclasses import dataclass
 from pathlib import Path
 
 import yaml
-from stop_words import get_stop_words
+from stop_words import StopWordError, get_stop_words
+
+
+# Snowball-style language names ("italian") -> ISO codes ("it"). Shared by the
+# YAKE candidate generator (keyphrase.py) and the function-word fallback below.
+_SNOWBALL_TO_ISO: dict[str, str] = {
+    "arabic": "ar", "danish": "da", "dutch": "nl", "english": "en",
+    "finnish": "fi", "french": "fr", "german": "de", "hungarian": "hu",
+    "italian": "it", "norwegian": "no", "portuguese": "pt", "romanian": "ro",
+    "russian": "ru", "spanish": "es", "swedish": "sv",
+}
 
 
 # ---------------------------------------------------------------------------
@@ -162,13 +172,16 @@ def load_overlay(path: Path) -> DomainOverlay:
 
 _OVERLAY_REL = "overlay.yaml"
 _LEGACY_OVERLAY_REL = "_silica/overlay.yaml"
+_BUNDLED_OVERLAYS = Path(__file__).resolve().parent.parent / "overlays"  # ponytail: fs path, swap to importlib.resources only if shipped as a zip
 _cached_overlay: DomainOverlay | None = None
+_lang_overlay_cache: dict[str, DomainOverlay] = {}
 
 
 def reset_overlay_cache() -> None:
-    """Invalidate the module-level overlay cache. Use in tests and after vault switch."""
+    """Invalidate the module-level overlay caches. Use in tests and after vault switch."""
     global _cached_overlay
     _cached_overlay = None
+    _lang_overlay_cache.clear()
 
 
 def get_active_overlay() -> DomainOverlay:
@@ -199,3 +212,62 @@ def get_active_overlay() -> DomainOverlay:
         _cached_overlay = DEFAULT_OVERLAY
 
     return _cached_overlay
+
+
+# ---------------------------------------------------------------------------
+# Language-aware overlay selection (recon path)
+# ---------------------------------------------------------------------------
+
+def language_overlay(lang: str) -> DomainOverlay:
+    """DEFAULT structurals/noise plus the target language's function words.
+
+    Base-level fallback for a language with no bundled overlay. Returns
+    DEFAULT_OVERLAY unchanged when ``lang`` has no stop_words list.
+    """
+    iso = _SNOWBALL_TO_ISO.get(lang.lower())
+    if iso is None:
+        return DEFAULT_OVERLAY
+    try:
+        words = get_stop_words(iso)
+    except StopWordError:
+        return DEFAULT_OVERLAY
+    return DomainOverlay(
+        stopwords=DEFAULT_OVERLAY.stopwords | frozenset(words),
+        noise_patterns=DEFAULT_OVERLAY.noise_patterns,
+    )
+
+
+def overlay_for_lang(lang: str) -> DomainOverlay:
+    """Overlay for ``lang``, cached per language.
+
+    Resolution order:
+      1. explicit vault override (<vault>/overlay.yaml, legacy _silica/overlay.yaml)
+      2. bundled silica/overlays/<lang>.yaml
+      3. known language without a bundle -> language_overlay(lang)
+      4. else DEFAULT_OVERLAY (covers english and unknown languages)
+    """
+    key = (lang or "english").lower()
+    if key in _lang_overlay_cache:
+        return _lang_overlay_cache[key]
+
+    from silica.config import CONFIG
+    vault = getattr(CONFIG, "vault_path", "") or ""
+    if vault:
+        new = Path(vault) / _OVERLAY_REL
+        legacy = Path(vault) / _LEGACY_OVERLAY_REL
+        path = new if new.exists() else (legacy if legacy.exists() else None)
+        if path is not None:
+            ov = load_overlay(path)
+            _lang_overlay_cache[key] = ov
+            return ov
+
+    bundled = _BUNDLED_OVERLAYS / f"{key}.yaml"
+    if bundled.exists():
+        ov = load_overlay(bundled)
+    elif key == "english":
+        ov = DEFAULT_OVERLAY
+    else:
+        ov = language_overlay(key)  # DEFAULT when language unsupported
+
+    _lang_overlay_cache[key] = ov
+    return ov

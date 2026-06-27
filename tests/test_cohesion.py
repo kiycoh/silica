@@ -6,17 +6,17 @@ from pathlib import Path
 import pytest
 from silica.kernel.cohesion import cohesion_pass, _content_tokens
 
-_EXAMPLE_OVERLAYS = (
-    Path(__file__).resolve().parent.parent / "examples" / "overlays"
+_BUNDLED_OVERLAYS = (
+    Path(__file__).resolve().parent.parent / "silica" / "overlays"
 )
 
 
 @pytest.fixture
 def it_overlay():
-    """Load the Italian-academic example overlay."""
-    path = _EXAMPLE_OVERLAYS / "it-academic.yaml"
+    """Load the bundled Italian overlay."""
+    path = _BUNDLED_OVERLAYS / "italian.yaml"
     if not path.exists():
-        pytest.skip(f"examples overlay not found: {path}")
+        pytest.skip(f"bundled overlay not found: {path}")
     from silica.kernel.overlay import load_overlay
     return load_overlay(path)
 
@@ -39,7 +39,7 @@ def test_tokens_empty_string():
 
 
 def test_tokens_only_stopwords(it_overlay):
-    """Italian function words are filtered by the it-academic overlay."""
+    """Italian function words are filtered by the italian overlay."""
     assert _content_tokens("di e in con su", overlay=it_overlay) == frozenset()
 
 
@@ -60,7 +60,7 @@ def test_tokens_default_overlay_filters_english_structural():
 
 
 def test_tokens_it_overlay_filters_italian_function_and_structural(it_overlay):
-    """it-academic overlay filters 'sistemi' and 'di' but keeps domain word 'reti'."""
+    """italian overlay filters 'sistemi' and 'di' but keeps domain word 'reti'."""
     tokens = _content_tokens("Sistemi di Reti", overlay=it_overlay)
     assert "sistemi" not in tokens
     assert "di" not in tokens
@@ -74,9 +74,9 @@ def test_tokens_roman_numerals_filtered_regardless_of_overlay():
     assert "iii" not in tokens_default
     assert "backpropagation" in tokens_default
 
-    if (_EXAMPLE_OVERLAYS / "it-academic.yaml").exists():
+    if (_BUNDLED_OVERLAYS / "italian.yaml").exists():
         from silica.kernel.overlay import load_overlay
-        it_ov = load_overlay(_EXAMPLE_OVERLAYS / "it-academic.yaml")
+        it_ov = load_overlay(_BUNDLED_OVERLAYS / "italian.yaml")
         tokens_it = _content_tokens("IV Reti Neurali", overlay=it_ov)
         assert "iv" not in tokens_it
         assert "reti" in tokens_it

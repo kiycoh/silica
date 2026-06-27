@@ -58,6 +58,18 @@ def _inject_vault_map(messages: list[dict]) -> None:
         logger.debug("vault map injection skipped: %s", exc)
 
 
+def _fresh_messages() -> list[dict]:
+    """Seed a fresh conversation: system prompt + vault map + token count.
+
+    Single source of truth for the initial state, shared by session start and
+    /clear so the two can't drift.
+    """
+    messages: list[dict] = [{"role": "system", "content": SYSTEM_PROMPT}]
+    _inject_vault_map(messages)
+    _update_context_tokens(messages)
+    return messages
+
+
 def _setup_logging(debug: bool = False) -> None:
     """Configure logging for the CLI session."""
     import threading
@@ -892,9 +904,7 @@ def main():
         CONSOLE.print(_NO_MODEL_HINT)
 
     session = build_session()
-    messages: list[dict] = [{"role": "system", "content": SYSTEM_PROMPT}]
-    _inject_vault_map(messages)
-    _update_context_tokens(messages)
+    messages = _fresh_messages()
 
     from silica.ui.renderer import make_progress_callback
     callback = make_progress_callback()
@@ -929,11 +939,7 @@ def main():
             if cmd == "/clear":
                 CONSOLE.clear()
                 print_home()
-                messages.clear()
-                messages.append({"role": "system", "content": SYSTEM_PROMPT})
-                _inject_vault_map(messages)
-                _update_context_tokens(messages)
-                session = build_session()
+                messages[:] = _fresh_messages()
                 continue
 
             should_continue = _handle_slash_command(user_input, messages)

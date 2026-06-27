@@ -25,8 +25,8 @@ import re
 from dataclasses import dataclass, field
 
 from silica.kernel.embed import _cosine, document_theme_vector
-from silica.kernel.overlay import DomainOverlay, get_active_overlay
-from silica.kernel.recon import _strip_frontmatter, is_concept, normalize
+from silica.kernel.overlay import DomainOverlay, _SNOWBALL_TO_ISO, overlay_for_lang
+from silica.kernel.recon import _strip_frontmatter, _strip_math, is_concept, normalize
 
 # Cutoff knobs (calibration — tune on a real paper + lecture via the eval).
 # Tuned on the eval (3 real docs). Concept density varies wildly across genres
@@ -41,14 +41,6 @@ YAKE_POOL = 100           # candidates YAKE proposes (also the rerank pool)
 # Rerank knobs (Fase 2 — tune via the eval).
 MMR_LAMBDA = 0.6          # relevance vs diversity in MMR; lower = more diverse
 STRUCT_BOOST = 0.3        # relevance bonus for a concept present in markup
-
-# CONFIG.cooccurrence_lang is Snowball-style ("italian"); YAKE wants ISO ("it").
-_SNOWBALL_TO_ISO = {
-    "arabic": "ar", "danish": "da", "dutch": "nl", "english": "en",
-    "finnish": "fi", "french": "fr", "german": "de", "hungarian": "hu",
-    "italian": "it", "norwegian": "no", "portuguese": "pt", "romanian": "ro",
-    "russian": "ru", "spanish": "es", "swedish": "sv",
-}
 
 
 @dataclass
@@ -75,6 +67,16 @@ def _yake_leg(text: str, overlay: DomainOverlay, lang: str) -> list[ConceptCandi
 
     iso = _SNOWBALL_TO_ISO.get(lang.lower(), lang.lower()[:2] or "en")
     kw = yake.KeywordExtractor(lan=iso, n=3, top=YAKE_POOL, dedupLim=0.9)
+    if overlay.stopwords:
+        # Augment YAKE's built-in language stopwords (don't replace them): passing
+        # stopwords= to the constructor overrides the built-in list entirely, which
+        # would drop ~300 common function words. kw.stopword_set is the set YAKE
+        # consults at extract time. ponytail: YAKE-internal attr, revisit on bump.
+        # NB: this is intentionally stricter than is_concept() for structural terms
+        # — feeding them to YAKE also suppresses compounds (e.g. en "type system",
+        # it "ogni cfu"). Desired for it metadata (cfu/lezione); on the secondary en
+        # path it can drop pure-structural compounds. Accepted: it-primary vault.
+        kw.stopword_set = kw.stopword_set | set(overlay.stopwords)
     raw = kw.extract_keywords(text)  # already sorted ascending (best-first)
     if not raw:
         return None
@@ -222,9 +224,11 @@ def extract_keyphrases(
     is used (degraded fallback). Returns [] only when both legs abstain, which
     `silica_recon` already handles as an empty report.
     """
+    body = _strip_math(_strip_frontmatter(content))  # transient: note keeps its LaTeX
+    from silica.kernel.cooccurrence import _resolve_lang
+    lang = _resolve_lang(lang, body)  # "auto" -> concrete Snowball lang via detect_lang
     if overlay is None:
-        overlay = get_active_overlay()
-    body = _strip_frontmatter(content)  # metadata, not content concepts
+        overlay = overlay_for_lang(lang)  # lang already resolved by _resolve_lang
     pool = _seed_structural(body, overlay, _yake_leg(body, overlay, lang) or [])
     if not pool:
         return []

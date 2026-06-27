@@ -49,7 +49,6 @@ def silica_recon(inbox_file: str, limit: int = 0) -> dict[str, Any]:
     """Mechanical extraction of concepts from an inbox file and searching for collisions in the vault."""
     from silica.kernel.recon import is_title_match, rank_hits, collision_priority
     from silica.kernel.keyphrase import extract_keyphrases
-    from silica.kernel.overlay import get_active_overlay
     from silica.config import CONFIG
 
     try:
@@ -59,7 +58,7 @@ def silica_recon(inbox_file: str, limit: int = 0) -> dict[str, Any]:
 
     embedder = _recon_embedder()
     cands = extract_keyphrases(
-        nc.content, overlay=get_active_overlay(),
+        nc.content,
         lang=CONFIG.cooccurrence_lang, embedder=embedder,
     )
 

@@ -46,6 +46,9 @@ silica = "silica.cli:main"
 [tool.setuptools.packages.find]
 include = ["silica", "silica.*"]
 
+[tool.setuptools.package-data]
+silica = ["overlays/*.yaml"]
+
 [tool.pytest.ini_options]
 testpaths = ["tests"]
 

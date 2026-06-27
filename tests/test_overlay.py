@@ -226,11 +226,11 @@ class TestItalianExampleOverlay:
         from silica.kernel.overlay import load_overlay
         example_path = (
             Path(__file__).resolve().parent.parent
-            / "examples"
+            / "silica"
             / "overlays"
-            / "it-academic.yaml"
+            / "italian.yaml"
         )
-        assert example_path.exists(), f"example file not found: {example_path}"
+        assert example_path.exists(), f"bundled overlay not found: {example_path}"
         return load_overlay(example_path)
 
     def test_file_loads_without_error(self, it_overlay):
@@ -288,3 +288,57 @@ class TestLoadOverlayValueErrorContracts:
         f.write_text("stopwords: []\nnoise_patterns:\n  - '^valid'\n  - 456\n")
         with pytest.raises(ValueError, match="noise_patterns"):
             load_overlay(f)
+
+
+def test_bundled_italian_overlay_present_with_cfu():
+    """The Italian overlay ships under silica/overlays and includes cfu + lezione."""
+    from pathlib import Path
+    import silica.kernel.overlay as ov_mod
+    from silica.kernel.overlay import load_overlay
+    p = Path(ov_mod.__file__).resolve().parent.parent / "overlays" / "italian.yaml"
+    assert p.exists(), f"bundled overlay missing: {p}"
+    o = load_overlay(p)
+    assert "cfu" in o.stopwords
+    assert "lezione" in o.stopwords
+
+
+class TestOverlayForLang:
+    def setup_method(self):
+        from silica.kernel.overlay import reset_overlay_cache
+        reset_overlay_cache()
+
+    def teardown_method(self):
+        from silica.kernel.overlay import reset_overlay_cache
+        reset_overlay_cache()
+
+    def test_italian_uses_bundled_overlay(self):
+        from silica.kernel.overlay import overlay_for_lang
+        ov = overlay_for_lang("italian")
+        assert "lezione" in ov.stopwords  # structural term from the bundle
+        assert "di" in ov.stopwords       # IT function word
+
+    def test_english_is_default(self):
+        from silica.kernel.overlay import overlay_for_lang, DEFAULT_OVERLAY
+        assert overlay_for_lang("english") is DEFAULT_OVERLAY
+
+    def test_known_language_without_bundle_gets_function_words(self):
+        from silica.kernel.overlay import overlay_for_lang, DEFAULT_OVERLAY
+        ov = overlay_for_lang("french")  # no bundled silica/overlays/french.yaml
+        assert ov is not DEFAULT_OVERLAY
+        assert "les" in ov.stopwords or "des" in ov.stopwords  # FR function words
+
+    def test_unsupported_language_falls_back_to_default(self):
+        from silica.kernel.overlay import overlay_for_lang, DEFAULT_OVERLAY
+        assert overlay_for_lang("klingon") is DEFAULT_OVERLAY
+
+
+class TestLanguageOverlay:
+    def test_french_adds_function_words_over_default_structurals(self):
+        from silica.kernel.overlay import language_overlay, DEFAULT_OVERLAY
+        ov = language_overlay("french")
+        assert "les" in ov.stopwords
+        assert DEFAULT_OVERLAY.stopwords <= ov.stopwords  # extends, never narrows
+
+    def test_unsupported_language_returns_default(self):
+        from silica.kernel.overlay import language_overlay, DEFAULT_OVERLAY
+        assert language_overlay("klingon") is DEFAULT_OVERLAY

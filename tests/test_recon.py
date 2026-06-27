@@ -13,17 +13,17 @@ import pytest
 
 from silica.kernel.overlay import DEFAULT_OVERLAY
 
-_EXAMPLE_OVERLAYS = (
-    Path(__file__).resolve().parent.parent / "examples" / "overlays"
+_BUNDLED_OVERLAYS = (
+    Path(__file__).resolve().parent.parent / "silica" / "overlays"
 )
 
 
 @pytest.fixture
 def it_overlay():
-    """Load the Italian-academic example overlay."""
-    path = _EXAMPLE_OVERLAYS / "it-academic.yaml"
+    """Load the bundled Italian overlay."""
+    path = _BUNDLED_OVERLAYS / "italian.yaml"
     if not path.exists():
-        pytest.skip(f"examples overlay not found: {path}")
+        pytest.skip(f"bundled overlay not found: {path}")
     from silica.kernel.overlay import load_overlay
     return load_overlay(path)
 
@@ -208,3 +208,32 @@ class TestIsConceptOverlayArg:
         monkeypatch.setattr("silica.kernel.recon.get_active_overlay", lambda: sentinel)
         from silica.kernel.recon import is_concept
         assert not is_concept("sentinel_word")
+
+
+# ---------------------------------------------------------------------------
+# _strip_math — LaTeX scrubbed from the extraction body (notes stay intact)
+# ---------------------------------------------------------------------------
+
+class TestStripMath:
+    def test_strips_display_and_inline_spans(self):
+        from silica.kernel.recon import _strip_math
+        out = _strip_math(
+            r"prosa $$\sum_{i} x_i$$ poi $\mathbb{R}$ e \[ \int f \] e \( \alpha \) fine"
+        )
+        for junk in ("sum", "mathbb", "int", "alpha"):
+            assert junk not in out
+        assert "prosa" in out and "fine" in out
+
+    def test_strips_residual_commands_outside_spans(self):
+        from silica.kernel.recon import _strip_math
+        out = _strip_math(r"il vettore \mathbf{w} ha norma \leq uno")
+        for junk in ("mathbf", "leq"):
+            assert junk not in out
+        assert "vettore" in out and "norma" in out and "uno" in out
+
+    def test_leaves_prose_untouched_and_is_pure(self):
+        from silica.kernel.recon import _strip_math
+        src = "La rete neurale calcola il gradiente."
+        out = _strip_math(src)
+        assert out == src                      # no math -> content unchanged
+        assert src == "La rete neurale calcola il gradiente."  # input not mutated
