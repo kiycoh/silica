@@ -10,7 +10,7 @@ import hashlib
 from dataclasses import dataclass, field
 
 from silica.driver import DRIVER
-from silica.kernel.bulk import execute_one
+from silica.kernel.bulk import VerifyMismatchError, execute_one
 from silica.kernel.ops import Op, OpType, InverseOp
 
 
@@ -55,7 +55,25 @@ def commit_note_atomic(op: Op, *, hub: str | None = None, lint: bool = True) -> 
     # 2. execute the single op
     try:
         execute_one(op)
+    except VerifyMismatchError as e:
+        # The DRIVER call already happened and the post-write read-back
+        # proves something (possibly corrupted) landed on disk — unlike every
+        # other execute_one failure (missing params, a driver error raised
+        # before/without a successful write), "nothing landed" no longer
+        # holds here. Revert via the same micro-snapshot inverses the
+        # lint-failure branch below uses (built at step 1, before the write).
+        silica_restore(
+            txn_id=txn.id,
+            inverses=[inv.model_dump() for inv in inverses],
+        )
+        return NoteCommitResult(
+            ok=False, path=path, op=op_name, inverses=inverses, error=str(e),
+            reverted=True,
+        )
     except Exception as e:
+        # Nothing landed (param validation, or the DRIVER call itself raised
+        # before any write) — no revert needed, mirroring the pre-verify-gate
+        # invariant this branch always had.
         return NoteCommitResult(
             ok=False, path=path, op=op_name, inverses=inverses, error=str(e)
         )

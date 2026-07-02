@@ -119,7 +119,12 @@ class ListFilesArgs(BaseModel):
 
 @tool(ListFilesArgs, cls="atomic")
 def silica_files(folder: str = "") -> list:
-    """Lists all markdown files in the vault, optionally filtered by folder."""
+    """Lists all markdown files in the vault, optionally filtered by folder.
+
+    Returns full name+path for every match. For a bare count ("how many
+    notes?"), read the '## Vault map' block already in context — don't call
+    this and re-count its rows.
+    """
     refs = DRIVER.list_files(folder)
     return [{"name": r.name, "path": r.path} for r in refs]
 

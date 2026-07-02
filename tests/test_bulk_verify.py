@@ -16,6 +16,7 @@ from unittest.mock import patch
 import pytest
 
 from silica.driver.base import NoteContent, NoteRef
+from silica.kernel.atomic_write import commit_note_atomic
 from silica.kernel.bulk import execute_operations
 from silica.kernel.ops import Op, OpType
 
@@ -125,6 +126,61 @@ class _UndeadDriver:
         if path not in self._notes:
             raise RuntimeError(f"not found: {path}")
         return NoteContent(ref=NoteRef(name=path, path=path), content=self._notes[path])
+
+
+class _EdgeStrippingDriver:
+    """Reproduces the cli backend's read channel (Fix 1): `_run_cli` does
+    `result.stdout.strip()`, so `read_note` returns edge-trimmed content even
+    though the write itself landed verbatim. Interior content is untouched —
+    only leading/trailing whitespace is lost on read-back."""
+
+    def __init__(self, seed: dict[str, str] | None = None):
+        self._notes: dict[str, str] = dict(seed or {})
+
+    def create(self, path: str, content: str) -> NoteRef:
+        self._notes[path] = content
+        return NoteRef(name=path, path=path)
+
+    def overwrite(self, path: str, content: str) -> NoteRef:
+        self._notes[path] = content
+        return NoteRef(name=path, path=path)
+
+    def read_note(self, ref) -> NoteContent:
+        path = ref if isinstance(ref, str) else ref.path
+        if path not in self._notes:
+            raise RuntimeError(f"not found: {path}")
+        # Simulates result.stdout.strip() — edges gone, interior intact.
+        return NoteContent(
+            ref=NoteRef(name=path, path=path), content=self._notes[path].strip()
+        )
+
+
+class _CorruptingDriverWithVersions(_CorruptingDriver):
+    """_CorruptingDriver + snapshot_versions.
+
+    commit_note_atomic calls build_txn() directly (not through the mocked
+    silica_snapshot tool used by the commit_ops test above), and build_txn
+    unconditionally calls DRIVER.snapshot_versions(patch_refs) — so any fake
+    driver used with commit_note_atomic needs this method, even when
+    patch_refs is empty (write ops).
+    """
+
+    def snapshot_versions(self, refs):
+        from silica.driver.base import Txn
+        return Txn(id="test-txn", versions={})
+
+
+class _DeadChannelDriver:
+    """read_note raises a RuntimeError shaped like a dead channel (CLI
+    timeout / Obsidian down), NOT like a genuine "note not found" — used to
+    prove _verify_deleted no longer treats every RuntimeError as confirmation
+    (Fix 4)."""
+
+    def delete(self, ref) -> None:
+        pass  # never actually removes anything; irrelevant — read is what matters
+
+    def read_note(self, ref) -> NoteContent:
+        raise RuntimeError("Obsidian CLI timeout: read file=Ghost.md")
 
 
 # ---------------------------------------------------------------------------
@@ -284,3 +340,130 @@ def test_minimal_ingest_all_op_types_committed_on_fs_backend(fs_vault):
     assert res.total == 5
     assert res.successful == 5
     assert res.failed == []
+
+
+# ---------------------------------------------------------------------------
+# 7. Fix 1: edge-whitespace-only read channel (cli backend shape) -> passes.
+#    Documented tolerance — interior corruption (test 1) must still fail.
+# ---------------------------------------------------------------------------
+
+def test_write_edge_whitespace_stripped_readback_passes_verify(monkeypatch):
+    import silica.kernel.bulk as bulk_mod
+
+    monkeypatch.setattr(bulk_mod, "DRIVER", _EdgeStrippingDriver())
+
+    op = Op(
+        op=OpType.write,
+        heading="Clean Concept",
+        source_basename="src.md",
+        path="Concepts/Clean.md",
+        snippet="A distilled idea.",
+        hub="AI",
+    )
+    res = execute_operations([op])
+    assert res.ok is True
+    assert res.successful == 1
+    assert res.failed == []
+
+
+# ---------------------------------------------------------------------------
+# 8. Fix 3: patch verify now compares the full composed body (exact-match,
+#    with the same Fix-1 edge tolerance) instead of a raw-snippet substring
+#    check. A snippet with edge whitespace no longer false-fails, because the
+#    composed body already normalises it (patch_snippet does snippet.strip()).
+# ---------------------------------------------------------------------------
+
+def test_patch_with_whitespace_padded_snippet_passes_verify_on_fs_backend(fs_vault):
+    op = Op(
+        op=OpType.patch,
+        heading="Extra",
+        source_basename="src.md",
+        path="Concepts/Existing.md",
+        snippet="  \nPadded insight.  \n\n",
+    )
+    res = execute_operations([op])
+    assert res.ok is True
+    assert res.successful == 1
+    assert res.failed == []
+
+
+# ---------------------------------------------------------------------------
+# 9. Fix 4: _verify_deleted must not treat a dead read channel (timeout,
+#    Obsidian down) as "confirmed deleted" — only a genuine not-found shape.
+# ---------------------------------------------------------------------------
+
+def test_delete_dead_read_channel_fails_verify_not_confirmed(monkeypatch):
+    import silica.kernel.bulk as bulk_mod
+
+    monkeypatch.setattr(bulk_mod, "DRIVER", _DeadChannelDriver())
+
+    op = Op(
+        op=OpType.delete,
+        heading="Ghost",
+        source_basename="src.md",
+        path="Concepts/Ghost.md",
+    )
+    res = execute_operations([op])
+    assert res.ok is False
+    assert res.successful == 0
+    assert len(res.failed) == 1
+    assert "post-write verify" in res.failed[0].error
+
+
+# ---------------------------------------------------------------------------
+# 10. Fix 2: commit_note_atomic reverts on an exec-time verify mismatch. A
+#     pre-verify-gate exception used to mean "nothing landed"; now the
+#     corrupted write DID land before the read-back raised, so the same
+#     micro-snapshot inverses the lint-failure branch already uses must run.
+# ---------------------------------------------------------------------------
+
+def test_commit_note_atomic_reverts_new_note_on_verify_mismatch(monkeypatch):
+    """write op on a path that didn't exist -> corrupted note DID land ->
+    exec raises post-write verify -> delete_created inverse removes it."""
+    import silica.kernel.bulk as bulk_mod
+    import silica.tools.wrapped as wrapped_mod
+
+    driver = _CorruptingDriverWithVersions()
+    monkeypatch.setattr(bulk_mod, "DRIVER", driver)
+    monkeypatch.setattr(wrapped_mod, "DRIVER", driver)
+
+    op = Op(
+        op=OpType.write,
+        heading="Vectors",
+        source_basename="src.md",
+        path="Concepts/Vectors.md",
+        snippet=r"The norm is $\|\boldsymbol{v}\|_2$.",
+        hub="AI",
+    )
+    res = commit_note_atomic(op, lint=False)
+
+    assert res.ok is False
+    assert res.reverted is True
+    with pytest.raises(RuntimeError):
+        driver.read_note("Concepts/Vectors.md")
+
+
+def test_commit_note_atomic_restores_prior_content_on_verify_mismatch(monkeypatch):
+    """patch op on an EXISTING note -> corrupting write lands and fails
+    verify -> restore_version inverse (prior_content captured by build_txn
+    before the write) puts the original content back exactly."""
+    import silica.kernel.bulk as bulk_mod
+    import silica.tools.wrapped as wrapped_mod
+
+    original = "# Existing\n\nOriginal body.\n"
+    driver = _CorruptingDriverWithVersions(seed={"Concepts/Existing.md": original})
+    monkeypatch.setattr(bulk_mod, "DRIVER", driver)
+    monkeypatch.setattr(wrapped_mod, "DRIVER", driver)
+
+    op = Op(
+        op=OpType.patch,
+        heading="Extra",
+        source_basename="src.md",
+        path="Concepts/Existing.md",
+        snippet=r"Uses \boldsymbol{v} extensively.",
+    )
+    res = commit_note_atomic(op, lint=False)
+
+    assert res.ok is False
+    assert res.reverted is True
+    assert driver.read_note("Concepts/Existing.md").content == original

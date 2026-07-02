@@ -12,10 +12,17 @@ Post-write verify (falsifiable gate): every successful write/overwrite/patch/
 delete dispatch is followed by a read-back through the DRIVER (_verify_landed /
 _verify_deleted) that is compared against the body actually composed for the
 DRIVER call — never raw op.content. `success: True` used to mean only "the
-DRIVER call didn't raise"; a mismatch here raises ValueError, which the
-existing exception handling in execute_one/execute_operations already turns
-into a failed op — no new failure machinery, just a stricter definition of
-success.
+DRIVER call didn't raise"; a mismatch here raises VerifyMismatchError, which
+the existing exception handling in execute_one/execute_operations already
+turns into a failed op — no new failure machinery, just a stricter definition
+of success.
+
+VerifyMismatchError is a distinct type (not a plain ValueError) because it
+carries a different fact than every other execute_one failure: the DRIVER
+call already happened and something landed on disk (possibly corrupted).
+Every other failure (missing params, a driver error raised before/without a
+successful write) still means "nothing landed" — commit_note_atomic relies on
+this distinction to decide whether a revert is needed.
 """
 from __future__ import annotations
 
@@ -25,32 +32,60 @@ from silica.kernel.merge import three_way_merge
 from silica.kernel.ops import Op, OpType, FailedOp, BulkResult
 
 
+class VerifyMismatchError(RuntimeError):
+    """Raised by _verify_landed/_verify_deleted: the write/delete already hit
+    the DRIVER and the post-write read-back proves it didn't land as intended
+    (or, for delete, didn't land at all). Unlike other execute_one failures,
+    this means disk state may have changed — see commit_note_atomic."""
+
+
 def _verify_landed(op: Op, path: str, intended: str | None) -> str | None:
     """Falsifiable gate: rilegge dal DRIVER e confronta. None = ok, str = errore.
 
-    `intended` is the final body composed by the caller (post frontmatter/merge
-    enrichment) — never raw op.content — so this is a byte-for-byte check
-    against exactly what was handed to the DRIVER. For patch, `intended` is
-    None and the check degrades to "does the appended snippet survive the
-    merge" (substring, since patch merges rather than replaces).
+    `intended` is the final body composed by the caller (post frontmatter/merge/
+    patch enrichment — write, overwrite AND patch all pass their exact composed
+    body) — never raw op.content or op.snippet — so this is a check against
+    exactly what was handed to the DRIVER.
+
+    STOPGAP (deliberate, ceiling below): comparison strips edge whitespace
+    before comparing. Root cause is `cli_backend._run_cli` doing
+    `result.stdout.strip()`, which `read_note` returns verbatim — so on the
+    cli backend a byte-for-byte compare would false-fail every healthy write
+    (composed bodies end with "\n" per template_spoke) and defer every op.
+    Interior content still compares byte-exact, so real corruption (e.g. the
+    2026-06-30 backslash-doubling bug) is still caught. Ceiling: once the cli
+    read channel is made content-faithful at the edges (a content-faithful
+    read via the eval channel, mirroring the 2026-06-30 write-channel fix),
+    this must go back to byte-exact — do not widen the tolerance further.
     """
     try:
         landed = DRIVER.read_note(path).content or ""
     except RuntimeError as e:
         return f"post-write verify: read-back failed: {e}"
-    if intended is not None and landed != intended:
+    if intended is not None and landed.strip() != intended.strip():
         return "post-write verify: content mismatch (backend altered payload)"
-    if intended is None and op.snippet and op.snippet not in landed:
-        return "post-write verify: patch snippet not found in note"
     return None
 
 
 def _verify_deleted(path: str) -> str | None:
-    """Falsifiable gate for delete: read-back must now fail (existence negated)."""
+    """Falsifiable gate for delete: read-back must now fail (existence negated).
+
+    Only a genuine "note not found" style RuntimeError counts as confirmation.
+    Both backends' read_note raise that shape for a missing note — fs_backend:
+    "File not found: {path}"; cli_backend (obsidian CLI, verified live):
+    'Error: File "{name}" not found.' — both contain "file" and "not found".
+    A dead read channel (CLI timeout, CLI executable missing, Obsidian down)
+    also raises RuntimeError but with a different shape ("Obsidian CLI
+    timeout: ...", "Obsidian CLI executable not found: obsidian" — note: no
+    "file" token) and must NOT be read as "verified deleted".
+    """
     try:
         DRIVER.read_note(path)
-    except RuntimeError:
-        return None
+    except RuntimeError as e:
+        msg = str(e).lower()
+        if "file" in msg and "not found" in msg:
+            return None
+        return f"post-write verify: delete check inconclusive: {e}"
     return "post-write verify: note still present after delete"
 
 
@@ -75,7 +110,7 @@ def _execute_write(op: Op, path: str) -> dict:
     DRIVER.create(path, content)
     err = _verify_landed(op, path, content)
     if err:
-        raise ValueError(err)
+        raise VerifyMismatchError(err)
     return {"path": path, "op": "write", "success": True}
 
 
@@ -112,9 +147,9 @@ def _execute_patch(op: Op, path: str) -> dict:
         from silica.kernel.contested import mark_contested
         new_content = mark_contested(new_content, op.contested_by)
     DRIVER.overwrite(path, new_content)
-    err = _verify_landed(op, path, None)
+    err = _verify_landed(op, path, new_content)
     if err:
-        raise ValueError(err)
+        raise VerifyMismatchError(err)
     return {"path": path, "op": "patch", "success": True}
 
 
@@ -141,7 +176,7 @@ def _execute_overwrite(op: Op, path: str) -> dict:
     DRIVER.overwrite(path, content)
     err = _verify_landed(op, path, content)
     if err:
-        raise ValueError(err)
+        raise VerifyMismatchError(err)
     result = {"path": path, "op": "overwrite", "success": True}
     if had_conflict:
         result["conflict"] = True
@@ -153,7 +188,7 @@ def _execute_delete(op: Op, path: str) -> dict:
     DRIVER.delete(path)
     err = _verify_deleted(path)
     if err:
-        raise ValueError(err)
+        raise VerifyMismatchError(err)
     return {"path": path, "op": "delete", "success": True}
 
 
