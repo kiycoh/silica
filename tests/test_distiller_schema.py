@@ -22,6 +22,8 @@ from silica.agent.llm import LLMResponse
 from silica.kernel.ops import Op, OpType, DistillerOutput
 from silica.kernel.sanitize import parse_json
 
+from tests.llm_mocks import litellm_mock_response as _litellm_mock_response
+
 
 # ---------------------------------------------------------------------------
 # Helper: minimal valid Op dict
@@ -209,26 +211,6 @@ class TestRunDistillerSchemaPassing:
 # generic litellm call_llm() path. That recovery path must not silently drop
 # constrained decoding — it is the branch where reliability matters most.
 # ---------------------------------------------------------------------------
-
-def _litellm_mock_response(text: str, finish_reason: str = "stop"):
-    """Build a litellm.completion-style mock response (mirrors
-    test_llm_structured_output.py's _mock_completion helper)."""
-    message = MagicMock()
-    message.content = text
-    message.tool_calls = None
-    message.reasoning_content = None
-    message.reasoning = None
-    message.thinking_blocks = None
-
-    choice = MagicMock()
-    choice.message = message
-    choice.finish_reason = finish_reason
-
-    response = MagicMock()
-    response.choices = [choice]
-    response.usage = MagicMock(prompt_tokens=10, completion_tokens=20, total_tokens=30)
-    return response
-
 
 class TestRunDistillerFallbackSchemaPassing:
     @patch("litellm.completion")

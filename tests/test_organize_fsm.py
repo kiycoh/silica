@@ -13,6 +13,8 @@ import pytest
 from silica.kernel.classify import Classification, classify_notes
 from silica.kernel.taxonomy import FolderRule, Taxonomy
 
+from tests.llm_mocks import litellm_mock_response as _litellm_mock_response
+
 
 # ---------------------------------------------------------------------------
 # Classifier unit tests (L1 only, no driver, no LLM)
@@ -297,26 +299,6 @@ class TestClassifyNotes:
 # parse_json() downstream, and the "fall back to uncategorized" degradation
 # on exception/malformed output, must stay exactly as before.
 # ---------------------------------------------------------------------------
-
-def _litellm_mock_response(text: str):
-    """Build a litellm.completion-style mock response (mirrors
-    test_llm_structured_output.py's _mock_completion helper)."""
-    message = MagicMock()
-    message.content = text
-    message.tool_calls = None
-    message.reasoning_content = None
-    message.reasoning = None
-    message.thinking_blocks = None
-
-    choice = MagicMock()
-    choice.message = message
-    choice.finish_reason = "stop"
-
-    response = MagicMock()
-    response.choices = [choice]
-    response.usage = MagicMock(prompt_tokens=10, completion_tokens=20, total_tokens=30)
-    return response
-
 
 class TestLLMArbitrate:
     @pytest.fixture

@@ -6,40 +6,19 @@ Tests use monkeypatching — no real LLM calls.
 """
 from __future__ import annotations
 
-import json
-from typing import Any
-from unittest.mock import MagicMock, patch
+from unittest.mock import patch
 
 import pytest
 from pydantic import BaseModel
 
 from silica.agent.llm import call_llm, LLMResponse
 
+from tests.llm_mocks import litellm_mock_response as _mock_completion
+
 
 class SimpleSchema(BaseModel):
     title: str
     score: float
-
-
-def _mock_completion(parsed_obj: BaseModel | None = None, text: str | None = None):
-    """Build a litellm-style mock response."""
-    message = MagicMock()
-    message.content = text or (json.dumps(parsed_obj.model_dump()) if parsed_obj else None)
-    message.tool_calls = None
-    message.reasoning_content = None
-    message.reasoning = None
-    message.thinking_blocks = None
-
-    choice = MagicMock()
-    choice.message = message
-    choice.finish_reason = "stop"
-
-    response = MagicMock()
-    response.choices = [choice]
-    response.usage = MagicMock(
-        prompt_tokens=10, completion_tokens=20, total_tokens=30
-    )
-    return response
 
 
 def test_call_llm_accepts_response_format_parameter():
