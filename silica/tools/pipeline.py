@@ -74,10 +74,16 @@ def silica_recon(inbox_file: str, limit: int = 0) -> dict[str, Any]:
         deferred_concepts = [c.phrase for c in cands if c.confidence != "EXTRACTED"]
         cands = [c for c in cands if c.confidence == "EXTRACTED"]
 
+    # Structural provenance (author markup — _seed_structural / confidence
+    # EXTRACTED): the centrality signal the recurrence gate in build_payload
+    # consumes (CONFIG.min_recurrence_for_create). Admitted concepts only.
+    structural_concepts = [c.phrase for c in cands if c.confidence == "EXTRACTED"]
+
     concepts = [c.phrase for c in cands]
     if not concepts:
         return {"file": inbox_file, "collisions": [], "new_concepts": [],
-                "deferred_concepts": deferred_concepts}
+                "deferred_concepts": deferred_concepts,
+                "structural_concepts": []}
 
     collisions = []
     new_concepts = []
@@ -131,6 +137,7 @@ def silica_recon(inbox_file: str, limit: int = 0) -> dict[str, Any]:
         "collisions": collisions,
         "new_concepts": new_concepts,
         "deferred_concepts": deferred_concepts,
+        "structural_concepts": structural_concepts,
     }
 
 

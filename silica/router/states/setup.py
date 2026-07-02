@@ -130,6 +130,13 @@ def handle_crossdedup(fsm: "InjectorFSM") -> None:
                 continue
             if _cosine(vecs[i], vecs[j]) >= τ_high:
                 losers.add(j)
+                # Cross-file recurrence signal for the creation gate
+                # (CONFIG.min_recurrence_for_create, consumed by build_payload):
+                # credit the winner with each file it absorbed — a concept
+                # merged from N files has recurrence N, satisfying the llm-wiki
+                # "2+ sources" rule even when each file mentions it only once.
+                rec = recon_list[fi].setdefault("concept_recurrence", {})
+                rec[name_i] = rec.get(name_i, 1) + 1
                 logger.info(
                     "CROSSDEDUP: '%s' (file %d) merged into '%s' (file %d, score=%.3f)",
                     name_j, fj, name_i, fi, _cosine(vecs[i], vecs[j]),

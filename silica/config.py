@@ -244,6 +244,17 @@ class SilicaConfig:
         default_factory=lambda: os.getenv("SILICA_GIT_COMMIT", "off")  # type: ignore
     )
 
+    # Recurrence-gated note creation (llm-wiki rule: "create a page when a
+    # concept appears in 2+ sources OR is central; never for passing
+    # mentions"). PAYLOAD's classify_action requires a no-collision concept to
+    # either be structurally corroborated (author markup) or recur (cross-file
+    # via CROSSDEDUP, or 2+ times intra-file) before hinting "create"; below
+    # the bar it hints "likely_skip" instead. Default 1 = today's behavior
+    # (every no-collision concept creates) — the gate only activates above 1.
+    min_recurrence_for_create: int = field(
+        default_factory=lambda: int(os.getenv("SILICA_MIN_RECURRENCE_FOR_CREATE", "1"))
+    )
+
     @property
     def verbose(self) -> bool:
         return self.debug_logging

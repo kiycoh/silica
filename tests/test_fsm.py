@@ -986,6 +986,28 @@ def test_crossdedup_removes_cross_file_near_duplicate():
     assert fsm.context["crossdedup_merged"] == 1
 
 
+def test_crossdedup_records_recurrence_on_winner():
+    """A cross-file merge records the concept's file count on the winner's report
+    (concept_recurrence) — the recurrence-gate signal consumed by build_payload."""
+    recon = [
+        {"file": "Inbox/a.md", "new_concepts": ["PIL"],                   "collisions": []},
+        {"file": "Inbox/b.md", "new_concepts": ["Prodotto Interno Lordo"], "collisions": []},
+    ]
+    fsm = _make_fsm_at_crossdedup(recon)
+
+    similar_vec = [1.0, 0.0, 0.0]
+    mock_embedder = MagicMock()
+    mock_embedder.embed.return_value = [similar_vec, similar_vec]
+
+    with patch("silica.agent.providers.get_embedder", return_value=mock_embedder), \
+         patch("silica.router.orchestrator.CONFIG") as mock_cfg:
+        mock_cfg.sim_threshold_high = 0.85
+        fsm.step()
+
+    assert fsm.context["recon"][0]["concept_recurrence"] == {"PIL": 2}
+    assert "concept_recurrence" not in fsm.context["recon"][1]
+
+
 def test_crossdedup_keeps_distinct_concepts():
     """Concepts that are semantically different are left untouched in both files."""
     recon = [
