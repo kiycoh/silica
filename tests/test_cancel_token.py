@@ -54,7 +54,7 @@ def test_dedup_cancelled_between_llm_and_commit(config):
 
     def fake_decide(*a, **k):
         item.cancel_token.set()   # simulate token being set during LLM call
-        return DedupDecision(is_duplicate=True, rationale="dup", addition="new info")
+        return DedupDecision(verdict="duplicate", rationale="dup", addition="new info")
 
     with patch("silica.driver.DRIVER.read_note", return_value=_MockNote()), \
          patch("silica.capabilities.dedup._decide_dedup", side_effect=fake_decide):

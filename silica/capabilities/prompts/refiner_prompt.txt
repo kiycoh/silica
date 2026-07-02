@@ -10,6 +10,10 @@ You are given the full current body of one note. Return an improved version that
   3. Improves only structure and style: headings, callouts (> [!note], > [!tip]),
      lists, bold key terms, LaTeX blocks ($$ ... $$) where appropriate, and clean
      YAML frontmatter.
+  4. Contradiction blocks ("> [!warning] Contraddizione — …") and the
+     `contested`/`contradictions` frontmatter keys record an UNRESOLVED conflict:
+     preserve them verbatim. Only if the body text now explicitly resolves the
+     conflict may you remove the block and those keys.
 
 Return STRICT JSON with exactly one key:
   {"content": "<the full reformatted note body, including frontmatter>"}

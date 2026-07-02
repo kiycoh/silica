@@ -67,6 +67,9 @@ def _execute_patch(op: Op, path: str) -> dict:
         hub=op.hub,
         existing_content=nc.content,
     )
+    if op.contested_by:
+        from silica.kernel.contested import mark_contested
+        new_content = mark_contested(new_content, op.contested_by)
     DRIVER.overwrite(path, new_content)
     return {"path": path, "op": "patch", "success": True}
 

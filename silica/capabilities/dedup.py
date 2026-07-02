@@ -8,7 +8,7 @@ from __future__ import annotations
 
 import logging
 import os
-from typing import Any
+from typing import Any, Literal
 
 from pydantic import BaseModel
 
@@ -22,7 +22,10 @@ logger = logging.getLogger(__name__)
 
 
 class DedupDecision(BaseModel):
-    is_duplicate: bool
+    # duplicate    → append only the genuinely-new info
+    # distinct     → no write
+    # contradicts  → record the conflicting claim as a contested patch (never resolve)
+    verdict: Literal["duplicate", "distinct", "contradicts"] = "distinct"
     rationale: str = ""
     addition: str = ""
 
@@ -52,10 +55,10 @@ def run_dedup(item: WorkItem, config: Any) -> dict[str, Any]:
         title_score=ctx.get("title_score", 0.0),
     )
 
-    if not decision.is_duplicate or not decision.addition.strip():
+    if decision.verdict == "distinct" or not decision.addition.strip():
         return {
             "status": "no_merge",
-            "is_duplicate": decision.is_duplicate,
+            "verdict": decision.verdict,
             "rationale": decision.rationale,
         }
 
@@ -65,15 +68,29 @@ def run_dedup(item: WorkItem, config: Any) -> dict[str, Any]:
     emit_feedback(item, "committing")
     hub = ctx.get("hub")
     inbox_file = ctx.get("inbox_file", "")
-    op = Op(
-        op=OpType.patch,
-        heading=ctx.get("concept", "") or "merged concept",
-        source_basename=os.path.basename(inbox_file) if inbox_file else "dedup",
-        path=candidate_path,
-        snippet=decision.addition,
-        hub=hub,
-        reason=f"dedup merge: {decision.rationale[:120]}",
-    )
+    source_basename = os.path.basename(inbox_file) if inbox_file else "dedup"
+    if decision.verdict == "contradicts":
+        from silica.kernel.contested import contested_callout
+        op = Op(
+            op=OpType.patch,
+            heading=ctx.get("concept", "") or "contested claim",
+            source_basename=source_basename,
+            path=candidate_path,
+            snippet=contested_callout(decision.addition, source_basename),
+            hub=hub,
+            reason=f"contested: {decision.rationale[:120]}",
+            contested_by=f"fonte: {source_basename}",
+        )
+    else:
+        op = Op(
+            op=OpType.patch,
+            heading=ctx.get("concept", "") or "merged concept",
+            source_basename=source_basename,
+            path=candidate_path,
+            snippet=decision.addition,
+            hub=hub,
+            reason=f"dedup merge: {decision.rationale[:120]}",
+        )
     bounds = dedup_bounds(candidate_path, hub=hub)
     result = commit_ops(
         [op],
@@ -82,6 +99,7 @@ def run_dedup(item: WorkItem, config: Any) -> dict[str, Any]:
         bounds=bounds,
     )
     result.setdefault("rationale", decision.rationale)
+    result.setdefault("verdict", decision.verdict)
     return result
 
 
@@ -141,12 +159,17 @@ def _decide_dedup(
     try:
         parsed, _ = parse_json(raw, strict=False)
         if isinstance(parsed, dict):
-            return DedupDecision(**{
-                "is_duplicate": bool(parsed.get("is_duplicate", False)),
-                "rationale": str(parsed.get("rationale", "")),
-                "addition": str(parsed.get("addition", "")),
-            })
+            verdict = parsed.get("verdict")
+            if verdict not in ("duplicate", "distinct", "contradicts"):
+                # Legacy binary schema, or anything unrecognised → conservative.
+                legacy = parsed.get("is_duplicate")
+                verdict = "duplicate" if legacy is True else "distinct"
+            return DedupDecision(
+                verdict=verdict,
+                rationale=str(parsed.get("rationale", "")),
+                addition=str(parsed.get("addition", "")),
+            )
     except Exception as e:
         logger.debug("dedup decision parse failed: %s", e)
-    # Conservative default: when in doubt, do not merge.
-    return DedupDecision(is_duplicate=False, rationale="unparseable decision")
+    # Conservative default: when in doubt, do not merge and do not contest.
+    return DedupDecision(verdict="distinct", rationale="unparseable decision")

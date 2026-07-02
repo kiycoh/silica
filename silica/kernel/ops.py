@@ -39,6 +39,7 @@ class Op(BaseModel):
     reason: str | None = None           # skip reason / rejection note
     linked_axis: str | None = None      # thematic axis this concept belongs to (Layer 2)
     parent: str | None = None           # specific parent note (≠ run hub); None → falls back to hub
+    contested_by: str | None = None     # patch only: contradiction ref → mark_contested on the target
     from_path: str | None = None        # move op: current vault-relative path
     to_path: str | None = None          # move op: destination vault-relative path
 

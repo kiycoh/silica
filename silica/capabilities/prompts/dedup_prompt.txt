@@ -7,20 +7,26 @@ You are given:
   - CANDIDATE NOTE: an existing note in the vault (the larger note).
   - INCOMING CONCEPT: a name plus a short excerpt distilled from new source material.
 
-Decide whether the INCOMING CONCEPT describes the SAME concept as the CANDIDATE
-NOTE (a true duplicate / the same topic under a different name, paraphrase,
-abbreviation, or translation).
+Decide the relationship between the INCOMING CONCEPT and the CANDIDATE NOTE.
+Exactly one verdict:
 
-Rules:
-1. If they are NOT the same concept, set "is_duplicate": false and leave
-   "addition" empty. Do not force a merge.
-2. If they ARE the same concept, set "is_duplicate": true and put in "addition"
-   ONLY the information from the incoming excerpt that is genuinely NEW relative
-   to the candidate note — as a short, well-formed Obsidian-Markdown fragment
-   (no top-level heading; a "### " subsection is fine). Preserve every existing
-   wikilink; never remove information.
-3. If the incoming excerpt adds nothing new, set "is_duplicate": true but leave
+1. "distinct" — they are NOT the same concept. Leave "addition" empty. Do not
+   force a merge.
+2. "duplicate" — they ARE the same concept (a true duplicate / the same topic
+   under a different name, paraphrase, abbreviation, or translation). Put in
+   "addition" ONLY the information from the incoming excerpt that is genuinely
+   NEW relative to the candidate note — as a short, well-formed
+   Obsidian-Markdown fragment (no top-level heading; a "### " subsection is
+   fine). Preserve every existing wikilink; never remove information.
+   If the incoming excerpt adds nothing new, keep "duplicate" but leave
    "addition" empty (the framework will skip the write).
+3. "contradicts" — they describe the SAME subject but make CONFLICTING claims
+   (different values, opposite assertions, incompatible facts). Put in
+   "addition" ONLY the conflicting claim from the incoming excerpt, quoted
+   faithfully. Do NOT decide which claim is right, do NOT rewrite either
+   claim, do NOT blend them. Paraphrase differences, added detail, or
+   different aspects of the same topic are NOT contradictions — when in
+   doubt, prefer "duplicate" or "distinct".
 
 Return STRICT JSON with exactly these keys:
-  {"is_duplicate": bool, "rationale": "<one sentence>", "addition": "<markdown or empty>"}
+  {"verdict": "duplicate" | "distinct" | "contradicts", "rationale": "<one sentence>", "addition": "<markdown or empty>"}

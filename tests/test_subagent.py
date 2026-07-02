@@ -79,7 +79,7 @@ def _item():
 
 
 def test_dedup_merge_builds_single_patch_under_leash():
-    decision = DedupDecision(is_duplicate=True, rationale="same concept", addition="### Momentum\nNew info.")
+    decision = DedupDecision(verdict="duplicate", rationale="same concept", addition="### Momentum\nNew info.")
 
     with patch("silica.driver.DRIVER.read_note", return_value=MagicMock(content="existing body")), \
          patch("silica.capabilities.dedup._decide_dedup", return_value=decision), \
@@ -98,7 +98,7 @@ def test_dedup_merge_builds_single_patch_under_leash():
 
 
 def test_dedup_no_merge_when_not_duplicate():
-    decision = DedupDecision(is_duplicate=False, rationale="different topics")
+    decision = DedupDecision(verdict="distinct", rationale="different topics")
     with patch("silica.driver.DRIVER.read_note", return_value=MagicMock(content="body")), \
          patch("silica.capabilities.dedup._decide_dedup", return_value=decision), \
          patch("silica.capabilities.dedup.commit_ops") as commit:
@@ -108,13 +108,89 @@ def test_dedup_no_merge_when_not_duplicate():
 
 
 def test_dedup_no_merge_when_addition_empty():
-    decision = DedupDecision(is_duplicate=True, rationale="dup but nothing new", addition="   ")
+    decision = DedupDecision(verdict="duplicate", rationale="dup but nothing new", addition="   ")
     with patch("silica.driver.DRIVER.read_note", return_value=MagicMock(content="body")), \
          patch("silica.capabilities.dedup._decide_dedup", return_value=decision), \
          patch("silica.capabilities.dedup.commit_ops") as commit:
         res = run_dedup(_item(), CONFIG)
     assert res["status"] == "no_merge"
     commit.assert_not_called()
+
+
+def test_dedup_contradicts_builds_contested_patch():
+    """Third verdict: the conflicting claim lands as ONE contested patch op —
+    warning callout in the snippet, contested_by set for the frontmatter mark."""
+    decision = DedupDecision(
+        verdict="contradicts",
+        rationale="conflicting dosage",
+        addition="Il dosaggio raccomandato è 50mg/die.",
+    )
+    with patch("silica.driver.DRIVER.read_note", return_value=MagicMock(content="existing body")), \
+         patch("silica.capabilities.dedup._decide_dedup", return_value=decision), \
+         patch("silica.capabilities.dedup.commit_ops", return_value={"status": "committed", "committed": 1}) as commit:
+        res = run_dedup(_item(), CONFIG)
+
+    assert res["status"] == "committed"
+    assert res["verdict"] == "contradicts"
+    ops_arg = commit.call_args.args[0]
+    assert len(ops_arg) == 1
+    op = ops_arg[0]
+    assert op.op == OpType.patch
+    assert op.path == "Concepts/Gradient Descent.md"
+    assert op.contested_by == "fonte: ml.md"
+    assert op.snippet.startswith("> [!warning]")
+    assert "50mg/die" in op.snippet
+    # Same leash as the merge path: the model never escalates beyond a patch.
+    bounds = commit.call_args.kwargs["bounds"]
+    assert bounds.name == "dedup"
+
+
+def test_dedup_contradicts_without_claim_is_no_merge():
+    """A contradiction verdict with no quoted claim is unactionable — never write."""
+    decision = DedupDecision(verdict="contradicts", rationale="conflict", addition="  ")
+    with patch("silica.driver.DRIVER.read_note", return_value=MagicMock(content="body")), \
+         patch("silica.capabilities.dedup._decide_dedup", return_value=decision), \
+         patch("silica.capabilities.dedup.commit_ops") as commit:
+        res = run_dedup(_item(), CONFIG)
+    assert res["status"] == "no_merge"
+    commit.assert_not_called()
+
+
+def _decide_with_raw(raw_text: str):
+    """Run _decide_dedup with a provider whose response is `raw_text`."""
+    from silica.capabilities.dedup import _decide_dedup
+
+    provider = MagicMock()
+    provider.call_llm.return_value = MagicMock(text=raw_text)
+    with patch("silica.agent.providers.get_provider", return_value=provider):
+        return _decide_dedup(
+            CONFIG, concept="X", excerpt="e", candidate_name="Y", candidate_body="b",
+        )
+
+
+def test_decide_dedup_unparseable_defaults_to_distinct():
+    """Conservative default: garbage output must never become a contradicts/merge."""
+    decision = _decide_with_raw("non-JSON garbage")
+    assert decision.verdict == "distinct"
+
+
+def test_decide_dedup_unknown_verdict_defaults_to_distinct():
+    decision = _decide_with_raw('{"verdict": "maybe", "rationale": "", "addition": "x"}')
+    assert decision.verdict == "distinct"
+
+
+def test_decide_dedup_parses_contradicts():
+    decision = _decide_with_raw(
+        '{"verdict": "contradicts", "rationale": "r", "addition": "claim"}'
+    )
+    assert decision.verdict == "contradicts"
+    assert decision.addition == "claim"
+
+
+def test_decide_dedup_legacy_is_duplicate_still_maps():
+    """A model answering with the old binary schema degrades gracefully."""
+    assert _decide_with_raw('{"is_duplicate": true, "addition": "x"}').verdict == "duplicate"
+    assert _decide_with_raw('{"is_duplicate": false}').verdict == "distinct"
 
 
 def test_unreadable_candidate_is_skipped():
