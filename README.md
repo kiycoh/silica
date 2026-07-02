@@ -216,6 +216,7 @@ Run the ingestion pipeline from inside the REPL:
 | `/review` | `[--flush=HASH]` | Inspect the async review queue (deferred ops) |
 | `/revert` | `[run-id]` | Revert a whole injection (per-run, LIFO) |
 | `/dedup` | `[folder]` | Deduplicate notes (sub-agent) |
+| `/curate` | `[folder] [--apply]` | Curate the vault: plan autolink/orphan/dedup/refine work (dry-run; `--apply` executes) |
 | `/refine` | `[folder]` | Enrich and normalize notes (sub-agent) |
 | `/enrich` | `[folder]` | Enrich note semantics (sub-agent) |
 | `/stale` | | List notes whose `documents:` paths have new commits since `code_ref` |

@@ -124,3 +124,75 @@ def test_convert_command_returns_sentinel_and_reports(repo_vault, monkeypatch, c
 def test_convert_command_no_files_errors():
     msg = _expand_workflow_shortcut("/convert --target=X")
     assert msg is not None and msg.startswith("Error:")
+
+
+# ---------------------------------------------------------------------------
+# Re-ingest-of-modified-source warning (spec-hermes-coherence §3): a file
+# about to be staged whose basename is already registered in
+# .silica/provenance.json under a DIFFERENT sha256 means notes derived from
+# it may now be stale.
+# ---------------------------------------------------------------------------
+
+def test_ingest_reingest_of_modified_source_warns(repo_vault, capsys):
+    root, vault = repo_vault
+    inbox = vault / "Inbox"
+    inbox.mkdir(exist_ok=True)
+    (inbox / "lezione.md").write_text("v2 content", encoding="utf-8")
+
+    from silica.kernel.provenance import append_record
+    append_record("lezione.md", "old-sha-not-matching", "run1", ["Concepts/A", "Concepts/B"])
+
+    msg = _expand_workflow_shortcut("/ingest Inbox/lezione.md --target=Concepts/AI")
+    assert msg is not None and "silica_run_injector" in msg
+
+    out = capsys.readouterr().out
+    assert "re-ingest di fonte modificata" in out
+    assert "2 note" in out
+
+
+def test_ingest_same_sha_no_warning(repo_vault, capsys):
+    root, vault = repo_vault
+    inbox = vault / "Inbox"
+    inbox.mkdir(exist_ok=True)
+    (inbox / "lezione.md").write_text("same content", encoding="utf-8")
+
+    from silica.kernel.provenance import append_record, content_sha256
+    sha = content_sha256("Inbox/lezione.md")
+    append_record("lezione.md", sha, "run1", ["Concepts/A"])
+
+    msg = _expand_workflow_shortcut("/ingest Inbox/lezione.md --target=Concepts/AI")
+    assert msg is not None
+
+    out = capsys.readouterr().out
+    assert "re-ingest di fonte modificata" not in out
+
+
+def test_ingest_no_prior_provenance_no_warning(repo_vault, capsys):
+    root, vault = repo_vault
+    inbox = vault / "Inbox"
+    inbox.mkdir(exist_ok=True)
+    (inbox / "fresh.md").write_text("brand new", encoding="utf-8")
+
+    msg = _expand_workflow_shortcut("/ingest Inbox/fresh.md --target=Concepts/AI")
+    assert msg is not None
+
+    out = capsys.readouterr().out
+    assert "re-ingest di fonte modificata" not in out
+
+
+def test_ingest_missing_target_errors_before_reingest_warning(repo_vault, capsys):
+    """An invocation missing --target is invalid regardless of provenance —
+    the drift warning must not print before the guard rejects the call."""
+    root, vault = repo_vault
+    inbox = vault / "Inbox"
+    inbox.mkdir(exist_ok=True)
+    (inbox / "lezione.md").write_text("v2 content", encoding="utf-8")
+
+    from silica.kernel.provenance import append_record
+    append_record("lezione.md", "old-sha-not-matching", "run1", ["Concepts/A", "Concepts/B"])
+
+    msg = _expand_workflow_shortcut("/ingest Inbox/lezione.md")
+
+    assert msg is not None and msg.startswith("Error:") and "--target" in msg
+    out = capsys.readouterr().out
+    assert "re-ingest di fonte modificata" not in out

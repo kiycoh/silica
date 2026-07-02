@@ -509,6 +509,42 @@ def _handle_direct_shortcut(raw_input: str, messages: list[dict]) -> bool:
             CONSOLE.print(result)
         return True
 
+    if cmd == "/curate":
+        apply = any(p == "--apply" for p in parts[1:])
+        positional = [p for p in parts[1:] if not p.startswith("-")]
+        folder = " ".join(positional)
+        scope = folder or "(vault)"
+        if apply:
+            CONSOLE.print(f"  Curate on [bold]{scope}[/] — applying via the worker seam…")
+        else:
+            CONSOLE.print(f"  Curate on [bold]{scope}[/] — dry-run (nothing is written)…")
+        res = TOOLS["silica_curate"].run(apply=apply, folder=folder)
+
+        total = res.get("total", 0)
+        counts = res.get("counts", {})
+        if total == 0:
+            CONSOLE.print("  Nothing to do — the vault is coherent.")
+            return True
+
+        breakdown = ", ".join(f"{v} {k}" for k, v in counts.items())
+        if apply:
+            # Real outcomes (execution["outcome_counts"], derived from the
+            # dispatch batch's per-item status + the mechanical autolink's
+            # actual links-added count) — NOT the planned counts above, which
+            # would report "Applied N" even when e.g. every dedup came back
+            # a distinct verdict and nothing was actually merged.
+            outcome = res.get("execution", {}).get("outcome_counts", {})
+            dispatched = sum(outcome.values())
+            outcome_breakdown = ", ".join(f"{v} {k}" for k, v in outcome.items()) or "no changes"
+            CONSOLE.print(f"  Applied — dispatched [bold]{dispatched}[/] → outcomes: {outcome_breakdown}")
+        else:
+            CONSOLE.print(f"  Plan — [bold]{total}[/] item(s): {breakdown}")
+            for it in res.get("items", []):
+                pair = f" ↔ {it['partner']}" if it.get("partner") else ""
+                CONSOLE.print(f"  · [bold]{it['kind']}[/]  {it['target']}{pair}")
+            CONSOLE.print("  Run [bold]/curate --apply[/] to execute.")
+        return True
+
     return False
 
 
@@ -589,8 +625,27 @@ def _expand_workflow_shortcut(user_input: str) -> str | None:
 
         if not md_files:
             return ""  # fully handled inline — sentinel: nothing for the agent
+
         if not target_dir:
             return "Error: /ingest of notes requires --target=DIR. Usage: /ingest <file...> --target=DIR"
+
+        from pathlib import Path as _Path
+        from silica.kernel.provenance import check_reingest, content_sha256
+
+        for mf in md_files:
+            try:
+                incoming_sha = content_sha256(mf)
+                if not incoming_sha:
+                    continue
+                modified, prior_notes = check_reingest(_Path(mf).name, incoming_sha)
+                if modified:
+                    CONSOLE.print(
+                        f"  [yellow]re-ingest di fonte modificata: {prior_notes} note "
+                        f"derivate dalla versione precedente[/]"
+                    )
+            except Exception as exc:
+                logger.debug("/ingest: re-ingest provenance check skipped for %s (non-fatal): %s", mf, exc)
+
         files_json = json.dumps(md_files)
         msg = (
             f"Run the Injector pipeline for {len(md_files)} file(s).\n"

@@ -129,6 +129,12 @@ COMMANDS: tuple[Command, ...] = (
         summary="deduplicate (sub-agent)",
     ),
     Command(
+        name="/curate",
+        group="direct",
+        usage="[folder] [--apply]",
+        summary="curate the vault: plan autolink/orphan/dedup/refine work (dry-run; --apply executes)",
+    ),
+    Command(
         name="/refine",
         group="direct",
         usage="[folder]",

@@ -46,6 +46,7 @@ ALLOWED = {
     "router/states/finalize.py":    "embed index cleanup on rollback",
     "tools/graph.py":               "index refresh tools + raw semantic search by design",
     "tools/runners.py":             "pairwise cosine dedup windows (silica_dedup)",
+    "tools/curate.py":              "constructs stores to inject into the facade (orphan candidates)",
 }
 
 

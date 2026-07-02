@@ -54,6 +54,10 @@ from silica.tools.graph import (  # noqa: F401
     silica_similar,
     silica_vault_report,
 )
+from silica.tools.curate import (  # noqa: F401
+    CurateArgs,
+    silica_curate,
+)
 from silica.tools.runners import (  # noqa: F401
     DedupFolderArgs,
     DedupPairsArgs,
