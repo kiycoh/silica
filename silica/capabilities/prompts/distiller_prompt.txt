@@ -67,7 +67,7 @@ For every concept in every batch, decide exactly ONE action:
 The `action_hint` field is the Router's mechanical guess based on collision tiers. Treat it as a starting bias, NOT a binding constraint. You may overrule it based on the actual excerpt content — e.g. an `enrich`-hinted concept where the vault excerpt already contains all the inbox facts becomes a `skip`.
 
 ## Content Quality Requirements
-- All distilled facts MUST be written in Italian, formal/scholarly register.
+- All distilled facts MUST be written in {LANGUAGE}, formal/scholarly register.
 - Preserve every formula, equation, code block, and numeric value verbatim from the inbox excerpt.
 - Use bold for key terms when natural. Use Obsidian callout syntax (> [!TIP], > [!NOTE], > [!WARNING]) only when it materially aids the reader.
 - **Modular Atomicity**: if a single payload concept actually bundles multiple distinct sub-concepts (e.g. an inbox section titled "Reti Neurali" that defines both "Perceptron" and "Backpropagation" with separate formulas), split it into multiple update entries — one per atomic concept — with op `write` for each sub-concept that lacks its own vault note.
@@ -88,7 +88,7 @@ The `action_hint` field is the Router's mechanical guess based on collision tier
 - **Vault vocabulary**: when a `## Vault vocabulary` section is present in your context, prefer those exact terms for note titles, headings and `concepts` keyphrases instead of coining synonyms — the vault already names these ideas.
 - **Note body goes OUTSIDE the JSON (Body Appendix)**: NEVER put the note body in a `"snippet"` (or `"content"`) JSON string. In the JSON, reference the body with an integer `"snippet_ref": N`; write the body itself verbatim in the Body Appendix (see Output Schema). Because the body is not a JSON string, you NEVER escape backslashes: write LaTeX and code with literal single backslashes exactly as they must appear in the file — `\top`, `\neq`, `\frac`, `\mathbb`, `\boldsymbol`, and matrix/aligned row breaks as `\\`. Use real line breaks, not `\n`.
 - **No self-referential links**: the `snippet` or `content` of a note for concept X must NOT contain `[[X]]` (a link back to itself). Self-links are meaningless in Obsidian's graph and will be stripped by the autolink gate anyway.
-- **Tag limit**: include at most **3 tags** per note. If the inbox excerpt suggests more, keep the 3 most specific/relevant ones and discard the rest.
+- **Tag limit**: include at most **{MAX_TAGS} tags** per note. If the inbox excerpt suggests more, keep the {MAX_TAGS} most specific/relevant ones and discard the rest.
 
 ## Anti-Hallucination Guardrails
 - Every `heading` in your output MUST appear in the input payload. Do not invent concept names.
@@ -112,7 +112,7 @@ When your task context contains a `## Related Notes (candidates)` section, it li
 Every `write` and `patch` op SHOULD carry a `"concepts"` array: 3–8 normalized concept keyphrases naming the substantive ideas the note's `snippet`/`content` is actually about. These feed the vault's co-occurrence graph, which links notes that discuss the same concepts — so quality and normalization matter more than quantity.
 
 - **Normalize aggressively**: resolve synonyms and abbreviations to a single canonical form (`"ML"` → `"machine learning"`), prefer the noun phrase over verb/adjective forms (nominalization: `"optimizing gradients"` → `"gradient optimization"`), and clean up formula/symbol noise into a readable phrase (`"dL/dw"` → `"loss gradient"`).
-- Use the language of the note (Italian for distilled bodies) for natural-language concepts; keep established English technical terms as-is (`"backpropagation"`, `"transformer"`).
+- Use the language of the note ({LANGUAGE} for distilled bodies) for natural-language concepts; keep established English technical terms as-is (`"backpropagation"`, `"transformer"`).
 - Keyphrases are short (1–4 words), lowercase unless a proper noun, and MUST be grounded in the note body — never invent concepts absent from the snippet.
 - Omit `concepts` for `skip` ops.
 
@@ -132,7 +132,7 @@ Every `write`/`patch` op carries its body OUTSIDE the JSON. In the op, set `"sni
 <body for snippet_ref 2, verbatim>
 ```
 
-Each `===SILICA-BODY N===` MUST be alone on its own line. The body text between markers is copied to the note as-is — do not JSON-escape anything in it. The wikilink rule (no `.md`), no-self-link rule, and Italian-prose requirement all still apply to body text.
+Each `===SILICA-BODY N===` MUST be alone on its own line. The body text between markers is copied to the note as-is — do not JSON-escape anything in it. The wikilink rule (no `.md`), no-self-link rule, and {LANGUAGE}-prose requirement all still apply to body text.
 
 ## Few-Shot Example
 

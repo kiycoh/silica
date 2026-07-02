@@ -90,6 +90,20 @@ def _reset_overlay_cache() -> None:
     overlay_mod.reset_overlay_cache()
 
 
+@pytest.fixture(autouse=True)
+def _reset_manifest_cache() -> None:
+    """Reset the module-level vault-manifest cache before every test.
+
+    Mirrors `_reset_overlay_cache`: `ofm.ofm_lint` and `prep_delegation.render_prompt`
+    now resolve `conventions:` from `get_active_manifest()`, so a test that sets
+    CONFIG.vault_path (e.g. via the `tmp_vault` fixture) would otherwise leak a
+    cached manifest — with its vault.yaml-derived conventions — into whichever
+    test runs next in the same process.
+    """
+    import silica.kernel.vault_manifest as manifest_mod
+    manifest_mod.reset_manifest_cache()
+
+
 @pytest.fixture(scope="session")
 def synthetic_vault() -> Path:
     """Return the path to the synthetic test vault, building it if needed.

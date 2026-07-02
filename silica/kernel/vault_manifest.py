@@ -24,10 +24,31 @@ MANIFEST_REL = "vault.yaml"
 
 
 @dataclass(frozen=True)
+class VaultConventions:
+    """Per-vault authoring conventions — single source for prompt + linter.
+
+    Consumed by `prep_delegation.render_prompt` ({LANGUAGE}/{MAX_TAGS}
+    placeholders) and `ofm.ofm_lint` (LIMITS/CALLOUT_TYPES resolution).
+    Defaults equal today's hardcoded values, so a vault without a
+    `conventions:` block behaves bit-identically to before this existed.
+    """
+
+    language: str = "Italian"
+    max_tags: int = 3
+    extra_callouts: tuple[str, ...] = ()
+    max_lines: int = 400
+    max_chars: int = 20000
+
+
+DEFAULT_CONVENTIONS = VaultConventions()
+
+
+@dataclass(frozen=True)
 class VaultManifest:
     sources: tuple[str, ...]
     overlay: str | None = None
     cooccurrence_lang: str | None = None
+    conventions: VaultConventions = DEFAULT_CONVENTIONS
 
 
 def default_sources(vault: str | Path) -> tuple[str, ...]:
@@ -38,6 +59,46 @@ def default_sources(vault: str | Path) -> tuple[str, ...]:
     except Exception:
         pass
     return tuple(out)
+
+
+def _parse_conventions(raw: dict) -> VaultConventions:
+    """Parse the optional `conventions:` block; malformed/missing ⇒ defaults (soft)."""
+    conv_raw = raw.get("conventions")
+    if conv_raw is None:
+        return DEFAULT_CONVENTIONS
+    if not isinstance(conv_raw, dict):
+        logger.warning("vault.yaml: `conventions` must be a mapping — using defaults")
+        return DEFAULT_CONVENTIONS
+
+    language = conv_raw.get("language")
+    if not (isinstance(language, str) and language):
+        language = DEFAULT_CONVENTIONS.language
+
+    max_tags = conv_raw.get("max_tags")
+    if not (isinstance(max_tags, int) and not isinstance(max_tags, bool) and max_tags > 0):
+        max_tags = DEFAULT_CONVENTIONS.max_tags
+
+    extra_callouts = conv_raw.get("extra_callouts")
+    if isinstance(extra_callouts, list) and all(isinstance(c, str) for c in extra_callouts):
+        extra_callouts = tuple(c.lower() for c in extra_callouts)
+    else:
+        extra_callouts = DEFAULT_CONVENTIONS.extra_callouts
+
+    max_lines = conv_raw.get("max_lines")
+    if not (isinstance(max_lines, int) and not isinstance(max_lines, bool) and max_lines > 0):
+        max_lines = DEFAULT_CONVENTIONS.max_lines
+
+    max_chars = conv_raw.get("max_chars")
+    if not (isinstance(max_chars, int) and not isinstance(max_chars, bool) and max_chars > 0):
+        max_chars = DEFAULT_CONVENTIONS.max_chars
+
+    return VaultConventions(
+        language=language,
+        max_tags=max_tags,
+        extra_callouts=extra_callouts,
+        max_lines=max_lines,
+        max_chars=max_chars,
+    )
 
 
 def load_manifest(vault: str | Path) -> VaultManifest:
@@ -71,6 +132,7 @@ def load_manifest(vault: str | Path) -> VaultManifest:
         sources=src,
         overlay=overlay if isinstance(overlay, str) and overlay else None,
         cooccurrence_lang=lang if isinstance(lang, str) and lang else None,
+        conventions=_parse_conventions(raw),
     )
 
 

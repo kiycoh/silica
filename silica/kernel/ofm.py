@@ -57,6 +57,35 @@ CALLOUT_RE = re.compile(r'^>\s*\[!([A-Za-z]+)\][+-]?', re.MULTILINE)
 # _balanced is imported from ast.py
 
 
+def _effective_limits() -> dict:
+    """LIMITS overridden by the active vault's `conventions:` block.
+
+    Base defaults (module-level LIMITS) equal today's hardcoded values; a
+    vault without a manifest (or without a `conventions:` block) resolves to
+    the same dict, bit-identical. Single source shared with
+    `prep_delegation.render_prompt`'s `{MAX_TAGS}` placeholder.
+    """
+    from silica.kernel.vault_manifest import get_active_manifest
+
+    conv = get_active_manifest().conventions
+    return {
+        **LIMITS,
+        "max_tags": conv.max_tags,
+        "max_lines": conv.max_lines,
+        "max_chars": conv.max_chars,
+    }
+
+
+def _effective_callout_types() -> frozenset:
+    """Base CALLOUT_TYPES plus the active vault's `extra_callouts`."""
+    from silica.kernel.vault_manifest import get_active_manifest
+
+    conv = get_active_manifest().conventions
+    if not conv.extra_callouts:
+        return CALLOUT_TYPES
+    return CALLOUT_TYPES | frozenset(c.lower() for c in conv.extra_callouts)
+
+
 def ofm_lint(content, stem=None):
     """Pure structural lint for a single note.
 
@@ -70,6 +99,7 @@ def ofm_lint(content, stem=None):
     """
     data, _, body = _fm.split(content)
     V, F = [], []  # violations, flags
+    limits = _effective_limits()
 
     if data is None:
         V.append("missing/invalid frontmatter")
@@ -89,8 +119,8 @@ def ofm_lint(content, stem=None):
     else:
         F += _fm.lint_tags(data)  # per-item normalization issues
         tag_list = raw_tags if isinstance(raw_tags, list) else [raw_tags]
-        if len(tag_list) > LIMITS["max_tags"]:
-            F.append(f"too many tags ({len(tag_list)}); max {LIMITS['max_tags']}")
+        if len(tag_list) > limits["max_tags"]:
+            F.append(f"too many tags ({len(tag_list)}); max {limits['max_tags']}")
 
     # AI field: must be explicitly boolean
     if not isinstance(data.get("AI"), bool):
@@ -115,8 +145,9 @@ def ofm_lint(content, stem=None):
     if "\\n" in naked:
         V.append("literal '\\n' character sequence detected in body")
 
+    callout_types = _effective_callout_types()
     for t in extract_callouts(body):
-        if t.lower() not in CALLOUT_TYPES:
+        if t.lower() not in callout_types:
             V.append(f"unknown callout type [!{t}]")
 
     heads = parse_headings(body)

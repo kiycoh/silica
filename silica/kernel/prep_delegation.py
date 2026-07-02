@@ -28,11 +28,22 @@ def _load_prompt() -> str:
 
 
 def render_prompt(target: str, hub: str | None = None) -> str:
-    """Render the distiller prompt with TARGET substitution."""
+    """Render the distiller prompt with TARGET/LANGUAGE/MAX_TAGS substitution.
+
+    LANGUAGE and MAX_TAGS come from the active vault's `conventions:` block
+    (silica/kernel/vault_manifest.py) — single source shared with
+    `ofm.ofm_lint`'s max-tags check. A vault without a manifest gets today's
+    defaults (Italian / 3), so this is bit-identical when unconfigured.
+    """
+    from silica.kernel.vault_manifest import get_active_manifest
+
     body = _load_prompt()
     body = body.replace("{TARGET}", target)
     if hub:
         body = body.replace("{HUB_NAME}", hub)
+    conventions = get_active_manifest().conventions
+    body = body.replace("{LANGUAGE}", conventions.language)
+    body = body.replace("{MAX_TAGS}", str(conventions.max_tags))
     return body
 
 
