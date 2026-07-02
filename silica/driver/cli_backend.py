@@ -9,7 +9,7 @@ From SILICA.md §3 L0:
 
 Freshness contract:
   After a create/set_prop/move, the backend polls until the cache reflects
-  the mutation (_wait_for_settle). This is normative — a read that returns
+  the mutation (_settle). This is normative — a read that returns
   stale data after a write is a bug.
 """
 from __future__ import annotations
@@ -27,6 +27,7 @@ from silica.config import CONFIG
 from silica.kernel.wikilink import extract_links
 
 from silica.driver.base import (
+    GraphIndexMixin,
     GraphSnapshot,
     Heading,
     Hit,
@@ -146,7 +147,7 @@ _AUTOLINK_JS = r"""
 """
 
 
-class ObsidianCLIBackend:
+class ObsidianCLIBackend(GraphIndexMixin):
     """ObsidianDriver implementation via the official Obsidian CLI."""
 
     def __init__(self, vault_name: str = ""):
@@ -157,12 +158,6 @@ class ObsidianCLIBackend:
         self._notes_by_name: dict[str, list[NoteRef]] = {}
         self._mention_index: dict[str, set[str]] = {}  # title_lower → {paths that mention it}
         self._is_graph_built = False
-
-    def _node_ref(self, path: str) -> NoteRef:
-        if path in self._notes:
-            return self._notes[path]
-        name = path.rsplit("/", 1)[-1].removesuffix(".md")
-        return NoteRef(name=name, path=path)
 
     def _ensure_graph(self):
         if self._is_graph_built:
@@ -363,15 +358,6 @@ class ObsidianCLIBackend:
             if query in f.name.lower():
                 results.append(f)
         return results
-
-    def mentions_of(self, title: str) -> list[str]:
-        """Return vault-relative paths of notes whose body mentions `title`.
-
-        O(1) lookup into the inverted text index built during _ensure_graph.
-        If the index hasn't been built yet, falls back to building it first.
-        """
-        self._ensure_graph()
-        return list(self._mention_index.get(title.lower(), set()))
 
     def search_context(self, query: str) -> list[Hit]:
         """Search vault content with line-level context snippets."""
@@ -724,11 +710,6 @@ class ObsidianCLIBackend:
         )
 
 
-    def graph_data(self, folder: str = "") -> tuple[dict, set, Any]:
-        """Return (notes, unresolved_links, graph) for in-process consumers."""
-        self._ensure_graph()
-        return self._notes, self._unresolved_links, self._graph
-
     # ------------------------------------------------------------------
     # Write (graph-safe)
     # ------------------------------------------------------------------
@@ -770,14 +751,16 @@ class ObsidianCLIBackend:
         # Incrementally update the mention index: rescan this note's body
         # against all known titles, and also check if existing notes mention
         # this note's title.
-        content_lower = content.lower()
         # 1. Remove stale entries for this path from all title sets
         for title_lower, paths_set in self._mention_index.items():
             paths_set.discard(path)
-        # 2. Re-scan this body against all known titles
-        for title_lower in self._notes_by_name:
-            if len(title_lower) >= 2 and title_lower in content_lower:
-                self._mention_index.setdefault(title_lower, set()).add(path)
+        # 2. Re-scan this body against all known titles — same first-word-anchored
+        #    matching as the bulk build (base.mentions_in), so an incremental
+        #    update never diverges from a full rebuild.
+        from silica.driver.base import build_title_trie, mentions_in
+        trie = build_title_trie(self._notes_by_name)
+        for title_lower in mentions_in(content.lower(), trie):
+            self._mention_index.setdefault(title_lower, set()).add(path)
         # 3. The new note's own title is now a searchable term — existing
         #    notes may already mention it but weren't indexed for it.
         #    A full rescan would be expensive, so we skip it here.
@@ -829,8 +812,23 @@ class ObsidianCLIBackend:
         if len(content) > 30000:
             self._write_large_content(path, content, append_mode=False)
         else:
-            escaped = content.replace("\\", "\\\\").replace("\n", "\\n")
-            self._run_cli("create", f"path={path}", f"content={escaped}")
+            # Lossless write via JS string-literal eval (mirrors overwrite). _js_str
+            # round-trips backslashes through the JS parser, so LaTeX lands single-
+            # escaped. The old `obsidian create content=` CLI doubled every `\`: its
+            # receiver reverses `\n`→newline but not `\\`→`\`, so `\begin`/`\sum`
+            # landed doubled and `\nabla`/`\neq` got split across a newline.
+            js = (
+                "(async () => {"
+                "  const data = '" + _js_str(content) + "';"
+                "  await app.vault.create('" + _js_str(path) + "', data);"
+                "  return JSON.stringify('ok');"
+                "})()"
+            )
+            try:
+                self._eval(js)
+            except Exception as e:
+                logger.debug("vault.create failed (%s); falling back to verbatim write.", e)
+                self._write_large_content(path, content, append_mode=False)
         name = path.rsplit("/", 1)[-1].removesuffix(".md")
         ref = NoteRef(name=name, path=path)
         self._wait_for_content_reflects(ref, content)
@@ -895,12 +893,15 @@ class ObsidianCLIBackend:
     def _build_mention_index(self) -> None:
         """Build the title-mention inverted index via a single CDP eval.
 
-        Reads each vault file once (via cachedRead — from Obsidian's in-memory
-        cache, not disk) and checks its body against all known note titles.
-        Result: {title_lower: [paths_that_mention_it]}.
+        Reads each vault file once (via cachedRead — Obsidian's in-memory cache)
+        and matches its body against a TITLE TRIE walked only from word-boundary
+        positions — an exact JS mirror of base.mentions_in (unit-tested in Python).
+        O(total body text), independent of title first-word clustering (the old
+        title×body sweep was ~15-70s at 10k notes). Word-boundary start keeps
+        morphology recall ("Network" matches "networks") and drops mid-word false
+        positives ("ros" in "across").
 
-        Runs inside the JS runtime for speed — avoids transferring megabytes of
-        note bodies over the CDP bridge.
+        Runs inside the JS runtime for speed — avoids transferring note bodies.
         """
         titles_json = json.dumps([
             ref.name.lower() for ref in self._notes.values()
@@ -910,15 +911,34 @@ class ObsidianCLIBackend:
         js_code = (
             "(async () => {\n"
             f"  const titles = {titles_json};\n"
+            "  const TERM = '\\u0000';\n"
+            "  const trie = {};\n"  # char trie; TERM node holds the full title
+            "  for (const t of titles) {\n"
+            "    let node = trie;\n"
+            "    for (const ch of t) node = (node[ch] = node[ch] || {});\n"
+            "    node[TERM] = t;\n"
+            "  }\n"
+            "  const isWord = (c) => (c >= 'a' && c <= 'z') || (c >= '0' && c <= '9');\n"
             "  const files = app.vault.getMarkdownFiles();\n"
             "  const mentions = {};\n"
             "  await Promise.all(files.map(async (file) => {\n"
             "    try {\n"
-            "      const content = (await app.vault.cachedRead(file)).toLowerCase();\n"
-            "      for (const title of titles) {\n"
-            "        if (content.includes(title)) {\n"
-            "          if (!mentions[title]) mentions[title] = [];\n"
-            "          mentions[title].push(file.path);\n"
+            "      const s = (await app.vault.cachedRead(file)).toLowerCase();\n"
+            "      const n = s.length;\n"
+            "      const seen = new Set();\n"
+            "      for (let i = 0; i < n; i++) {\n"
+            "        if (!isWord(s[i])) continue;\n"
+            "        if (i && isWord(s[i - 1])) continue;\n"  # word-boundary start only
+            "        let node = trie;\n"
+            "        for (let j = i; j < n; j++) {\n"
+            "          node = node[s[j]];\n"
+            "          if (node === undefined) break;\n"
+            "          const t = node[TERM];\n"
+            "          if (t !== undefined && !seen.has(t)) {\n"
+            "            seen.add(t);\n"
+            "            if (!mentions[t]) mentions[t] = [];\n"
+            "            mentions[t].push(file.path);\n"
+            "          }\n"
             "        }\n"
             "      }\n"
             "    } catch (e) {}\n"
@@ -960,9 +980,8 @@ class ObsidianCLIBackend:
             try:
                 self._eval(js)
             except Exception as e:
-                logger.debug("vault.process overwrite failed (%s); falling back to CLI.", e)
-                escaped = content.replace("\\", "\\\\").replace("\n", "\\n")
-                self._run_cli("create", f"path={path}", f"content={escaped}", "overwrite=true")
+                logger.debug("vault.process overwrite failed (%s); falling back to verbatim write.", e)
+                self._write_large_content(path, content, append_mode=False)
                 self._wait_for_content_reflects(ref, content)
         # Optimistic patch — rebuild edges for the new content
         self._patch_graph_add(path, ref, content)
@@ -989,9 +1008,8 @@ class ObsidianCLIBackend:
             try:
                 self._eval(js)
             except Exception as e:
-                logger.debug("vault.process append failed (%s); falling back to CLI.", e)
-                escaped = content.replace("\\", "\\\\").replace("\n", "\\n")
-                self._run_cli("append", self._ref_arg(ref), f"content={escaped}")
+                logger.debug("vault.process append failed (%s); falling back to verbatim write.", e)
+                self._write_large_content(path, content, append_mode=True)
                 self._wait_for_content_contains(ref, content)
         # Optimistic patch — add any new links introduced by the appended fragment
         if self._is_graph_built:
@@ -1391,7 +1409,3 @@ class ObsidianCLIBackend:
             return not self.backlinks(original_ref)
 
         self._settle(_moved, f"move to '{to_path}'", timeout)
-
-    # Legacy alias kept for any remaining internal callers
-    def _wait_for_settle(self, ref: NoteRef, timeout: float | None = None) -> None:
-        self._wait_for_create(ref, timeout=timeout)

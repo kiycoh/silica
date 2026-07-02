@@ -165,6 +165,24 @@ def test_execute_one_write_missing_hub_raises(vault):
         execute_one(op)
 
 
+def test_execute_one_writes_latex_verbatim(vault):
+    # execute_one no longer rewrites LaTeX (the normalize_latex backstop was
+    # removed once the cli write channel stopped doubling backslashes). Content
+    # reaches disk byte-for-byte; correctness is the writer's job, not a repair.
+    body = r"$0 \leq P(x)$ e $$\sum_x P(x)=1$$ e $\|\boldsymbol{v}\|_2$"
+    op = Op(
+        op=OpType.overwrite,
+        heading="Existing",
+        source_basename="src.md",
+        path="Concepts/Existing.md",
+        content="# Existing\n\n" + body + "\n",
+    )
+    res = execute_one(op)
+    assert res["success"] is True
+    content = DRIVER.read_note("Concepts/Existing.md").content
+    assert body in content
+
+
 def test_execute_one_overwrite_missing_content_raises(vault):
     op = Op(
         op=OpType.overwrite,

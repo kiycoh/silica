@@ -94,18 +94,25 @@ def test_append_uses_vault_process_no_contains_poll():
     wait_mock.assert_not_called()
 
 
-def test_overwrite_falls_back_on_eval_failure():
+def test_overwrite_falls_back_to_verbatim_write_on_eval_failure():
+    """On eval failure overwrite must fall back to the verbatim temp-file write,
+    never the `obsidian create content=` CLI whose receiver doubled every `\\`."""
     backend = ObsidianCLIBackend(vault_name="t")
+    body = r"$\nabla f$" + "\n\\begin{equation*}\ny = \\sum_i x_i\n\\end{equation*}"
     cli = []
     def fake(*a, **k):
         if a[0] == "eval":
             raise RuntimeError("down")
         cli.append(a)
         return ""
+    seen = {}
     with patch.object(backend, "_run_cli", side_effect=fake), \
+         patch.object(backend, "_write_large_content",
+                      side_effect=lambda p, c, append_mode=False: seen.update(content=c)), \
          patch.object(backend, "_wait_for_content_reflects") as wait_mock, \
          patch.object(backend, "_patch_graph_add") as patch_mock:
-        backend.overwrite("Note.md", "body")
-    assert any(c[0] == "create" for c in cli)  # fallback uses `create ... overwrite=true`
+        backend.overwrite("Note.md", body)
+    assert seen["content"] == body                 # verbatim — single backslashes survive
+    assert not any(c[0] == "create" for c in cli)  # never the corrupting CLI channel
     wait_mock.assert_called_once()
     patch_mock.assert_called_once()  # graph patched even on the fallback path

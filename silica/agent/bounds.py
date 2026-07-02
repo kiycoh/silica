@@ -5,9 +5,7 @@ strictly bounded envelope.  The framework — not the model — decides:
 
   * which op-types are permitted (`allowed_ops`),
   * which note paths it may touch (`target_predicate` + `forbidden_paths`),
-  * that no information is lost on a rewrite (`content_guard`),
-  * how far it may explore before being stopped (`max_turns`, `timeout_s`,
-    `context_budget_chars`).
+  * that no information is lost on a rewrite (`content_guard`).
 
 `CapabilityBounds.enforce()` runs BEFORE the writer: any op outside the envelope
 is dropped with a reason, so a small/eager model can never escalate beyond its
@@ -97,10 +95,6 @@ class CapabilityBounds:
     forbidden_paths: frozenset[str] = frozenset()
     # optional semantic guard for rewrites: (op, original_content) → reason|None.
     content_guard: Callable[[Op, str], str | None] | None = None
-    # exploration caps
-    max_turns: int = 6
-    timeout_s: float = 120.0
-    context_budget_chars: int = 8000
 
     def allows_path(self, path: str | None) -> bool:
         norm = _norm_path(path)

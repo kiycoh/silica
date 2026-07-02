@@ -1,8 +1,15 @@
 """Unit tests for silica.kernel.media — strip_images and preprocess_text."""
 from __future__ import annotations
 
+import textwrap
+
 import pytest
-from silica.kernel.media import strip_images, preprocess_text
+from silica.kernel.media import (
+    strip_images,
+    preprocess_text,
+    images_for_section,
+    append_section_images,
+)
 
 
 # ---------------------------------------------------------------------------
@@ -132,31 +139,71 @@ class TestStripPreservation:
 
 
 # ---------------------------------------------------------------------------
-# preprocess_text — integration with CONFIG.image_mode
+# preprocess_text
 # ---------------------------------------------------------------------------
 
 class TestPreprocessText:
-    def test_strip_mode_removes_images(self, monkeypatch):
-        import silica.config as cfg
-        monkeypatch.setattr(cfg.CONFIG, "image_mode", "strip")
+    def test_removes_images(self):
         raw = "Text\n![[img.png]]\nMore text"
         result = preprocess_text(raw)
         assert "![[" not in result
         assert "Text" in result
 
-    def test_vlm_mode_falls_back_to_strip(self, monkeypatch):
-        """vlm mode not yet implemented; must fall back to strip behaviour."""
-        import silica.config as cfg
-        monkeypatch.setattr(cfg.CONFIG, "image_mode", "vlm")
-        raw = "![[photo.jpg]]"
-        result = preprocess_text(raw)
-        assert "![[" not in result
 
-    def test_unknown_mode_uses_strip(self, monkeypatch):
-        """Unknown image_mode values should not crash and default to strip."""
-        import silica.config as cfg
-        monkeypatch.setattr(cfg.CONFIG, "image_mode", "nonexistent_mode")  # type: ignore
-        raw = "![[x.png]]"
-        # preprocess_text falls through to strip for any unrecognised mode
-        result = preprocess_text(raw)
-        assert "![[" not in result
+# ---------------------------------------------------------------------------
+# images_for_section — section-scoped image embeds for a concept
+# ---------------------------------------------------------------------------
+
+_SRC = textwrap.dedent("""\
+    # Doc
+
+    ## Architecture
+
+    The system uses a pipeline.
+
+    ![[images/arch.png]]
+
+    ## Storage
+
+    Uses LanceDB.
+
+    ![Figure 2](images/db.png)
+    ![remote](https://example.com/logo.png)
+""")
+
+
+class TestImagesForSection:
+    def test_ofm_embed_normalized_to_basename(self):
+        assert images_for_section(_SRC, "Architecture") == ["![[arch.png]]"]
+
+    def test_markdown_image_normalized_skips_remote(self):
+        # db.png is local → kept; the https logo → dropped (would point nowhere).
+        assert images_for_section(_SRC, "Storage") == ["![[db.png]]"]
+
+    def test_no_matching_heading_returns_empty(self):
+        assert images_for_section(_SRC, "Nonexistent") == []
+
+    def test_concept_substring_of_heading_matches(self):
+        src = "## Message provenance and tracking\n![[p.png]]\n"
+        assert images_for_section(src, "Message provenance") == ["![[p.png]]"]
+
+    def test_dedup_same_image_twice(self):
+        src = "## S\n![[a.png]]\ntext\n![[images/a.png]]\n"
+        assert images_for_section(src, "S") == ["![[a.png]]"]
+
+    def test_no_images_in_section(self):
+        assert images_for_section("## S\nplain text only\n", "S") == []
+
+
+class TestAppendSectionImages:
+    def test_appends_after_snippet(self):
+        out = append_section_images("distilled body.", _SRC, "Architecture")
+        assert out.startswith("distilled body.")
+        assert out.rstrip().endswith("![[arch.png]]")
+
+    def test_noop_when_no_section_images(self):
+        assert append_section_images("body", _SRC, "Nonexistent") == "body"
+
+    def test_handles_empty_snippet(self):
+        out = append_section_images("", _SRC, "Architecture")
+        assert out.strip() == "![[arch.png]]"

@@ -105,6 +105,31 @@ class _FakeFSMWithWarnings:
         return {"final_status": "ok"}
 
 
+def test_current_orphans_uses_driver_graph_not_full_report(monkeypatch):
+    """Fix B: orphan status comes from the driver graph (in-degree), not a full
+    compute_report — no Louvain/PageRank needed for "who is orphaned". At 10k
+    notes that is ~3.8s (report) vs a sub-ms graph scan, fired up to 2x/run.
+    """
+    import silica.driver as drv
+    from silica.driver.base import NoteRef
+    from silica.agent.bounds import _norm_path
+
+    coord = _coordinator_with(SimpleNamespace(target_dir="Concepts"), SilicaConfig())
+    monkeypatch.setattr(
+        drv, "DRIVER",
+        SimpleNamespace(orphans=lambda: [NoteRef(name="Lonely", path="Concepts/Lonely.md")]),
+    )
+    # The expensive report path must NOT run for an orphan check.
+    import silica.kernel.graph_report as gr
+
+    def _boom(*a, **k):
+        raise AssertionError("compute_report must not run for the orphan check")
+
+    monkeypatch.setattr(gr, "compute_report", _boom)
+
+    assert coord._current_orphans() == {_norm_path("Concepts/Lonely.md")}
+
+
 def test_coordinator_enqueues_only_residual_orphans_and_reverifies():
     cfg = SilicaConfig()
     cfg.subagents_enabled = True

@@ -86,7 +86,7 @@ The `action_hint` field is the Router's mechanical guess based on collision tier
 ## JSON Output Encoding Rules (CRITICAL — violations cause immediate rejection)
 - **Wikilinks**: NEVER include the `.md` extension inside `[[...]]`. Write `[[Note Title]]` not `[[Note Title.md]]` or `[[path/to/Note.md]]`. The `related` array and all body text follow the same rule.
 - **Vault vocabulary**: when a `## Vault vocabulary` section is present in your context, prefer those exact terms for note titles, headings and `concepts` keyphrases instead of coining synonyms — the vault already names these ideas.
-- **Backslash escaping in code**: When a `snippet` or `content` field contains source code with backslash escape sequences (e.g. Python `b'\n'`, `'\t'`, `'\x41'`, regex `r'\d+'`), you MUST double-escape the backslash in the JSON string so the sequence is preserved as-is in the output file. Write `b'\\n'` in JSON to produce `b'\n'` in the file. Failing to do so inserts a literal newline character into the code, which corrupts the block and fails the line-count linter gate.
+- **Note body goes OUTSIDE the JSON (Body Appendix)**: NEVER put the note body in a `"snippet"` (or `"content"`) JSON string. In the JSON, reference the body with an integer `"snippet_ref": N`; write the body itself verbatim in the Body Appendix (see Output Schema). Because the body is not a JSON string, you NEVER escape backslashes: write LaTeX and code with literal single backslashes exactly as they must appear in the file — `\top`, `\neq`, `\frac`, `\mathbb`, `\boldsymbol`, and matrix/aligned row breaks as `\\`. Use real line breaks, not `\n`.
 - **No self-referential links**: the `snippet` or `content` of a note for concept X must NOT contain `[[X]]` (a link back to itself). Self-links are meaningless in Obsidian's graph and will be stripped by the autolink gate anyway.
 - **Tag limit**: include at most **3 tags** per note. If the inbox excerpt suggests more, keep the 3 most specific/relevant ones and discard the rest.
 
@@ -117,9 +117,22 @@ Every `write` and `patch` op SHOULD carry a `"concepts"` array: 3–8 normalized
 - Omit `concepts` for `skip` ops.
 
 ## Output Schema
-Respond with ONLY the JSON object below. No prose preamble. No markdown fences (no ```json). No trailing commentary after the closing brace.
+Respond with ONLY the JSON object below, immediately followed by the Body Appendix. No prose preamble. No markdown fences (no ```json). Nothing after the closing brace EXCEPT the `===SILICA-BODY N===` appendix blocks.
 
 Your JSON MUST contain `"main_thematic_axes"` (3–5 short strings naming the pillars ACTUALLY discussed in the inbox excerpts) BEFORE `"updates"`. Populate the axes FIRST, reasoning from the excerpt bodies — NOT from isolated acronyms, wikilinks, or frontmatter.
+
+### Body Appendix (where note bodies go)
+Every `write`/`patch` op carries its body OUTSIDE the JSON. In the op, set `"snippet_ref": N` (N = 1, 2, 3… unique per op). `skip` ops have no body and no ref. After the JSON, append one block per ref:
+
+```
+<the JSON object>
+===SILICA-BODY 1===
+<body for snippet_ref 1, verbatim, single backslashes, real line breaks>
+===SILICA-BODY 2===
+<body for snippet_ref 2, verbatim>
+```
+
+Each `===SILICA-BODY N===` MUST be alone on its own line. The body text between markers is copied to the note as-is — do not JSON-escape anything in it. The wikilink rule (no `.md`), no-self-link rule, and Italian-prose requirement all still apply to body text.
 
 ## Few-Shot Example
 
@@ -163,7 +176,7 @@ Your JSON MUST contain `"main_thematic_axes"` (3–5 short strings naming the pi
   ]
 }
 
-### Example Output JSON (NO prose, NO markdown fences):
+### Example Output (NO prose, NO markdown fences — JSON, then the Body Appendix):
 {
   "main_thematic_axes": ["gradient-based optimization", "neural network training", "Python ML tooling"],
   "updates": [
@@ -174,7 +187,7 @@ Your JSON MUST contain `"main_thematic_axes"` (3–5 short strings naming the pi
       "source_basename": "Lezione 04.md",
       "linked_axis": "neural network training",
       "concepts": ["backpropagation", "loss gradient", "regola della catena", "discesa del gradiente"],
-      "snippet": "- Definizione formale: la backpropagation calcola il gradiente della funzione di perdita rispetto ai pesi tramite la regola della catena applicata ricorsivamente dallo strato di output verso l'input.\n- Formula del gradiente per il peso $w_{ij}^{(l)}$: $\\frac{\\partial \\mathcal{L}}{\\partial w_{ij}^{(l)}} = \\delta_j^{(l)} \\cdot a_i^{(l-1)}$"
+      "snippet_ref": 1
     },
     {
       "heading": "Algoritmi di Ottimizzazione: Adam Optimizer",
@@ -185,7 +198,7 @@ Your JSON MUST contain `"main_thematic_axes"` (3–5 short strings naming the pi
       "hub": "{HUB_NAME}",
       "linked_axis": "gradient-based optimization",
       "concepts": ["adam optimizer", "ottimizzazione stocastica", "momento adattivo", "RMSProp", "AdaGrad"],
-      "snippet": "Adam (Adaptive Moment Estimation) è un algoritmo di ottimizzazione stocastica che combina i vantaggi di AdaGrad e RMSProp mantenendo medie mobili sia del gradiente (primo momento) sia del suo quadrato (secondo momento).\n\n- Iperparametri tipici: $\\beta_1 = 0.9$, $\\beta_2 = 0.999$, $\\epsilon = 10^{-8}$"
+      "snippet_ref": 2
     },
     {
       "heading": "PIL",
@@ -195,6 +208,13 @@ Your JSON MUST contain `"main_thematic_axes"` (3–5 short strings naming the pi
     }
   ]
 }
+===SILICA-BODY 1===
+- Definizione formale: la backpropagation calcola il gradiente della funzione di perdita rispetto ai pesi tramite la regola della catena applicata ricorsivamente dallo strato di output verso l'input.
+- Formula del gradiente per il peso $w_{ij}^{(l)}$: $\frac{\partial \mathcal{L}}{\partial w_{ij}^{(l)}} = \delta_j^{(l)} \cdot a_i^{(l-1)}$
+===SILICA-BODY 2===
+Adam (Adaptive Moment Estimation) è un algoritmo di ottimizzazione stocastica che combina i vantaggi di AdaGrad e RMSProp mantenendo medie mobili sia del gradiente (primo momento) sia del suo quadrato (secondo momento).
+
+- Iperparametri tipici: $\beta_1 = 0.9$, $\beta_2 = 0.999$, $\epsilon = 10^{-8}$
 
 ### Example with `parent` field (only when ## Related Notes lists a valid parent candidate):
 Suppose `## Related Notes (candidates)` contains:
@@ -210,6 +230,6 @@ The distiller MAY emit:
   "hub": "{HUB_NAME}",
   "parent": "Reti Neurali",
   "linked_axis": "neural network training",
-  "snippet": "La backpropagation calcola il gradiente della loss tramite la regola della catena..."
+  "snippet_ref": 1
 }
-`parent` MUST be a bare title from the candidates list. Omit it entirely if no candidate is a meaningful parent — the system falls back to hub automatically.
+(with the body in `===SILICA-BODY 1===` as usual). `parent` MUST be a bare title from the candidates list. Omit it entirely if no candidate is a meaningful parent — the system falls back to hub automatically.

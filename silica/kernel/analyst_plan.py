@@ -32,18 +32,7 @@ Tier = Literal["auto", "propose", "escalate"]
 #   AMBIGUOUS  = conflicting / needs a human → escalate
 Confidence = Literal["EXTRACTED", "INFERRED", "AMBIGUOUS"]
 
-_TIER_BY_CONFIDENCE: dict[Confidence, Tier] = {
-    "EXTRACTED": "auto",
-    "INFERRED": "propose",
-    "AMBIGUOUS": "escalate",
-}
-
 _MISSING_LINK_TAU_HIGH = 0.85  # mirrors CONFIG.sim_threshold_high default
-
-
-def tier_for_confidence(confidence: Confidence) -> Tier:
-    """Map an edge's provenance to its tier — the single confidence→tier rule."""
-    return _TIER_BY_CONFIDENCE[confidence]
 
 
 def classify_missing_link(ml: "MissingLink", *, tau_high: float = _MISSING_LINK_TAU_HIGH) -> Confidence:

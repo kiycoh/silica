@@ -105,12 +105,17 @@ class Coordinator:
     # --- end-of-run orphan resolution -------------------------------------
 
     def _current_orphans(self) -> set[str]:
-        """Normalized set of notes currently orphaned in the target folder."""
+        """Normalized set of notes currently orphaned, from the driver graph.
+
+        Fix B: orphan status is just in-degree==0 — it needs no Louvain/PageRank.
+        ``DRIVER.orphans()`` reads the maintained graph directly (~sub-ms), where
+        the old ``compute_report`` rebuilt the whole report (~3.8s at 10k notes)
+        and this fires up to twice per run (enqueue + reverify).
+        """
         from silica.agent.bounds import _norm_path
         try:
-            from silica.kernel.graph_report import compute_report
-            report = compute_report(folder=getattr(self.fsm, "target_dir", "") or "")
-            return {_norm_path(o) for o in report.orphans}
+            from silica.driver import DRIVER
+            return {_norm_path(o.path) for o in DRIVER.orphans()}
         except Exception as e:
             logger.debug("orphan recompute failed (non-fatal): %s", e)
             return set()
@@ -126,15 +131,15 @@ class Coordinator:
         from silica.agent.bounds import _norm_path
         try:
             from silica.config import CONFIG
-            from silica.kernel.cooccurrence import CooccurStore
-            from silica.kernel.embed import EmbedStore
+            from silica.kernel.cooccurrence import get_cooccur_store
+            from silica.kernel.embed import get_store
             from silica.kernel.relatedness import related_notes
 
             key = _norm_path(path)
             results = related_notes(
                 key,
-                embed_store=EmbedStore(),
-                cooccur_store=CooccurStore(lang=CONFIG.cooccurrence_lang),
+                embed_store=get_store(),
+                cooccur_store=get_cooccur_store(lang=CONFIG.cooccurrence_lang),
                 k=k,
             )
             return [{"name": r.name, "path": r.path} for r in results]

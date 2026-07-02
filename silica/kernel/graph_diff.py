@@ -1,5 +1,4 @@
 import logging
-from typing import Any
 from silica.driver.base import GraphSnapshot, NoteRef
 
 logger = logging.getLogger(__name__)
@@ -132,71 +131,3 @@ def check_graph_regression(
             
     success = len(errors) == 0
     return success, errors
-
-
-def _build_undirected(nodes: list[dict], edges: list[dict]) -> Any:
-    import networkx as nx
-    real_ids = {n["id"] for n in nodes if n.get("type") != "ghost"}
-    G = nx.Graph()
-    G.add_nodes_from(real_ids)
-    for e in edges:
-        if e.get("type") == "EXTRACTED" and e["from"] in real_ids and e["to"] in real_ids:
-            G.add_edge(e["from"], e["to"])
-    return G
-
-
-def check_hub_protection(
-    pre_nodes_edges: tuple[list[dict], list[dict]],
-    post_nodes_edges: tuple[list[dict], list[dict]],
-    *,
-    threshold: float = 0.25,
-) -> tuple[bool, list[str]]:
-    """Gate: block writes that decrease any hub node's betweenness centrality by > threshold.
-
-    A hub is any node present in both pre and post graphs. Protection fires
-    only when betweenness *decreases* (hub degradation) — increases are allowed
-    (new hubs are fine). Uses normalized betweenness so threshold is in [0, 1].
-
-    Args:
-        pre_nodes_edges: (nodes, edges) snapshot before the write.
-        post_nodes_edges: (nodes, edges) snapshot after the write.
-        threshold: maximum allowed absolute decrease in normalized betweenness.
-
-    Returns:
-        (ok, errors) — ok=False means the write should be blocked.
-    """
-    import networkx as nx
-
-    pre_nodes, pre_edges = pre_nodes_edges
-    post_nodes, post_edges = post_nodes_edges
-
-    if not pre_nodes and not post_nodes:
-        return True, []
-
-    G_pre = _build_undirected(pre_nodes, pre_edges)
-    G_post = _build_undirected(post_nodes, post_edges)
-
-    # Compute betweenness on the shared-node subgraph so that adding
-    # disconnected new nodes does not shift the normalization denominator.
-    shared_nodes = set(G_pre.nodes()) & set(G_post.nodes())
-    G_pre_sub = G_pre.subgraph(shared_nodes)
-    G_post_sub = G_post.subgraph(shared_nodes)
-
-    bc_pre: dict[str, float] = (
-        nx.betweenness_centrality(G_pre_sub)
-        if G_pre_sub.number_of_nodes() > 1 else {n: 0.0 for n in G_pre_sub.nodes()}
-    )
-    bc_post: dict[str, float] = (
-        nx.betweenness_centrality(G_post_sub)
-        if G_post_sub.number_of_nodes() > 1 else {n: 0.0 for n in G_post_sub.nodes()}
-    )
-
-    errors: list[str] = []
-    for node in sorted(shared_nodes):
-        delta = bc_post.get(node, 0.0) - bc_pre.get(node, 0.0)
-        if delta < -threshold:
-            errors.append(
-                f"Hub '{node}' betweenness dropped {-delta:.3f} > threshold {threshold}"
-            )
-
-    return len(errors) == 0, errors

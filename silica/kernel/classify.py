@@ -23,6 +23,7 @@ from __future__ import annotations
 
 import logging
 import os
+from collections import Counter
 from dataclasses import dataclass, field
 from typing import Any
 
@@ -81,11 +82,9 @@ def _read_body(note_path: str) -> str | None:
 def _stems_from_body(body: str, lang: str) -> dict[str, int]:
     """Tokenize a note body into {stem: count} (same pipeline as the cooccur index)."""
     from silica.kernel.cooccurrence import tokenize
-    counts: dict[str, int] = {}
-    for sentence in tokenize(body, lang=lang):
-        for stem, _surface in sentence:
-            counts[stem] = counts.get(stem, 0) + 1
-    return counts
+    return dict(Counter(
+        stem for sentence in tokenize(body, lang=lang) for stem, _surface in sentence
+    ))
 
 
 def _extract_year(val: Any) -> int | None:
@@ -365,8 +364,8 @@ def classify_notes(
     # Load co-occurrence store
     if cooccur_store is None:
         try:
-            from silica.kernel.cooccurrence import CooccurStore
-            cooccur_store = CooccurStore()
+            from silica.kernel.cooccurrence import get_cooccur_store
+            cooccur_store = get_cooccur_store()
         except Exception as exc:
             logger.warning("classify: CooccurStore unavailable (%s) — using empty index", exc)
             cooccur_store = None

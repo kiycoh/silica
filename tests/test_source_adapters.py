@@ -18,9 +18,6 @@ class _Dummy:
     def to_stub(self, item: RawItem) -> GroundedStub:
         return GroundedStub(lane="distill", body=item.text)
 
-    def staleness(self, note_path: str) -> str:
-        return "fresh"
-
 
 def test_conforming_adapter_satisfies_protocol():
     assert isinstance(_Dummy(), SourceAdapter)
@@ -60,12 +57,11 @@ def test_prose_read_is_total_on_missing_file(tmp_path, monkeypatch):
     assert item.text == ""  # soft: dispatch must not block a batch on one bad path
 
 
-def test_prose_stub_takes_distill_lane_and_is_always_fresh(tmp_path, monkeypatch):
+def test_prose_stub_takes_distill_lane(tmp_path, monkeypatch):
     monkeypatch.setattr(CONFIG, "vault_path", str(tmp_path))
     (tmp_path / "a.md").write_text("x", encoding="utf-8")
     stub = PROSE.to_stub(PROSE.read("a.md"))
     assert stub.lane == "distill"
-    assert PROSE.staleness("a.md") == "fresh"
 
 
 import subprocess
@@ -110,24 +106,6 @@ def test_code_stub_is_terminal_with_grounding(code_repo):
     assert stub.note_path == "Inbox/m.md"
     assert "documents:" in stub.body and "code_ref:" in stub.body
     assert "def hi()" in stub.body and "return 1" not in stub.body  # skeleton, never full source
-
-
-def test_code_staleness_tracks_git(code_repo):
-    from silica.driver import fs_backend
-    import silica.driver as driver_mod
-    from silica.sources.code import CODE
-
-    root, vault = code_repo
-    driver = fs_backend.ObsidianFSBackend(str(vault))
-    item = CODE.read("m.py")
-    stub = CODE.to_stub(item)
-    driver.create(stub.note_path, stub.body)
-    assert CODE.staleness(stub.note_path) == "fresh"
-
-    (root / "m.py").write_text("def hi():\n    return 2\n", encoding="utf-8")
-    subprocess.run(["git", "add", "-A"], cwd=root, check=True)
-    subprocess.run(["git", "commit", "-q", "-m", "change"], cwd=root, check=True)
-    assert CODE.staleness(stub.note_path) == "stale"
 
 
 def test_adapter_for_dispatch():

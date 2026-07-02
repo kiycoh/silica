@@ -1,4 +1,4 @@
-"""Tests for kernel/taxonomy.py — schema validation and best_folder() scoring."""
+"""Tests for kernel/taxonomy.py — schema validation."""
 from __future__ import annotations
 
 import textwrap
@@ -93,72 +93,6 @@ class TestTaxonomyValidation:
         assert t.uncategorized == "Agenti Autonomi/Uncategorized"
         assert t.rules[0].folder == "Agenti Autonomi/DeepSeek"
         assert t.rules[1].folder == "Agenti Autonomi/OpenAI"
-
-
-# ---------------------------------------------------------------------------
-# best_folder() scoring
-# ---------------------------------------------------------------------------
-
-class TestBestFolder:
-    @pytest.fixture
-    def taxonomy(self) -> Taxonomy:
-        return Taxonomy(
-            rules=[
-                FolderRule(
-                    folder="Concepts/AI",
-                    themes=["machine learning", "deep learning", "neural networks"],
-                    keywords=["LLM", "GPT"],
-                ),
-                FolderRule(
-                    folder="Concepts/Math",
-                    themes=["linear algebra", "calculus", "statistics"],
-                    keywords=[],
-                ),
-                FolderRule(
-                    folder="Life/Cooking",
-                    themes=["cooking", "recipe", "food"],
-                    keywords=["risotto"],
-                ),
-            ],
-            uncategorized="Misc",
-        )
-
-    def test_keyword_hit_wins(self, taxonomy: Taxonomy):
-        folder, score = taxonomy.best_folder(themes=[], title="My LLM experiments")
-        assert folder == "Concepts/AI"
-        assert score >= 0.4
-
-    def test_theme_overlap_wins(self, taxonomy: Taxonomy):
-        folder, score = taxonomy.best_folder(
-            themes=["machine learning", "neural networks"], title="A study note"
-        )
-        assert folder == "Concepts/AI"
-        assert score > 0.0
-
-    def test_uncategorized_when_no_match(self, taxonomy: Taxonomy):
-        folder, score = taxonomy.best_folder(themes=[], title="random note")
-        assert folder == "Misc"
-        assert score == 0.0
-
-    def test_multiple_keyword_hits_capped(self, taxonomy: Taxonomy):
-        folder, score = taxonomy.best_folder(themes=[], title="GPT and LLM papers")
-        assert folder == "Concepts/AI"
-        assert score <= 1.0
-
-    def test_cooking_theme_match(self, taxonomy: Taxonomy):
-        folder, score = taxonomy.best_folder(themes=["cooking", "food"], title="dinner ideas")
-        assert folder == "Life/Cooking"
-        assert score > 0.0
-
-    def test_empty_taxonomy_returns_uncategorized(self):
-        empty = Taxonomy(uncategorized="Other")
-        folder, score = empty.best_folder(themes=["ai", "ml"])
-        assert folder == "Other"
-        assert score == 0.0
-
-    def test_folder_for_convenience(self, taxonomy: Taxonomy):
-        folder = taxonomy.folder_for(themes=[], title="LLM benchmark")
-        assert folder == "Concepts/AI"
 
 
 # ---------------------------------------------------------------------------

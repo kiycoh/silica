@@ -109,52 +109,6 @@ class Taxonomy(BaseModel):
         with open(path, "w", encoding="utf-8") as fh:
             yaml.dump(doc, fh, allow_unicode=True, sort_keys=False, default_flow_style=False)
 
-    # --- Matching ---
-
-    def best_folder(self, themes: list[str], title: str = "") -> tuple[str, float]:
-        """Return (folder, score) for the best-matching rule.
-
-        Scoring (additive, capped at 1.0):
-          - Keyword exact match in title → +0.4 per keyword hit (capped at 0.8)
-          - Theme overlap: proportion of rule themes matching concept set → [0, 0.6]
-
-        Returns (uncategorized, 0.0) when no rule matches at all.
-        """
-        if not self.rules:
-            return self.uncategorized, 0.0
-
-        concept_set = frozenset(t.lower() for t in themes)
-        title_lower = title.lower()
-
-        best_folder = self.uncategorized
-        best_score = 0.0
-
-        for rule in self.rules:
-            score = 0.0
-
-            # Keyword hits in title
-            kw_hits = sum(1 for k in rule.keyword_set() if k in title_lower)
-            score += min(kw_hits * 0.4, 0.8)
-
-            # Theme overlap: what fraction of the rule's themes appear in concept_set?
-            if rule.themes:
-                rule_themes_lower = frozenset(t.lower() for t in rule.themes)
-                overlap = len(concept_set & rule_themes_lower)
-                # Partial credit: any single matching theme already scores 0.3
-                theme_score = overlap / len(rule_themes_lower) * 0.6 if overlap > 0 else 0.0
-                score += theme_score
-
-            if score > best_score:
-                best_score = score
-                best_folder = rule.folder
-
-        return best_folder, round(best_score, 4)
-
-    def folder_for(self, themes: list[str], title: str = "") -> str:
-        """Convenience: return only the folder name (no score)."""
-        folder, _ = self.best_folder(themes, title=title)
-        return folder
-
 
 # ---------------------------------------------------------------------------
 # Default taxonomy path helper

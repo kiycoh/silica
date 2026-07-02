@@ -16,6 +16,62 @@ from typing import Any, Protocol, runtime_checkable
 
 
 # ---------------------------------------------------------------------------
+# Mention-index matching (shared by both backends — Fix 4 / scaling C)
+# ---------------------------------------------------------------------------
+# A title trie walked only from word-boundary positions. Building the mention
+# index is then O(total body text), independent of how title first-words cluster
+# (the first-word bucket it replaced degraded to ~15-70s at 10k when many titles
+# shared a first word that also appears in bodies). Semantics are unchanged: a
+# title matches when it occurs as a substring STARTING at a word boundary — so
+# morphology/suffix recall is kept (title "Network" still matches body word
+# "networks") while mid-word false positives ("ros" inside "across") are dropped.
+# cli_backend mirrors this exact trie walk in JS for its bulk build.
+
+_TITLE = "\x00"  # trie terminal key (marks a complete title; cannot occur in text)
+
+
+def _is_word_char(c: str) -> bool:
+    return ("a" <= c <= "z") or ("0" <= c <= "9")
+
+
+def build_title_trie(title_lowers: Any) -> dict:
+    """Char trie of titles (length >= 2). Terminal nodes hold the full title."""
+    root: dict = {}
+    for title_lower in title_lowers:
+        if len(title_lower) < 2:
+            continue
+        node = root
+        for ch in title_lower:
+            node = node.setdefault(ch, {})
+        node[_TITLE] = title_lower
+    return root
+
+
+def mentions_in(content_lower: str, trie: dict) -> set[str]:
+    """Titles occurring in a body as a substring beginning at a word boundary."""
+    found: set[str] = set()
+    n = len(content_lower)
+    for i in range(n):
+        # Only start a walk at a word boundary (start of a body word).
+        if not _is_word_char(content_lower[i]):
+            continue
+        if i and _is_word_char(content_lower[i - 1]):
+            continue
+        node = trie
+        j = i
+        while j < n:
+            nxt = node.get(content_lower[j])
+            if nxt is None:
+                break
+            node = nxt
+            title = node.get(_TITLE)
+            if title is not None:
+                found.add(title)
+            j += 1
+    return found
+
+
+# ---------------------------------------------------------------------------
 # Domain types & Exceptions
 # ---------------------------------------------------------------------------
 
@@ -105,6 +161,41 @@ class Txn:
                 except Exception:
                     pass
         return serialized
+
+
+# ---------------------------------------------------------------------------
+# GraphIndexMixin — helpers shared verbatim by both backends
+# ---------------------------------------------------------------------------
+
+class GraphIndexMixin:
+    """Graph-index helpers shared by the fs and cli backends.
+
+    Subclasses build the in-memory index in ``_ensure_graph()`` and expose
+    the ``_notes``/``_mention_index``/``_unresolved_links``/``_graph``
+    attributes it populates.
+    """
+
+    def _ensure_graph(self) -> None:
+        raise NotImplementedError
+
+    def _node_ref(self, path: str) -> NoteRef:
+        if path in self._notes:
+            return self._notes[path]
+        name = path.rsplit("/", 1)[-1].removesuffix(".md")
+        return NoteRef(name=name, path=path)
+
+    def mentions_of(self, title: str) -> list[str]:
+        """Return vault-relative paths of notes whose body mentions `title`.
+
+        O(1) lookup into the inverted text index built during indexing.
+        """
+        self._ensure_graph()
+        return list(self._mention_index.get(title.lower(), set()))
+
+    def graph_data(self, folder: str = "") -> tuple[dict, set, Any]:
+        """Return (notes, unresolved_links, graph) for in-process consumers."""
+        self._ensure_graph()
+        return self._notes, self._unresolved_links, self._graph
 
 
 # ---------------------------------------------------------------------------

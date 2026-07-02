@@ -243,9 +243,9 @@ def detect_communities(nodes: list[dict], edges: list[dict]) -> list[Community]:
     # Fetch community labels from the co-occurrence index; degrade to {} on any failure.
     # Member ids carry '.md'; CooccurStore.note_nodes normalises via cooccur_key, so
     # no manual strip is needed here (single source of truth for the key).
-    from silica.kernel.cooccurrence import CooccurStore
+    from silica.kernel.cooccurrence import get_cooccur_store
     try:
-        labels = CooccurStore().community_labels([set(c) for c in communities])
+        labels = get_cooccur_store().community_labels([set(c) for c in communities])
     except Exception:
         labels = {}
 

@@ -74,13 +74,6 @@ class SilicaConfig:
     )
 
 
-    # Execution caps — bound how far a sub-agent can move before the framework stops it.
-    subagent_max_turns: int = field(
-        default_factory=lambda: int(os.getenv("SILICA_SUBAGENT_MAX_TURNS", "6"))
-    )
-    subagent_timeout_s: float = field(
-        default_factory=lambda: float(os.getenv("SILICA_SUBAGENT_TIMEOUT_S", "120"))
-    )
     subagent_max_concurrent: int = field(
         default_factory=lambda: int(os.getenv("SILICA_SUBAGENT_MAX_CONCURRENT", "3"))
     )
@@ -152,11 +145,6 @@ class SilicaConfig:
     # Mostra i blocchi di reasoning del modello (toggle a runtime con /thinking)
     show_thinking: bool = field(
         default_factory=lambda: os.getenv("SILICA_SHOW_THINKING", "True").lower() in ("true", "1", "t")
-    )
-
-    # Font pyfiglet del banner di avvio
-    banner_font: str = field(
-        default_factory=lambda: os.getenv("SILICA_BANNER_FONT", "tarty1")
     )
 
     # Runtime session state — updated by cli.py after each agent turn
@@ -234,19 +222,6 @@ class SilicaConfig:
     # would lose concepts permanently. Turn ON only with a real, occasionally-flaky embedder.
     defer_uncorroborated_concepts: bool = field(
         default_factory=lambda: os.getenv("SILICA_DEFER_UNCORROBORATED", "False").lower() in ("true", "1", "t")
-    )
-
-    # Image handling mode:
-    #   strip (default) — remove image embeds from text before embedding / LLM context
-    #   vlm             — replace embeds with VLM-generated descriptions (requires vlm_model)
-    image_mode: Literal["strip", "vlm"] = field(
-        default_factory=lambda: os.getenv("SILICA_IMAGE_MODE", "strip")  # type: ignore
-    )
-
-    # VLM model used when image_mode="vlm" (litellm model string).
-    # Example: "openai/gpt-4o-mini", "openrouter/google/gemini-flash-1.5"
-    vlm_model: str = field(
-        default_factory=lambda: os.getenv("SILICA_VLM_MODEL", "")
     )
 
     # Hard timeout (seconds) for each individual Obsidian CLI subprocess call.

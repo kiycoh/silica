@@ -12,14 +12,7 @@ from silica.kernel.analyst_plan import (
     build_task_plan,
     classify_autolink,
     classify_missing_link,
-    tier_for_confidence,
 )
-
-
-def test_tier_for_confidence_maps_provenance_to_tier() -> None:
-    assert tier_for_confidence("EXTRACTED") == "auto"
-    assert tier_for_confidence("INFERRED") == "propose"
-    assert tier_for_confidence("AMBIGUOUS") == "escalate"
 
 
 def test_classify_missing_link_extracted_when_graph_corroborates() -> None:

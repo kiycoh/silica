@@ -504,8 +504,7 @@ def _handle_direct_shortcut(raw_input: str, messages: list[dict]) -> bool:
                 CONSOLE.print(f"  [yellow]{parsed['error']}[/]")
             else:
                 scope = parsed.get("pairs_found", parsed.get("notes", parsed.get("items", 0)))
-                noun = "pair(s)" if cmd == "/dedup" else "note(s)"
-                CONSOLE.print(f"  Processed [bold]{scope}[/] {noun} — outcomes: {parsed.get('summary', {})}")
+                CONSOLE.print(f"  Processed [bold]{scope}[/] pair(s) — outcomes: {parsed.get('summary', {})}")
         except Exception:
             CONSOLE.print(result)
         return True

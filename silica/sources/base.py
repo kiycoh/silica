@@ -16,8 +16,6 @@ from typing import Any, Literal, Protocol, runtime_checkable
 # "distill" = full Injector FSM pipeline. The adapter decides, in to_stub.
 Lane = Literal["terminal", "distill"]
 
-Staleness = Literal["fresh", "stale", "unknown"]
-
 
 @dataclass(frozen=True)
 class RawItem:
@@ -49,5 +47,3 @@ class SourceAdapter(Protocol):
     def read(self, target: str) -> RawItem: ...
 
     def to_stub(self, item: RawItem) -> GroundedStub: ...
-
-    def staleness(self, note_path: str) -> Staleness: ...

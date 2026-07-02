@@ -21,6 +21,7 @@ from pathlib import Path
 from typing import Any, Literal
 
 import orjson
+from pydantic import TypeAdapter
 
 TaskStatus = Literal["pending", "running", "done", "failed", "skipped", "blocked", "deferred"]
 PlanStepKind = Literal["mechanical", "semantic", "gate", "txn"]
@@ -28,6 +29,15 @@ PlanStepKind = Literal["mechanical", "semantic", "gate", "txn"]
 _RUNS_DIR = Path.home() / ".silica" / "runs"
 
 logger = logging.getLogger(__name__)
+
+
+def _save_json(obj: Any, filename: str) -> Path:
+    """Serialise a run-scoped dataclass to ~/.silica/runs/<run_id>/<filename>."""
+    run_dir = _RUNS_DIR / obj.run_id
+    run_dir.mkdir(parents=True, exist_ok=True)
+    path = run_dir / filename
+    path.write_bytes(orjson.dumps(dataclasses.asdict(obj), option=orjson.OPT_INDENT_2))
+    return path
 
 
 # ---------------------------------------------------------------------------
@@ -50,10 +60,10 @@ class PlanStep:
 class TaskLedger:
     """Immutable run plan — created at FSM init, written once, never overwritten."""
     run_id: str
-    user_request: str
-    checkpoints: list[PlanStep]
-    facts: dict[str, Any]
-    created_at: str
+    user_request: str = ""
+    checkpoints: list[PlanStep] = field(default_factory=list)
+    facts: dict[str, Any] = field(default_factory=dict)
+    created_at: str = ""
 
     # ------------------------------------------------------------------
     # Factory
@@ -81,21 +91,15 @@ class TaskLedger:
 
     def save(self) -> Path:
         """Write to disk only if the file does not yet exist (immutable semantics)."""
-        run_dir = _RUNS_DIR / self.run_id
-        run_dir.mkdir(parents=True, exist_ok=True)
-        path = run_dir / "task_ledger.json"
+        path = _RUNS_DIR / self.run_id / "task_ledger.json"
         if path.exists():
             return path  # already written — do not overwrite
-        path.write_bytes(
-            orjson.dumps(dataclasses.asdict(self), option=orjson.OPT_INDENT_2)
-        )
-        return path
+        return _save_json(self, "task_ledger.json")
 
     @classmethod
     def load(cls, run_id: str) -> TaskLedger:
         path = _RUNS_DIR / run_id / "task_ledger.json"
-        data = orjson.loads(path.read_bytes())
-        return _task_ledger_from_dict(data)
+        return TypeAdapter(cls).validate_python(orjson.loads(path.read_bytes()))
 
 
 # ---------------------------------------------------------------------------
@@ -129,18 +133,12 @@ class RunManifest:
         return [e.title for e in self.entries]
 
     def save(self) -> Path:
-        run_dir = _RUNS_DIR / self.run_id
-        run_dir.mkdir(parents=True, exist_ok=True)
-        path = run_dir / "manifest.json"
-        path.write_bytes(orjson.dumps(dataclasses.asdict(self), option=orjson.OPT_INDENT_2))
-        return path
+        return _save_json(self, "manifest.json")
 
     @classmethod
     def load(cls, run_id: str) -> "RunManifest":
         path = _RUNS_DIR / run_id / "manifest.json"
-        data = orjson.loads(path.read_bytes())
-        entries = [RunManifestEntry(**e) for e in data.get("entries", [])]
-        return cls(run_id=data["run_id"], entries=entries)
+        return TypeAdapter(cls).validate_python(orjson.loads(path.read_bytes()))
 
     def digest_section(self, max_items: int = 30) -> str:
         """Compact '## Already injected' section for the LLM context (< 500 tokens)."""
@@ -199,7 +197,7 @@ class ProgressLedger:
     mode: str
     started_at: str          # ISO-8601 UTC
     last_updated: str        # ISO-8601 UTC
-    inputs: dict[str, Any]
+    inputs: dict[str, Any] = field(default_factory=dict)
     tasks: list[Task] = field(default_factory=list)
     issues: list[IssueCard] = field(default_factory=list)
     cursor: str | None = None  # task_id currently running
@@ -468,17 +466,12 @@ class ProgressLedger:
     # ------------------------------------------------------------------
 
     def save(self) -> Path:
-        run_dir = _RUNS_DIR / self.run_id
-        run_dir.mkdir(parents=True, exist_ok=True)
-        path = run_dir / "ledger.json"
-        path.write_bytes(orjson.dumps(dataclasses.asdict(self), option=orjson.OPT_INDENT_2))
-        return path
+        return _save_json(self, "ledger.json")
 
     @classmethod
     def load(cls, run_id: str) -> ProgressLedger:
         path = _RUNS_DIR / run_id / "ledger.json"
-        data = orjson.loads(path.read_bytes())
-        return _from_dict(data)
+        return TypeAdapter(cls).validate_python(orjson.loads(path.read_bytes()))
 
     # ------------------------------------------------------------------
     # Internal helpers
@@ -650,29 +643,3 @@ def latest_run_id() -> str | None:
 
 def _now() -> str:
     return datetime.now(timezone.utc).isoformat()
-
-
-def _from_dict(data: dict[str, Any]) -> ProgressLedger:
-    tasks = [Task(**t) for t in data.get("tasks", [])]
-    issues = [IssueCard(**i) for i in data.get("issues", [])]
-    return ProgressLedger(
-        run_id=data["run_id"],
-        mode=data["mode"],
-        started_at=data["started_at"],
-        last_updated=data["last_updated"],
-        inputs=data.get("inputs", {}),
-        tasks=tasks,
-        issues=issues,
-        cursor=data.get("cursor"),
-    )
-
-
-def _task_ledger_from_dict(data: dict[str, Any]) -> TaskLedger:
-    checkpoints = [PlanStep(**c) for c in data.get("checkpoints", [])]
-    return TaskLedger(
-        run_id=data["run_id"],
-        user_request=data.get("user_request", ""),
-        checkpoints=checkpoints,
-        facts=data.get("facts", {}),
-        created_at=data.get("created_at", ""),
-    )

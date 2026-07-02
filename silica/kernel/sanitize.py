@@ -1,6 +1,8 @@
 import json
 import re
 
+from silica.kernel.latex import replace_outside_math
+
 # Matches [[any/path/to/Note.md]] or [[Note.md]] (with optional #anchor and |alias)
 _MD_EXT_WIKILINK_RE = re.compile(
     r'\[\[([^\]#|]+?)\.md((?:#[^\]#|]*)?)(\|[^\]]*)?\]\]',
@@ -67,8 +69,8 @@ def normalize_ops(ops: list) -> list:
                 if "\\n" in val:
                     parts = val.split("```")
                     for i in range(len(parts)):
-                        if i % 2 == 0:  # prose part
-                            parts[i] = parts[i].replace("\\n", "\n")
+                        if i % 2 == 0:  # prose part — but never inside math spans
+                            parts[i] = replace_outside_math(parts[i], "\\n", "\n")
                     val = "```".join(parts)
                 val = strip_degenerate_runs(val)
                 val = collapse_nested_wikilinks(val)
@@ -90,7 +92,64 @@ def normalize_ops(ops: list) -> list:
     return cleaned
 
 
+# Bodies carried outside the JSON string, keyed by integer ref. Line-anchored,
+# non-prose sentinel so distilled markdown/LaTeX won't collide with it.
+# ponytail: collides only if a body literally contains a `===SILICA-BODY N===`
+# line — vanishingly rare; upgrade the sentinel if it ever surfaces.
+_BODY_MARKER = re.compile(r"^===SILICA-BODY (\d+)===$", re.MULTILINE)
+
+
+def extract_body_appendix(raw: str) -> tuple[str, dict[int, str]]:
+    """Split a `<json>\\n===SILICA-BODY N===\\n<body>...` payload.
+
+    Returns the JSON text (everything before the first marker) and a {ref: body}
+    map. Bodies are verbatim — no JSON unescaping ever touches them, so LaTeX
+    backslashes survive (`\\top` stays `\\top`, never decodes to a TAB). No
+    markers → (raw, {}), i.e. legacy single-blob JSON output is untouched.
+    """
+    markers = list(_BODY_MARKER.finditer(raw))
+    if not markers:
+        return raw, {}
+    json_text = raw[: markers[0].start()]
+    bodies: dict[int, str] = {}
+    for i, m in enumerate(markers):
+        start = m.end()
+        if raw[start : start + 1] == "\n":
+            start += 1  # drop the newline ending the marker line
+        end = markers[i + 1].start() if i + 1 < len(markers) else len(raw)
+        body = raw[start:end]
+        if body.endswith("\n"):
+            body = body[:-1]  # drop the newline preceding the next marker
+        bodies[int(m.group(1))] = body
+    return json_text, bodies
+
+
+def _resolve_op_refs(op, bodies: dict[int, str]) -> None:
+    if not isinstance(op, dict):
+        return
+    for ref_key, field in (("snippet_ref", "snippet"), ("content_ref", "content")):
+        if ref_key in op:
+            ref = op.pop(ref_key)
+            if isinstance(ref, int) and ref in bodies:
+                op[field] = bodies[ref]
+
+
+def _inject_external_bodies(parsed, bodies: dict[int, str]) -> None:
+    """Replace `snippet_ref`/`content_ref` ints with their external body string."""
+    if isinstance(parsed, list):
+        ops = parsed
+    elif isinstance(parsed, dict) and isinstance(parsed.get("updates"), list):
+        ops = parsed["updates"]
+    elif isinstance(parsed, dict):
+        ops = [parsed]
+    else:
+        return
+    for op in ops:
+        _resolve_op_refs(op, bodies)
+
+
 def parse_json(raw: str, strict: bool = False):
+    raw, _bodies = extract_body_appendix(raw)
     cleaned = raw.strip()
     if cleaned.startswith('\ufeff'):
         cleaned = cleaned[1:]
@@ -144,5 +203,8 @@ def parse_json(raw: str, strict: bool = False):
 
     if strict and not was_strict_clean:
         raise ValueError("Strict mode violation: markdown fences, preambles, or postambles were stripped from the output.")
+
+    if _bodies:
+        _inject_external_bodies(parsed, _bodies)
 
     return parsed, was_strict_clean

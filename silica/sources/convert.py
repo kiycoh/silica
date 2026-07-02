@@ -42,10 +42,9 @@ def convert(target: str, dest_dir: str = "") -> str:
     ``<inbox>/Images``. The note itself always lands in the inbox (distill
     reads from there).
     """
-    fn = _CONVERTERS.get(Path(target).suffix.lower())
-    if fn is None:
+    if Path(target).suffix.lower() != ".pdf":
         raise ValueError(f"no converter for {Path(target).suffix.lower() or 'this file type'}")
-    return fn(target, dest_dir)
+    return _pdf_to_md(target, dest_dir)
 
 
 def _pdf_to_md(target: str, dest_dir: str) -> str:
@@ -102,7 +101,6 @@ def _pdf_via_mineru(src: Path, workdir: Path) -> tuple[str, Path]:
 
 
 _PDF_PROVIDERS = {"pymupdf4llm": _pdf_via_pymupdf4llm, "mineru": _pdf_via_mineru}
-_CONVERTERS = {".pdf": _pdf_to_md}
 
 
 # --- shared helpers ---------------------------------------------------------

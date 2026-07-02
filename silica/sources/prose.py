@@ -12,7 +12,7 @@ from pathlib import Path
 
 from silica.config import CONFIG
 from silica.kernel.sanitize import strip_degenerate_runs
-from silica.sources.base import GroundedStub, RawItem, Staleness
+from silica.sources.base import GroundedStub, RawItem
 
 _EXTS = (".md", ".txt")
 
@@ -36,9 +36,6 @@ class ProseAdapter:
 
     def to_stub(self, item: RawItem) -> GroundedStub:
         return GroundedStub(lane="distill", body=item.text)
-
-    def staleness(self, note_path: str) -> Staleness:
-        return "fresh"  # native prose has no external source to drift from
 
 
 PROSE = ProseAdapter()

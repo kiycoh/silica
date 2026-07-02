@@ -5,6 +5,7 @@ No LLM, no git. Status outside the enum is ignored here (the linter warns).
 """
 from __future__ import annotations
 
+from collections import Counter
 from pathlib import Path
 
 from silica.kernel import frontmatter
@@ -31,9 +32,5 @@ def iter_plan_notes(vault: Path | str):
 
 def status_counts(vault: Path | str) -> dict[str, int]:
     """Count plans per valid status. Empty dict when there are no plans."""
-    counts: dict[str, int] = {}
-    for _, data in iter_plan_notes(vault):
-        status = str(data.get("status") or "").strip()
-        if status in VALID_STATUS:
-            counts[status] = counts.get(status, 0) + 1
-    return counts
+    statuses = (str(data.get("status") or "").strip() for _, data in iter_plan_notes(vault))
+    return dict(Counter(s for s in statuses if s in VALID_STATUS))

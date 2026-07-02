@@ -166,11 +166,52 @@ def handle_snapshot(fsm: "InjectorFSM") -> None:
     fsm._transition_success()
 
 
+def _attach_section_images(fsm: "InjectorFSM", ops: list) -> None:
+    """Re-attach source images to the notes distilled from their section.
+
+    The distiller never saw these embeds (media.preprocess_text strips them from
+    its payload), so the produced notes would otherwise lose every figure. Here
+    we read the chunk's raw source file and, for each new/patched note, append
+    the images from the section whose heading matches the note's concept — the
+    same heading→section join payload.py uses to build the excerpt.
+    """
+    # One source file per chunk (same derivation as HUB_UPDATE below).
+    _fi, _ci = fsm._chunk_flat_to_fi_ci.get(fsm._current_chunk_idx, (0, 0))
+    source_file = (
+        fsm._file_chunks[_fi]["source_file"]
+        if fsm._file_chunks and _fi < len(fsm._file_chunks)
+        else fsm.inbox_file
+    )
+    if not source_file:
+        return
+    try:
+        source = orch.DRIVER.read_note(source_file).content or ""
+    except Exception:
+        return
+    if "![" not in source:  # fast bail: no embeds at all
+        return
+    from silica.kernel.media import append_section_images
+    for op in ops:
+        if op.op not in (OpType.write, OpType.patch):
+            continue
+        path = op.touched_ref()
+        if not path:
+            continue
+        # ponytail: overwrite (collision-enrich) ops left alone — re-attaching to
+        # a rewritten vault note risks dupes; handle if it ever bites.
+        concept = os.path.splitext(os.path.basename(path))[0]
+        op.snippet = append_section_images(op.snippet or "", source, concept)
+
+
 def handle_write(fsm: "InjectorFSM") -> None:
     from silica.kernel.atomic_write import bulk_write_atomic
     fsm._progress_note(fsm._chunk_task_id("write"), "write", "running")
 
     ops = orch.load_ops(fsm._chunk_ctx["ops_path"])
+    try:
+        _attach_section_images(fsm, ops)
+    except Exception as _ie:
+        logger.debug("WRITE: image re-attach skipped (%s)", _ie)
     result = bulk_write_atomic(ops, hub=fsm.hub, lint=True)
 
     # Accumulate surviving notes' inverses for the undo journal (recorded at
@@ -255,9 +296,9 @@ def handle_write(fsm: "InjectorFSM") -> None:
         # Best-effort incremental embed index refresh
         try:
             from silica.agent.providers import get_embedder
-            from silica.kernel.embed import EmbedStore, refresh_note
+            from silica.kernel.embed import get_store, refresh_note
             embedder = get_embedder(orch.CONFIG)
-            store = EmbedStore()
+            store = get_store()
             for op in ops:
                 path = op.touched_ref()
                 if op.op not in (OpType.write, OpType.patch) or not path:
@@ -268,7 +309,12 @@ def handle_write(fsm: "InjectorFSM") -> None:
                 idx_path = path.removesuffix(".md")
                 try:
                     body = orch.DRIVER.read_note(path).content or ""
-                    refresh_note(embedder, idx_path, stem, body, store=store)
+                    # Fix A: defer the whole-index write to a single end-of-run
+                    # flush (_run_loop); upsert into the shared in-memory store only.
+                    refresh_note(embedder, idx_path, stem, body, store=store, save=False)
+                    # Mark the in-memory index dirty so the end-of-run flush knows
+                    # to persist (and only then — no flush when nothing changed).
+                    fsm.context["_embed_dirty"] = True
                 except Exception as _re:
                     logger.debug("WRITE: embed refresh failed for '%s': %s", path, _re)
         except Exception as _ee:
@@ -276,13 +322,16 @@ def handle_write(fsm: "InjectorFSM") -> None:
 
         # Best-effort incremental co-occurrence refresh — the STABLE leg.
         # Separate from the embed block above so it stays fresh even when the
-        # embedder is down (no network, pure local compute).
-        orch._refresh_cooccurrence_for_ops(
+        # embedder is down (no network, pure local compute). Also deferred (Fix A).
+        _n_cooccur = orch._refresh_cooccurrence_for_ops(
             ops,
             committed_paths,
             read_body=lambda p: orch.DRIVER.read_note(p).content or "",
             lang=orch.CONFIG.cooccurrence_lang,
+            save=False,
         )
+        if _n_cooccur:
+            fsm.context["_cooccur_dirty"] = True
     except Exception as _me:
         logger.debug("WRITE: manifest update failed (non-fatal): %s", _me)
 
@@ -334,7 +383,7 @@ def handle_hub_update(fsm: "InjectorFSM") -> None:
         if note_name.lower() == hub_name_lower:
             continue
         snippet = (op.snippet or "").strip()
-        desc = snippet.split("\n")[0][:120] if snippet else ""
+        desc = snippet.split("\n")[0] if snippet else ""
         effective_parent = (op.parent.strip("[]") if op.parent else None) or hub_name
         if effective_parent.lower() == hub_name_lower:
             hub_notes.append((note_name, desc))

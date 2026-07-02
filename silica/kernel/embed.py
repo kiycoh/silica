@@ -45,12 +45,12 @@ def _cosine(a: list[float], b: list[float]) -> float:
     """
     if len(a) != len(b):
         return 0.0
-    dot = sum(ai * bi for ai, bi in zip(a, b))
-    mag_a = sum(ai * ai for ai in a) ** 0.5
-    mag_b = sum(bi * bi for bi in b) ** 0.5
-    if mag_a == 0.0 or mag_b == 0.0:
+    va = np.asarray(a, dtype=np.float64)
+    vb = np.asarray(b, dtype=np.float64)
+    denom = float(np.linalg.norm(va) * np.linalg.norm(vb))
+    if denom == 0.0:
         return 0.0
-    return dot / (mag_a * mag_b)
+    return float(va @ vb) / denom
 
 
 def centroid(vectors: list[list[float]]) -> list[float]:
@@ -60,7 +60,7 @@ def centroid(vectors: list[list[float]]) -> list[float]:
     dim = len(vectors[0])
     if any(len(v) != dim for v in vectors):
         return []
-    return [sum(v[i] for v in vectors) / len(vectors) for i in range(dim)]
+    return np.mean(np.asarray(vectors, dtype=np.float64), axis=0).tolist()
 
 
 def document_theme_vector(embedder: Any, body: str, *, segment_chars: int = _MAX_CHARS) -> list[float]:
@@ -76,6 +76,77 @@ def document_theme_vector(embedder: Any, body: str, *, segment_chars: int = _MAX
     except Exception:
         return []
     return centroid(vecs)
+
+
+# ---------------------------------------------------------------------------
+# Binary persistence (Fix 2A)
+# ---------------------------------------------------------------------------
+#
+# The index is machine-only derived state and the float vectors dominate its
+# size. Storing them as float32 binary instead of pretty-printed text floats is
+# ~4x smaller (102 MB -> ~25 MB) with a no-parse load. One self-contained npz
+# per save (crash-safe, per-note): all `vec`s concatenated into one flat array,
+# all `title_vec`s into another, with a small JSON `meta` blob giving each note's
+# name/ts and its slice lengths. Flat-concat (not a 2D matrix) so ragged/odd-dim
+# vectors survive a reformat untouched.
+
+def _serialize_notes(notes: dict[str, dict[str, Any]]) -> bytes:
+    import io
+
+    meta: dict[str, Any] = {"version": 2, "notes": {}}
+    vecs: list[np.ndarray] = []
+    tvecs: list[np.ndarray] = []
+    for path, entry in notes.items():
+        v = np.asarray(entry.get("vec", []), dtype=np.float32).ravel()
+        vecs.append(v)
+        m: dict[str, Any] = {
+            "name": entry.get("name", ""),
+            "ts": entry.get("ts", 0.0),
+            "vlen": int(v.size),
+        }
+        tv = entry.get("title_vec")
+        if tv is not None:
+            tva = np.asarray(tv, dtype=np.float32).ravel()
+            tvecs.append(tva)
+            m["tlen"] = int(tva.size)
+        meta["notes"][path] = m
+
+    flat = np.concatenate(vecs) if vecs else np.zeros(0, dtype=np.float32)
+    tflat = np.concatenate(tvecs) if tvecs else np.zeros(0, dtype=np.float32)
+    meta_arr = np.frombuffer(orjson.dumps(meta), dtype=np.uint8)
+    buf = io.BytesIO()
+    np.savez(buf, flat=flat, tflat=tflat, meta=meta_arr)
+    return buf.getvalue()
+
+
+def _deserialize_notes(raw: bytes) -> dict[str, dict[str, Any]]:
+    import io
+
+    try:
+        with np.load(io.BytesIO(raw), allow_pickle=False) as z:
+            flat = z["flat"]
+            tflat = z["tflat"]
+            meta = orjson.loads(z["meta"].tobytes())
+    except Exception:
+        return {}
+
+    notes: dict[str, dict[str, Any]] = {}
+    voff = toff = 0
+    for path, m in meta.get("notes", {}).items():
+        vlen = int(m.get("vlen", 0))
+        entry: dict[str, Any] = {
+            "vec": flat[voff:voff + vlen].tolist(),
+            "name": m.get("name", ""),
+            "ts": m.get("ts", 0.0),
+        }
+        voff += vlen
+        tlen = m.get("tlen")
+        if tlen is not None:
+            tlen = int(tlen)
+            entry["title_vec"] = tflat[toff:toff + tlen].tolist()
+            toff += tlen
+        notes[path] = entry
+    return notes
 
 
 # ---------------------------------------------------------------------------
@@ -126,21 +197,26 @@ class EmbedStore:
         src = self._path
         if not src.exists() and src != _LEGACY_INDEX_PATH and _LEGACY_INDEX_PATH.exists():
             src = _LEGACY_INDEX_PATH  # one-time soft migration: copied forward on next save()
-        if src.exists():
+        if not src.exists():
+            return
+        try:
+            raw = src.read_bytes()
+        except Exception:
+            return
+        # Sniff the format: npz archives start with the zip magic 'PK'; the
+        # legacy index is orjson text starting with '{'. Old files auto-migrate
+        # to binary on the next save() — reformat, never re-embed.
+        if raw[:2] == b"PK":
+            self._notes = _deserialize_notes(raw)
+        else:
             try:
-                data = orjson.loads(src.read_bytes())
-                self._notes = data.get("notes", {})
+                self._notes = orjson.loads(raw).get("notes", {})
             except Exception:
                 self._notes = {}
 
     def save(self) -> Path:
         self._path.parent.mkdir(parents=True, exist_ok=True)
-        self._path.write_bytes(
-            orjson.dumps(
-                {"version": 1, "notes": self._notes},
-                option=orjson.OPT_INDENT_2,
-            )
-        )
+        self._path.write_bytes(_serialize_notes(self._notes))
         return self._path
 
     # ------------------------------------------------------------------
@@ -260,6 +336,36 @@ class EmbedStore:
 
 
 # ---------------------------------------------------------------------------
+# Cached accessor (the seam — Fix 3)
+# ---------------------------------------------------------------------------
+
+# Process-lifetime cache keyed by resolved index path. Keying by the *path*
+# (not the raw vault) is a superset of per-vault keying: it follows a /vault
+# switch automatically and respects tests that monkeypatch `_index_path`.
+_STORE_CACHE: dict[str, "EmbedStore"] = {}
+
+
+def get_store() -> "EmbedStore":
+    """Return the shared EmbedStore for the current vault's index.
+
+    A process-lifetime singleton per resolved index path: readers stop
+    re-deserialising the index, and the write path mutates the same instance
+    every reader sees (no reload needed for consistency). Use `clear()` in tests.
+    """
+    key = str(_index_path())
+    store = _STORE_CACHE.get(key)
+    if store is None:
+        store = EmbedStore()
+        _STORE_CACHE[key] = store
+    return store
+
+
+def clear() -> None:
+    """Drop all cached stores (test isolation; also frees memory on /vault switch)."""
+    _STORE_CACHE.clear()
+
+
+# ---------------------------------------------------------------------------
 # Index management
 # ---------------------------------------------------------------------------
 
@@ -296,6 +402,7 @@ def build_index(
     store: EmbedStore | None = None,
     batch_size: int = 32,
     force: bool = False,
+    save: bool = True,
 ) -> EmbedStore:
     """Build or incrementally refresh the embedding index.
 
@@ -319,7 +426,7 @@ def build_index(
         with zero extra API round-trips.
     """
     if store is None:
-        store = EmbedStore()
+        store = get_store()
 
     to_embed = [
         (path, name, body)
@@ -343,7 +450,8 @@ def build_index(
         for (path, name, _), fv, tv in zip(batch, full_vecs, title_vecs):
             store.upsert(path, name, fv, title_vec=tv)
 
-    store.save()
+    if save:
+        store.save()
     return store
 
 
@@ -354,18 +462,23 @@ def refresh_note(
     body: str,
     *,
     store: EmbedStore | None = None,
+    save: bool = True,
 ) -> EmbedStore:
-    """Re-embed a single note and persist the updated store.
+    """Re-embed a single note and (by default) persist the updated store.
 
     Designed to be called after a note is written to the vault (freshness hook).
     Embeds both the full note text and the title-only text in a single API call.
+
+    ``save=False`` (Fix A) upserts into the in-memory store only — the caller
+    flushes once at end-of-run instead of rewriting the whole index per note.
     """
     if store is None:
-        store = EmbedStore()
+        store = get_store()
     _folder = path.rsplit("/", 1)[0] if "/" in path else ""
     full_text  = _note_text(name, body, folder=_folder)
     title_text = _note_title_text(name, folder=_folder)
     vecs = embedder.embed([full_text, title_text])
     store.upsert(path, name, vecs[0], title_vec=vecs[1])
-    store.save()
+    if save:
+        store.save()
     return store

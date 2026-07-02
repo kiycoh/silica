@@ -163,12 +163,12 @@ def silica_dedup(folder: str = "", cancel_token: Any = None) -> dict[str, Any]:
     The second criterion catches cases like "ROS" / "JSON in ROS 2" where the bodies
     are topically distinct but the titles share a strong semantic relationship.
     """
-    from silica.kernel.embed import EmbedStore, _cosine
+    from silica.kernel.embed import get_store, _cosine
     from silica.kernel.workqueue import WorkItem
     from silica.agent.subagent import run_subagent_batch
     from silica.config import CONFIG as _C
 
-    store = EmbedStore()
+    store = get_store()
     if len(store) == 0:
         return {"error": "Embedding index empty — run /embed first."}
 

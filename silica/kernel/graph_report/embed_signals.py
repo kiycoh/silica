@@ -43,10 +43,10 @@ def _compute_missing_links(
     try:
         from silica.agent.providers import get_embedder
         from silica.config import CONFIG
-        from silica.kernel.embed import EmbedStore
+        from silica.kernel.embed import get_store
         import networkx as nx
 
-        store = EmbedStore()
+        store = get_store()
         if len(store) == 0:
             return []
         embedder = get_embedder(CONFIG)
@@ -130,9 +130,9 @@ def _compute_duplicate_pairs(
     """
     try:
         from silica.config import CONFIG
-        from silica.kernel.embed import EmbedStore
+        from silica.kernel.embed import get_store
 
-        store = EmbedStore()
+        store = get_store()
         if len(store) == 0:
             return [], []
     except Exception as exc:

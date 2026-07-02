@@ -10,9 +10,9 @@ from __future__ import annotations
 from pathlib import Path
 
 from silica.config import CONFIG
-from silica.kernel import codeast, codedocs, gitstate
+from silica.kernel import codeast, gitstate
 from silica.kernel.sanitize import strip_degenerate_runs
-from silica.sources.base import GroundedStub, RawItem, Staleness
+from silica.sources.base import GroundedStub, RawItem
 
 
 def _package_of(module: str, root: Path) -> str:
@@ -144,15 +144,6 @@ class CodeAdapter:
         )
         inbox = (CONFIG.inbox_dir or "Inbox").strip("/")
         return GroundedStub(lane="terminal", note_path=f"{inbox}/{stem}.md", body=body)
-
-    def staleness(self, note_path: str) -> Staleness:
-        vault = (CONFIG.vault_path or "").strip()
-        if not vault:
-            return "unknown"
-        res = codedocs.note_is_stale(vault, note_path)
-        if res is None:
-            return "unknown"
-        return "stale" if res else "fresh"
 
 
 CODE = CodeAdapter()

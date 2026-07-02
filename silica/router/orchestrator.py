@@ -67,6 +67,7 @@ def _refresh_cooccurrence_for_ops(
     read_body: Callable[[str], str],
     lang: str = "english",
     store: Any | None = None,
+    save: bool = True,
 ) -> int:
     """Refresh the embedder-free co-occurrence index for committed write/patch ops.
 
@@ -105,11 +106,65 @@ def _refresh_cooccurrence_for_ops(
         return 0
     try:
         _cooccur_build(notes, store=store, lang=lang, force=True,
-                       concepts_by_path=concepts_by_path or None)
+                       concepts_by_path=concepts_by_path or None, save=save)
     except Exception as exc:
         logger.debug("WRITE: cooccur refresh skipped (%s)", exc)
         return 0
     return len(notes)
+
+
+# Drift above this many notes is treated as a stale/cold index (not crash-drift):
+# the reconcile warns and defers to an explicit /embed rather than embedding a
+# large batch implicitly at run start.
+_RECONCILE_CAP = 500
+
+
+def _reconcile_embed_index(*, folder: str = "") -> int:
+    """Repair embed-index drift from a prior hard crash (Fix A safety net).
+
+    Set-diffs vault note paths against index keys and embeds ONLY the missing
+    ones. Bounded best-effort: a cold/empty index is left to an explicit /embed
+    (never implicitly embed the whole vault), and drift beyond ``_RECONCILE_CAP``
+    is treated as a stale index — warn and skip. Also closes the pre-existing gap
+    where a mid-run crash desynced the index until a manual /embed. Returns the
+    number of notes re-embedded.
+    """
+    try:
+        from silica.agent.providers import get_embedder
+        from silica.kernel.embed import build_index, get_store
+        from silica.kernel.media import preprocess_text
+
+        store = get_store()
+        if len(store) == 0:
+            return 0  # cold index — an explicit /embed owns the full build
+        have = set(store.paths())
+        missing: list[tuple[str, str]] = []
+        for ref in DRIVER.list_files(folder or ""):
+            idx_path = (ref.path or ref.name).removesuffix(".md")
+            if idx_path and idx_path not in have:
+                missing.append((idx_path, ref.name or idx_path))
+        if not missing:
+            return 0
+        if len(missing) > _RECONCILE_CAP:
+            logger.warning(
+                "embed index drift %d > cap %d — run /embed to rebuild; skipping reconcile",
+                len(missing), _RECONCILE_CAP,
+            )
+            return 0
+        embedder = get_embedder(CONFIG)
+        notes: list[tuple[str, str, str]] = []
+        for idx_path, name in missing:
+            try:
+                body = preprocess_text(DRIVER.read_note(idx_path + ".md").content or "")
+            except Exception:
+                continue
+            notes.append((idx_path, name, body))
+        if notes:
+            build_index(embedder, notes, store=store)  # embeds the missing + saves
+        return len(notes)
+    except Exception as e:
+        logger.debug("embed reconcile skipped (%s)", e)
+        return 0
 
 
 def _commit_docs_for_ops(
@@ -510,6 +565,10 @@ class InjectorFSM(BaseFSM[InjectorState]):
         from silica.kernel.undo_journal import get_undo_journal
         self._undo_run_id = get_undo_journal().start_run(source=self.inbox_file)
 
+        # Fix A: repair any embed-index drift left by a prior hard crash before
+        # this run reads the index (no-op/sub-ms when the index is in sync).
+        _reconcile_embed_index()
+
         self.state = InjectorState.RECON
         return self._run_loop()
 
@@ -531,7 +590,32 @@ class InjectorFSM(BaseFSM[InjectorState]):
                         self.state = self._error_state
         finally:
             self._cleanup_tmp()
+            self._flush_indexes()
         return self.context
+
+    def _flush_indexes(self) -> None:
+        """Persist the deferred embed + co-occurrence upserts once per run (Fix A).
+
+        The write path upserts into the shared in-memory singletons with
+        save=False and marks the index dirty; this single flush rewrites each
+        dirty index file once instead of per note (1.17s/note at 10k). Gated on
+        the dirty flags so a run that wrote nothing (or had the embedder down)
+        never rewrites the index. Runs in the _run_loop finally so it fires on
+        success, error, and Ctrl+C; a hard kill is repaired by the reconcile.
+        """
+        ctx = getattr(self, "context", {})
+        if ctx.get("_embed_dirty"):
+            try:
+                from silica.kernel.embed import get_store
+                get_store().save()
+            except Exception as e:
+                logger.debug("flush: embed index save skipped (%s)", e)
+        if ctx.get("_cooccur_dirty"):
+            try:
+                from silica.kernel.cooccurrence import get_cooccur_store
+                get_cooccur_store().save()
+            except Exception as e:
+                logger.debug("flush: cooccur index save skipped (%s)", e)
 
     def _on_sequence_end(self) -> None:
         self._eval_loop_or_done()

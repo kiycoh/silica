@@ -47,6 +47,39 @@ def _isolate_cooccurrence_index(tmp_path, monkeypatch: pytest.MonkeyPatch) -> No
 
 
 @pytest.fixture(autouse=True)
+def _isolate_cluster_ctx_cache(tmp_path, monkeypatch: pytest.MonkeyPatch) -> None:
+    """Redirect the vault-cluster ctx cache (Scaling E) to a per-test tmp path.
+
+    build_vault_graph_ctx persists the cluster ctx under index_dir(); a test that
+    runs it without isolating the vault would otherwise write into the developer's
+    real ~/.silica index AND a cache from one test could leak into the next. Per
+    tmp_path keeps each test's cache private and out of the real index.
+    """
+    import silica.router.states.setup as setup_mod
+    monkeypatch.setattr(
+        setup_mod, "_cluster_ctx_cache_path", lambda: tmp_path / "clusters_ctx.json"
+    )
+
+
+@pytest.fixture(autouse=True)
+def _clear_store_singletons() -> None:
+    """Reset the cached store singletons (Fix 3 seam) around every test.
+
+    `get_store`/`get_cooccur_store` keep a process-lifetime instance keyed by
+    index path; without this, an instance built under one test's monkeypatched
+    `_index_path` would leak into the next. Clear before AND after to also drop
+    state seeded by import-time or session-scoped fixtures.
+    """
+    import silica.kernel.embed as embed_mod
+    import silica.kernel.cooccurrence as cooc_mod
+    embed_mod.clear()
+    cooc_mod.clear()
+    yield
+    embed_mod.clear()
+    cooc_mod.clear()
+
+
+@pytest.fixture(autouse=True)
 def _reset_overlay_cache() -> None:
     """Reset the module-level overlay cache before every test.
 

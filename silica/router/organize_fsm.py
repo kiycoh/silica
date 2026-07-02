@@ -177,9 +177,9 @@ class OrganizerFSM(BaseFSM[OrganizerState]):
         # Load co-occurrence store once and pass it in to avoid repeated disk reads
         cooccur_store = None
         try:
-            from silica.kernel.cooccurrence import CooccurStore
+            from silica.kernel.cooccurrence import get_cooccur_store
             from silica.config import CONFIG
-            cooccur_store = CooccurStore(lang=CONFIG.cooccurrence_lang)
+            cooccur_store = get_cooccur_store(lang=CONFIG.cooccurrence_lang)
             if len(cooccur_store) == 0:
                 cooccur_store = None
         except Exception as exc:

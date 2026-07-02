@@ -252,7 +252,7 @@ def silica_graph_explain(note: str, depth: int = 1) -> dict:
     from silica.kernel.graph_report import compute_report
 
     try:
-        report = compute_report()
+        report = compute_report(analytics=True)  # on-demand: needs god_nodes/bridges
     except Exception as exc:
         return {"error": f"Failed to compute graph report: {exc}"}
 

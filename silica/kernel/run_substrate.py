@@ -49,14 +49,14 @@ def build_substrate(
     try:
         from silica.agent.providers import get_embedder
         from silica.config import CONFIG
-        from silica.kernel.embed import EmbedStore
+        from silica.kernel.embed import get_store
         from silica.driver import DRIVER
         from silica.driver.base import NoteRef
 
-        from silica.kernel.cooccurrence import CooccurStore
+        from silica.kernel.cooccurrence import get_cooccur_store
         from silica.kernel.relatedness import related_notes_for_query
 
-        store = EmbedStore()
+        store = get_store()
 
         # Embedder is OPTIONAL now: if it is down, the embed leg abstains and the
         # deterministic co-occurrence leg carries the substrate on its own.
@@ -96,7 +96,7 @@ def build_substrate(
         if exclude:
             exclude_lower.update(s.lower() for s in exclude)
 
-        cooccur_store = CooccurStore(lang=CONFIG.cooccurrence_lang)
+        cooccur_store = get_cooccur_store(lang=CONFIG.cooccurrence_lang)
         if len(cooccur_store) == 0:
             cooccur_store = None
 
@@ -166,7 +166,7 @@ def build_substrate(
         # the related-notes leg: its failure only drops this section.
         vocab_lines: list[str] = []
         try:
-            vocab_store = cooccur_store or CooccurStore(lang=CONFIG.cooccurrence_lang)
+            vocab_store = cooccur_store or get_cooccur_store(lang=CONFIG.cooccurrence_lang)
             stems = vocab_store.top_stems(20) if len(vocab_store) else []
             if stems or hub_names:
                 vocab_lines.append("## Vault vocabulary")

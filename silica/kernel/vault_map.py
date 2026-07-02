@@ -29,9 +29,9 @@ def build_vault_map(
 ) -> str | None:
     try:
         from silica.config import CONFIG
-        from silica.kernel.cooccurrence import CooccurStore
+        from silica.kernel.cooccurrence import get_cooccur_store
 
-        store = store if store is not None else CooccurStore(lang=CONFIG.cooccurrence_lang)
+        store = store if store is not None else get_cooccur_store(lang=CONFIG.cooccurrence_lang)
         if len(store) == 0:
             return None
 

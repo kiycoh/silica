@@ -97,8 +97,8 @@ def silica_autolink(note_paths: list[str] | None = None, note_path: str = "", us
         try:
             from silica.agent.providers import get_embedder
             from silica.config import CONFIG
-            from silica.kernel.embed import EmbedStore
-            store = EmbedStore()
+            from silica.kernel.embed import get_store
+            store = get_store()
             if len(store) > 0:
                 embedder = get_embedder(CONFIG)
         except Exception:
@@ -107,8 +107,8 @@ def silica_autolink(note_paths: list[str] | None = None, note_path: str = "", us
         # candidates survive (focused) even when the embedder is down.
         try:
             from silica.config import CONFIG
-            from silica.kernel.cooccurrence import CooccurStore
-            cooccur_store = CooccurStore(lang=CONFIG.cooccurrence_lang)
+            from silica.kernel.cooccurrence import get_cooccur_store
+            cooccur_store = get_cooccur_store(lang=CONFIG.cooccurrence_lang)
             if len(cooccur_store) == 0:
                 cooccur_store = None
         except Exception:
@@ -208,9 +208,9 @@ def silica_semantic_search(query: str, k: int = 5) -> dict[str, Any]:
     """
     from silica.agent.providers import get_embedder
     from silica.config import CONFIG
-    from silica.kernel.embed import EmbedStore
+    from silica.kernel.embed import get_store
 
-    store = EmbedStore()
+    store = get_store()
     if len(store) == 0:
         return {"error": "Embedding index is empty. Run silica_embed_refresh to build it first."}
 
@@ -238,9 +238,9 @@ def silica_similar(text: str, k: int = 5) -> dict[str, Any]:
     """
     from silica.agent.providers import get_embedder
     from silica.config import CONFIG
-    from silica.kernel.embed import EmbedStore
+    from silica.kernel.embed import get_store
 
-    store = EmbedStore()
+    store = get_store()
     if len(store) == 0:
         return {"error": "Embedding index is empty. Run silica_embed_refresh to build it first."}
 
@@ -417,9 +417,9 @@ def silica_vault_report(
     from silica.kernel.analyst_plan import build_task_plan
     from silica.kernel.progress import IssueCard, Run
 
-    # 1. Build report
+    # 1. Build report (on-demand /graph: full analytics — god_nodes/bridges/cohesion)
     report = compute_report(
-        folder=folder, top_k=top_k,
+        folder=folder, top_k=top_k, analytics=True,
         with_embeddings=with_embeddings, with_cooccurrence=with_cooccurrence,
     )
 

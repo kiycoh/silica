@@ -79,59 +79,6 @@ def stale_docs(vault: Path | str, repo_root: Path | str | None = None) -> list[S
     return out
 
 
-def rebadge(vault: Path | str, note_path: str, repo_root: Path | str | None = None) -> str | None:
-    """Set the note's `code_ref` to the current repo HEAD. Returns the new sha,
-    or None if git is unavailable or the note can't be read."""
-    vault = Path(vault)
-    root = Path(repo_root) if repo_root else gitstate.find_repo_root(vault)
-    if root is None:
-        return None
-    head = gitstate.head_ref(root)
-    if head is None:
-        return None
-    note_file = vault / note_path
-    try:
-        content = note_file.read_text(encoding="utf-8")
-    except OSError:
-        return None
-    data, _, body = frontmatter.split(content)
-    if data is None:
-        return None
-    data["code_ref"] = head
-    note_file.write_text(frontmatter.dump(data, body), encoding="utf-8")
-    return head
-
-
-def note_is_stale(
-    vault: Path | str, note_path: str, repo_root: Path | str | None = None
-) -> bool | None:
-    """Per-note staleness: True (stale), False (fresh), None (unknown — no
-    git, unreadable note, no code_ref/documents, or no history for any
-    documented path). Same semantics as one stale_docs() iteration."""
-    vault = Path(vault)
-    root = Path(repo_root) if repo_root else gitstate.find_repo_root(vault)
-    if root is None:
-        return None
-    try:
-        content = (vault / note_path).read_text(encoding="utf-8")
-    except OSError:
-        return None
-    data, _, _ = frontmatter.split(content)
-    recorded = str((data or {}).get("code_ref") or "").strip()
-    docs = _documents_of(data or {})
-    if not recorded or not docs:
-        return None
-    known = False
-    for code_path in docs:
-        latest = gitstate.log_for_path(root, code_path, limit=1)
-        if not latest:
-            continue  # path has no history → contributes nothing
-        known = True
-        if latest[0].sha != recorded:
-            return True
-    return False if known else None
-
-
 def stale_count(vault: Path | str) -> int:
     """Count of stale (note, path) pairs. Soft-zero on any failure / no git."""
     try:

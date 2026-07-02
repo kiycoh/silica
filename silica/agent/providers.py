@@ -2,13 +2,13 @@ from __future__ import annotations
 
 import logging
 import os
-from typing import Any, Protocol, runtime_checkable
+from typing import Any
 import httpx
 import openai
 import orjson
 from pydantic import BaseModel
 
-from silica.agent.llm import LLMResponse, ToolCall
+from silica.agent.llm import LLMResponse, ToolCall, retry_transient
 
 logger = logging.getLogger(__name__)
 
@@ -46,18 +46,6 @@ def _to_wire(msg: dict) -> dict:
     return wire
 
 
-@runtime_checkable
-class Provider(Protocol):
-    def call_llm(
-        self,
-        messages: list[dict],
-        tools: list[dict] | None = None,
-        response_schema: type[BaseModel] | None = None,
-        max_tokens: int | None = None,
-    ) -> LLMResponse:
-        ...
-
-
 class OpenAICompatibleProvider:
     def __init__(self, base_url: str, api_key: str, model: str):
         # Granular timeouts: connect=10s, read=45s per-chunk (streaming inactivity watchdog).
@@ -83,8 +71,6 @@ class OpenAICompatibleProvider:
             kwargs["tool_choice"] = "auto"
             
         kwargs["max_tokens"] = max_tokens if max_tokens is not None else int(os.getenv("MAX_TOKENS", "256000"))
-
-        import time
 
         def _execute_call() -> LLMResponse:
             if response_schema:
@@ -224,22 +210,10 @@ class OpenAICompatibleProvider:
                 finish_reason=finish_reason,
             )
 
-        max_attempts = 3
-        for attempt in range(1, max_attempts + 1):
-            try:
-                return _execute_call()
-            except (openai.APITimeoutError, openai.APIConnectionError, openai.RateLimitError) as e:
-                logger.warning(
-                    "LLM API network error, timeout, or rate limit (attempt %d/%d): %s",
-                    attempt,
-                    max_attempts,
-                    e
-                )
-                if attempt < max_attempts:
-                    time.sleep(2 ** attempt)
-                    continue
-                raise
-        raise RuntimeError("unreachable")
+        return retry_transient(
+            _execute_call,
+            (openai.APITimeoutError, openai.APIConnectionError, openai.RateLimitError),
+        )
 
 
 class OpenAIEmbedder:
@@ -284,7 +258,7 @@ def get_embedder(config: Any) -> OpenAIEmbedder:
     )
 
 
-def get_provider(config: Any, role: str = "router") -> Provider:
+def get_provider(config: Any, role: str = "router") -> OpenAICompatibleProvider:
     """Return an LLM provider for the given role.
 
     role="router" (default) → uses config.provider / config.model (the main model).

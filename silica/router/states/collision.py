@@ -178,9 +178,9 @@ def handle_collision(fsm: "InjectorFSM") -> None:
 
     try:
         from silica.agent.providers import get_embedder
-        from silica.kernel.embed import EmbedStore
+        from silica.kernel.embed import get_store
 
-        store = EmbedStore()
+        store = get_store()
         if len(store) == 0:
             logger.info("COLLISION: embedding index empty — falling back to MinHash dedup leg")
             fsm._get_chunks_from_context_if_empty()
@@ -202,8 +202,8 @@ def handle_collision(fsm: "InjectorFSM") -> None:
     # to the embedding ranking alone.
     cooccur_store = None
     try:
-        from silica.kernel.cooccurrence import CooccurStore
-        cooccur_store = CooccurStore(lang=orch.CONFIG.cooccurrence_lang)
+        from silica.kernel.cooccurrence import get_cooccur_store
+        cooccur_store = get_cooccur_store(lang=orch.CONFIG.cooccurrence_lang)
         if len(cooccur_store) == 0:
             cooccur_store = None
     except Exception:

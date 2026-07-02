@@ -259,8 +259,8 @@ def handle_rollback(fsm: "InjectorFSM") -> None:
         created_paths = list(snapshot_res["created_paths"])
     if created_paths:
         try:
-            from silica.kernel.embed import EmbedStore
-            store = EmbedStore()
+            from silica.kernel.embed import get_store
+            store = get_store()
             for cp in created_paths:
                 store.delete(cp.removesuffix(".md"))
             store.save()

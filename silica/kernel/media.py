@@ -1,20 +1,14 @@
-"""Media handling for note text — image stripping and (future) VLM distillation.
+"""Media handling for note text — image stripping.
 
-Two modes, controlled by CONFIG.image_mode (SILICA_IMAGE_MODE env var):
-
-  strip (default)
-    Remove all image embeds from text before it reaches the embedding model,
-    the distiller payload, or any LLM context.  Obsidian-flavored embeds
-    (![[file.jpg]]) and standard Markdown images (![alt](src)) are both removed.
-
-  vlm (future / stub)
-    Each image embed is replaced by a textual description produced by a vision
-    language model (CONFIG.vlm_model).  Not yet implemented; falls back to strip.
+Image embeds are removed from text before it reaches the embedding model,
+the distiller payload, or any LLM context.  Obsidian-flavored embeds
+(![[file.jpg]]) and standard Markdown images (![alt](src)) are both removed.
 
 Call strip_images(text) anywhere you want images silently removed.
 """
 from __future__ import annotations
 
+import os
 import re
 
 # ---------------------------------------------------------------------------
@@ -25,6 +19,12 @@ import re
 # Matches any file extension that looks like a raster/vector image or media.
 _IMAGE_EXTENSIONS = r"(?:jpe?g|png|gif|webp|svg|bmp|tiff?|avif|mp4|mov|avi|mkv|pdf)"
 
+# Plain-tuple form of the same extensions, for endswith() checks when re-attaching.
+_IMG_EXT_TUPLE = (
+    ".jpg", ".jpeg", ".png", ".gif", ".webp", ".svg", ".bmp",
+    ".tif", ".tiff", ".avif", ".mp4", ".mov", ".avi", ".mkv", ".pdf",
+)
+
 _OFM_IMAGE_RE = re.compile(
     rf"!\[\[([^\]]*\.{_IMAGE_EXTENSIONS})(\|[^\]]*)?\]\]",
     re.IGNORECASE,
@@ -34,6 +34,12 @@ _OFM_IMAGE_RE = re.compile(
 # Also matches empty alt: ![](...) and wikilink-style src paths
 _MD_IMAGE_RE = re.compile(
     r"!\[[^\]]*\]\([^)]*\)",
+    re.IGNORECASE,
+)
+
+# Same as _MD_IMAGE_RE but capturing the src, for re-attaching (not stripping).
+_MD_IMAGE_SRC_RE = re.compile(
+    r"!\[[^\]]*\]\(([^)]+)\)",
     re.IGNORECASE,
 )
 
@@ -66,24 +72,61 @@ def strip_images(text: str) -> str:
     return text
 
 
-def preprocess_text(text: str) -> str:
-    """Apply all configured media preprocessing to *text*.
+def _add_embed(out: list[str], raw: str) -> None:
+    """Normalize one image src to an Obsidian basename embed and append (deduped).
 
-    Currently respects CONFIG.image_mode:
-      - "strip"  → call strip_images()
-      - "vlm"    → stub, falls back to strip_images() until implemented
+    Remote URLs are skipped (they'd resolve to a nonexistent local file).
+    Normalizing to ``![[basename.ext]]`` matches convert.py and makes the embed
+    resolve from any note location in the vault, not just the inbox folder.
+    """
+    raw = raw.strip()
+    if raw.startswith(("http://", "https://", "mailto:")):
+        return
+    base = os.path.basename(raw.split("|", 1)[0].strip())  # drop OFM |size hint
+    if not base.lower().endswith(_IMG_EXT_TUPLE):
+        return
+    embed = f"![[{base}]]"
+    if embed not in out:
+        out.append(embed)
+
+
+def images_for_section(source: str, concept: str) -> list[str]:
+    """Image embeds living in *concept*'s section of *source*, normalized.
+
+    The section is the one whose heading contains *concept* — the SAME match
+    payload.py uses to build the concept's excerpt, so a note gets exactly the
+    images from the section its content was distilled from. No matching heading
+    → no images (concepts pulled from windows have no well-defined section).
+    Embeds are returned as deduped, in-order ``![[basename.ext]]``.
+    """
+    from silica.kernel.payload import find_heading, extract_section  # lazy: avoid cycle
+
+    h = find_heading(source, concept)
+    if not h:
+        return []
+    section = extract_section(source, h)
+    out: list[str] = []
+    for m in _OFM_IMAGE_RE.finditer(section):
+        _add_embed(out, m.group(1))
+    for m in _MD_IMAGE_SRC_RE.finditer(section):
+        _add_embed(out, m.group(1))
+    return out
+
+
+def append_section_images(snippet: str, source: str, concept: str) -> str:
+    """Append *concept*'s section images to *snippet*. No-op when there are none."""
+    embeds = images_for_section(source, concept)
+    if not embeds:
+        return snippet
+    block = "\n".join(embeds)
+    base = snippet.rstrip()
+    return f"{base}\n\n{block}" if base else block
+
+
+def preprocess_text(text: str) -> str:
+    """Apply all media preprocessing to *text*.
 
     This is the single entry point callers should use so future modes
     (e.g. LaTeX stripping, audio transcripts) can be added here centrally.
     """
-    from silica.config import CONFIG  # late import to avoid circular at module level
-
-    mode = getattr(CONFIG, "image_mode", "strip")
-
-    if mode == "vlm":
-        # Future: call VLM to produce alt-text, replace embed with description.
-        # For now, fall back to strip so behaviour is always well-defined.
-        return strip_images(text)
-
-    # Default: strip
     return strip_images(text)

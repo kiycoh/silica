@@ -9,6 +9,8 @@ from __future__ import annotations
 import json
 import logging
 import os
+import random
+import time
 from dataclasses import dataclass, field
 
 # Quiet down Bedrock/SageMaker missing botocore warnings during import
@@ -23,6 +25,28 @@ from silica.config import CONFIG
 # Suppress litellm's verbose logging by default
 litellm.suppress_debug_info = True
 litellm.drop_params = True
+
+
+def retry_transient(fn, exceptions: tuple, attempts: int = 3, base_delay: float = 1.0, jitter: float = 0.0):
+    """Call fn(), retrying on transient exceptions with exponential backoff.
+
+    Sleeps base_delay * 2**attempt (+ uniform jitter) between attempts and
+    re-raises the last exception once attempts are exhausted. The single
+    retry policy for every LLM call site (litellm and openai SDK alike).
+    """
+    for attempt in range(1, attempts + 1):
+        try:
+            return fn()
+        except exceptions as e:
+            if attempt == attempts:
+                logger.error("Transient error, %d attempts exhausted: %s", attempts, e)
+                raise
+            delay = base_delay * (2 ** attempt) + (random.uniform(0, jitter) if jitter else 0.0)
+            logger.warning(
+                "Transient error (attempt %d/%d): %s. Retrying in %.1fs...",
+                attempt, attempts, e, delay,
+            )
+            time.sleep(delay)
 
 
 @dataclass
@@ -84,7 +108,6 @@ def call_llm(
 
     kwargs["timeout"] = 120.0
 
-    import time
     _TRANSIENT = (
         litellm.Timeout,
         litellm.APIConnectionError,
@@ -92,21 +115,7 @@ def call_llm(
         litellm.ServiceUnavailableError,
         litellm.BadGatewayError,
     )
-    max_attempts = 3
-    for attempt in range(1, max_attempts + 1):
-        try:
-            response = litellm.completion(**kwargs)
-            break
-        except _TRANSIENT as e:
-            if attempt < max_attempts:
-                logger.warning(
-                    "LiteLLM transient error (attempt %d/%d): %s. Retrying in %ds...",
-                    attempt, max_attempts, e, 2 ** attempt,
-                )
-                time.sleep(2 ** attempt)
-                continue
-            logger.error("LiteLLM call failed after %d attempts: %s", max_attempts, e)
-            raise
+    response = retry_transient(lambda: litellm.completion(**kwargs), _TRANSIENT)
 
     choice = response.choices[0]
     message = choice.message

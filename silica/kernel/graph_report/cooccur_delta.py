@@ -43,11 +43,11 @@ def _compute_cooccur_delta(
     Returns empty lists when the index is empty (best-effort, never raises).
     """
     import networkx as nx
-    from silica.kernel.cooccurrence import CooccurStore, tokenize
+    from silica.kernel.cooccurrence import get_cooccur_store, tokenize
     from silica.kernel.relatedness import _cooccur_ranking
 
     try:
-        store = cooccur_store if cooccur_store is not None else CooccurStore()
+        store = cooccur_store if cooccur_store is not None else get_cooccur_store()
     except Exception as exc:
         logger.debug("graph_report: co-occurrence index unavailable (%s)", exc)
         return [], [], []
@@ -91,8 +91,8 @@ def _compute_cooccur_delta(
     # (nonsensical, B in expert ratings). Best-effort: skipped silently when
     # embeddings are unavailable.
     try:
-        from silica.kernel.embed import EmbedStore, _cosine
-        _embed_store = EmbedStore()
+        from silica.kernel.embed import get_store, _cosine
+        _embed_store = get_store()
         if len(_embed_store) > 0:
             _cos_hi = 0.92
             _cos_lo = 0.35

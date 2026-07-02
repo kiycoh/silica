@@ -22,6 +22,7 @@ from __future__ import annotations
 
 import queue
 import threading
+from collections import Counter
 from contextlib import contextmanager
 from dataclasses import dataclass, field, asdict
 from pathlib import Path
@@ -194,11 +195,8 @@ class WorkQueue:
 
     def summary(self) -> dict[str, int]:
         """Counts by status, for the final run report."""
-        out: dict[str, int] = {}
         with self._lock:
-            for it in self._items:
-                out[it.status] = out.get(it.status, 0) + 1
-        return out
+            return dict(Counter(it.status for it in self._items))
 
     def _persist(self) -> None:
         if not self._run_dir:

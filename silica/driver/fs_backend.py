@@ -20,6 +20,7 @@ import networkx as nx
 from silica.kernel.wikilink import extract_links
 
 from silica.driver.base import (
+    GraphIndexMixin,
     GraphSnapshot,
     Heading,
     Hit,
@@ -27,12 +28,15 @@ from silica.driver.base import (
     NoteContent,
     NoteRef,
     Txn,
+    build_title_trie,
+    mentions_in,
 )
 from silica.kernel import frontmatter as fm
 from silica.kernel import ofm
 logger = logging.getLogger(__name__)
 
-class ObsidianFSBackend:
+
+class ObsidianFSBackend(GraphIndexMixin):
     """ObsidianDriver implementation using direct filesystem access."""
 
     def __init__(self, vault_path: str):
@@ -59,19 +63,15 @@ class ObsidianFSBackend:
             return matched[0].path
         return None
 
-    def _node_ref(self, path: str) -> NoteRef:
-        if path in self._notes:
-            return self._notes[path]
-        name = path.rsplit("/", 1)[-1].removesuffix(".md")
-        return NoteRef(name=name, path=path)
-
     # ------------------------------------------------------------------
     # Indexing (in-memory graph)
     # ------------------------------------------------------------------
-    
+
     def _ensure_index(self):
         if self._needs_reindex:
             self._rebuild_index()
+
+    _ensure_graph = _ensure_index  # mixin hook (tests call _ensure_index directly)
 
     def _resolve_target(self, target: str, source_path: str = "") -> NoteRef | None:
         """Resolve a link target to an existing NoteRef or None if unresolved.
@@ -195,7 +195,10 @@ class ObsidianFSBackend:
                 
                 files_to_process.append((rel_path_file, path))
 
-        # Pass 2: Parse and resolve links + build mention index
+        # Pass 2: Parse and resolve links + build mention index. Bucket the
+        # titles by first word ONCE so the per-body scan is near-linear, not the
+        # old O(N²·L) title×body sweep.
+        title_trie = build_title_trie(self._notes_by_name)
         for rel_path_file, path in files_to_process:
             try:
                 content = path.read_text(encoding="utf-8")
@@ -206,12 +209,10 @@ class ObsidianFSBackend:
                         self._graph.add_edge(rel_path_file, ref.path)
                     else:
                         self._unresolved_links.add((rel_path_file, target))
-                
+
                 # Mention index
-                content_lower = content.lower()
-                for title_lower in self._notes_by_name:
-                    if len(title_lower) >= 2 and title_lower in content_lower:
-                        self._mention_index.setdefault(title_lower, set()).add(rel_path_file)
+                for title_lower in mentions_in(content.lower(), title_trie):
+                    self._mention_index.setdefault(title_lower, set()).add(rel_path_file)
             except Exception as e:
                 logger.warning("Failed to index %s: %s", rel_path_file, e)
 
@@ -281,11 +282,10 @@ class ObsidianFSBackend:
             else:
                 self._unresolved_links.add((rel_path, target))
 
-        # --- rebuild mention index for this path ---
-        content_lower = content.lower()
-        for title_lower in self._notes_by_name:
-            if len(title_lower) >= 2 and title_lower in content_lower:
-                self._mention_index.setdefault(title_lower, set()).add(rel_path)
+        # --- rebuild mention index for this path (first-word-anchored) ---
+        trie = build_title_trie(self._notes_by_name)
+        for title_lower in mentions_in(content.lower(), trie):
+            self._mention_index.setdefault(title_lower, set()).add(rel_path)
 
         self._dirty_paths.add(rel_path)
 
@@ -334,14 +334,6 @@ class ObsidianFSBackend:
             if query in ref.name.lower():
                 results.append(ref)
         return results
-
-    def mentions_of(self, title: str) -> list[str]:
-        """Return vault-relative paths of notes whose body mentions `title`.
-        
-        O(1) lookup into the inverted text index built during indexing.
-        """
-        self._ensure_index()
-        return list(self._mention_index.get(title.lower(), set()))
 
     def search_context(self, query: str) -> list[Hit]:
         """Search vault content with line-level context snippets."""
@@ -463,11 +455,6 @@ class ObsidianFSBackend:
         for s, t in self._unresolved_links:
             results.append(Link(source=self._node_ref(s), target=t.removesuffix(".md")))
         return results
-
-    def graph_data(self, folder: str = "") -> tuple[dict, set, Any]:
-        """Return (notes, unresolved_links, graph) for in-process consumers."""
-        self._ensure_index()
-        return self._notes, self._unresolved_links, self._graph
 
     def graph_snapshot(self, refs: list[NoteRef] | None = None) -> GraphSnapshot:
         """Graph snapshot for non-regression gating.

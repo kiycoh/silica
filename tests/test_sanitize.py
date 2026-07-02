@@ -113,6 +113,23 @@ def test_normalize_ops_sanitizes_literal_newlines():
     assert result[0]["snippet"] == expected_snippet
 
 
+def test_normalize_ops_preserves_backslash_commands_in_math():
+    # Prose \n must still become a newline, but math spans must be left alone so
+    # `\nabla`/`\neq` are not shredded into newlines (root cause of defect 3).
+    ops = [{
+        "op": "write",
+        "path": "notes/B.md",
+        "heading": "B",
+        "source_basename": "inbox.md",
+        "snippet": "Prosa con \\n qui e math $\\nabla f$ e blocco $$x \\neq y$$ fine.",
+    }]
+    result = normalize_ops(ops)
+    snip = result[0]["snippet"]
+    assert "Prosa con \n qui" in snip          # prose \n -> real newline
+    assert "$\\nabla f$" in snip               # inline math untouched
+    assert "$$x \\neq y$$" in snip             # block math untouched
+
+
 def test_normalize_ops_removes_trailing_literal_newlines():
     ops = [{
         "op": "write",
@@ -212,4 +229,77 @@ def test_collapse_nested_wikilinks_normalized_in_ops_body():
     assert "[[[[" not in result[0]["content"] and "]]]]" not in result[0]["content"]
     assert "[[Reti Neurali Profonde (Deep Learning)]]" in result[0]["content"]
     assert "[[IA Generativa]]" in result[0]["snippet"]
+
+
+# ---------------------------------------------------------------------------
+# External body appendix — bodies carried OUTSIDE the JSON string so the model
+# never hand-escapes backslashes (root fix for distiller LaTeX corruption).
+# ---------------------------------------------------------------------------
+
+from silica.kernel.sanitize import parse_json
+
+
+def test_parse_json_resolves_external_body_into_snippet():
+    raw = (
+        '{"updates":[{"op":"write","path":"X.md","snippet_ref":1}]}\n'
+        '\n'
+        '===SILICA-BODY 1===\n'
+        'corpo della nota'
+    )
+    parsed, _ = parse_json(raw)
+    op = parsed["updates"][0]
+    assert op["snippet"] == "corpo della nota"
+    assert "snippet_ref" not in op
+
+
+def test_parse_json_external_body_preserves_backslashes_verbatim():
+    # THE regression: \top must NOT decode to TAB, \neq must NOT decode to
+    # newline, matrix \\ must NOT double. Body lives outside JSON → no decoding.
+    body = r"$A \in \mathbb{R}^{n}$, $A^\top$, $x \neq 0$, riga \\ matrice"
+    raw = (
+        '{"updates":[{"op":"write","path":"X.md","snippet_ref":1}]}\n'
+        '\n'
+        '===SILICA-BODY 1===\n'
+        + body
+    )
+    parsed, _ = parse_json(raw)
+    assert parsed["updates"][0]["snippet"] == body
+    assert "\t" not in parsed["updates"][0]["snippet"]
+
+
+def test_parse_json_multiple_external_bodies_map_by_ref():
+    raw = (
+        '{"updates":['
+        '{"op":"write","path":"A.md","snippet_ref":1},'
+        '{"op":"skip","reason":"noise"},'
+        '{"op":"patch","path":"B.md","content_ref":2}'
+        ']}\n'
+        '\n'
+        '===SILICA-BODY 1===\n'
+        'primo $\\alpha$\n'
+        '===SILICA-BODY 2===\n'
+        'secondo $\\beta$'
+    )
+    parsed, _ = parse_json(raw)
+    ups = parsed["updates"]
+    assert ups[0]["snippet"] == r"primo $\alpha$"
+    assert ups[2]["content"] == r"secondo $\beta$"
+    assert "content_ref" not in ups[2]
+
+
+def test_parse_json_no_appendix_is_backward_compatible():
+    raw = '{"updates":[{"op":"write","path":"X.md","snippet":"vecchio stile"}]}'
+    parsed, clean = parse_json(raw)
+    assert parsed["updates"][0]["snippet"] == "vecchio stile"
+    assert clean is True
+
+
+def test_parse_json_top_level_list_of_ops_with_bodies():
+    raw = (
+        '[{"op":"write","path":"X.md","snippet_ref":1}]\n'
+        '===SILICA-BODY 1===\n'
+        'corpo'
+    )
+    parsed, _ = parse_json(raw)
+    assert parsed[0]["snippet"] == "corpo"
 

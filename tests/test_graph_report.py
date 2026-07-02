@@ -73,7 +73,9 @@ def synthetic_graph():
 @pytest.fixture()
 def report(synthetic_graph):
     nodes, edges = synthetic_graph
-    return compute_report(_nodes_edges_override=(nodes, edges))
+    # Full report: these tests assert god_nodes/bridges/cohesion, which are the
+    # analytics signals the on-demand /graph and /report commands consume.
+    return compute_report(_nodes_edges_override=(nodes, edges), analytics=True)
 
 
 # ---------------------------------------------------------------------------

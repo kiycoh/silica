@@ -12,6 +12,7 @@ from __future__ import annotations
 
 import math
 import re
+from collections import Counter
 from pathlib import Path
 from typing import Any
 
@@ -95,12 +96,8 @@ def detect_lang(text: str) -> str:
     words = [w.lower() for w in _TOKEN_RE.findall(text)]
     if not words:
         return "english"
-    best_lang, best_hits = "english", -1
-    for lang, stops in _STOPWORDS.items():
-        hits = sum(1 for w in words if w in stops)
-        if hits > best_hits:
-            best_lang, best_hits = lang, hits
-    return best_lang
+    # max keeps the first max — _STOPWORDS is english-first, so ties → english
+    return max(_STOPWORDS, key=lambda lang: sum(1 for w in words if w in _STOPWORDS[lang]))
 
 
 def _resolve_lang(lang: str, sample: str) -> str:
@@ -205,6 +202,33 @@ def build_contribution(
     return {"nodes": nodes, "edges": edges}
 
 
+# ---------------------------------------------------------------------------
+# Cached accessor (the seam — Fix 3, twin of embed.get_store)
+# ---------------------------------------------------------------------------
+
+_STORE_CACHE: dict[str, "CooccurStore"] = {}
+
+
+def get_cooccur_store(lang: str = "english") -> "CooccurStore":
+    """Return the shared CooccurStore for the current vault's index.
+
+    Process-lifetime singleton keyed by resolved index path (twin of
+    ``embed.get_store``). ``lang`` only seeds an empty store; a loaded store
+    keeps the language frozen on disk. Use ``clear()`` in tests.
+    """
+    key = str(_index_path())
+    store = _STORE_CACHE.get(key)
+    if store is None:
+        store = CooccurStore(lang=lang)
+        _STORE_CACHE[key] = store
+    return store
+
+
+def clear() -> None:
+    """Drop all cached co-occurrence stores (test isolation; /vault switch)."""
+    _STORE_CACHE.clear()
+
+
 class CooccurStore:
     """orjson-backed store of per-note co-occurrence contributions.
 
@@ -245,10 +269,11 @@ class CooccurStore:
                 self._notes = {}
 
     def save(self) -> Path:
+        # No OPT_INDENT_2: machine-only derived index, pretty-printing is pure
+        # I/O tax (Fix 2A). orjson defaults to compact output.
         self._path.parent.mkdir(parents=True, exist_ok=True)
         self._path.write_bytes(orjson.dumps(
             {"version": 1, "lang": self.lang, "notes": self._notes},
-            option=orjson.OPT_INDENT_2,
         ))
         return self._path
 
@@ -371,10 +396,9 @@ class CooccurStore:
         tf_list: list[dict[str, int]] = []
         valid_indices: list[int] = []
         for i, members in enumerate(communities):
-            tf: dict[str, int] = {}
+            tf: Counter[str] = Counter()
             for path in members:
-                for stem, count in self.note_nodes(path).items():
-                    tf[stem] = tf.get(stem, 0) + count
+                tf.update(self.note_nodes(path))
             if tf:
                 tf_list.append(tf)
                 valid_indices.append(i)
@@ -384,10 +408,7 @@ class CooccurStore:
 
         # Steps 3–4 — N and document frequency
         N = len(tf_list)
-        df: dict[str, int] = {}
-        for tf in tf_list:
-            for stem in tf:
-                df[stem] = df.get(stem, 0) + 1
+        df = Counter(stem for tf in tf_list for stem in tf)
 
         # Steps 5–7 — score, rank, surface, label
         result: dict[int, str] = {}
@@ -447,17 +468,19 @@ def build_index(
     lang: str | None = None,
     force: bool = False,
     concepts_by_path: dict[str, list[str]] | None = None,
+    save: bool = True,
 ) -> CooccurStore:
     """Build/refresh the co-occurrence store from (path, name, body) tuples.
 
     Mirrors embed.build_index. Incremental: skips notes already present unless
-    `force`. Returns the saved store.
+    `force`. Returns the store. ``save=False`` (Fix A) defers persistence to a
+    single end-of-run flush.
 
     `concepts_by_path` (#9): optional map of note path -> LLM-extracted concept
     phrases, forwarded into build_contribution to reinforce those concepts.
     """
     if store is None:
-        store = CooccurStore(lang=lang or "english")
+        store = get_cooccur_store(lang=lang or "english")
     use_lang = _resolve_lang(lang or store.lang, "\n".join(b for _p, _n, b in notes[:50]))
     store.lang = use_lang  # freeze resolved language (no 'auto' persisted)
     cmap = concepts_by_path or {}
@@ -468,7 +491,8 @@ def build_index(
             path,
             build_contribution(name, body, lang=use_lang, concepts=cmap.get(path)),
         )
-    store.save()
+    if save:
+        store.save()
     return store
 
 
@@ -486,7 +510,7 @@ def refresh_note(
     so weights never inflate on re-processing.
     """
     if store is None:
-        store = CooccurStore(lang=lang or "english")
+        store = get_cooccur_store(lang=lang or "english")
     use_lang = _resolve_lang(lang or store.lang, body)
     store.lang = use_lang  # freeze resolved language (no 'auto' persisted)
     store.upsert_note(path, build_contribution(name, body, lang=use_lang))

@@ -1,6 +1,5 @@
 from __future__ import annotations
 
-from art import text2art
 from rich.console import Group as RichGroup
 from rich.text import Text
 
@@ -10,6 +9,15 @@ from silica.ui.console import CONSOLE
 from silica.ui.theme import BRAND_CYAN, BRAND_INDIGO
 
 _CAPTION = f"  [dim]v{_VERSION} · Your personal note curator agent[/]"
+
+# Pre-rendered art.text2art("SILICA", font="tarty1") — hardcoded to drop the dep.
+_ART = """\
+░██████╗██╗██╗░░░░░██╗░█████╗░░█████╗░
+██╔════╝██║██║░░░░░██║██╔══██╗██╔══██╗
+╚█████╗░██║██║░░░░░██║██║░░╚═╝███████║
+░╚═══██╗██║██║░░░░░██║██║░░██╗██╔══██║
+██████╔╝██║███████╗██║╚█████╔╝██║░░██║
+╚═════╝░╚═╝╚══════╝╚═╝░╚════╝░╚═╝░░╚═╝""".split("\n")
 
 
 def _gradient(n: int, c0: tuple[int, int, int] = BRAND_CYAN, c1: tuple[int, int, int] = BRAND_INDIGO) -> list[str]:
@@ -27,18 +35,9 @@ def _compute_art() -> list[str] | None:
     """Return art lines if banner would render, else None."""
     if CONFIG.banner_style != "wordmark":
         return None
-    try:
-        raw = text2art("SILICA", font=CONFIG.banner_font)
-        art = [ln for ln in raw.rstrip("\n").split("\n")]
-        while art and not art[-1].strip():
-            art.pop()
-    except Exception:
+    if CONSOLE.width < max(len(ln) for ln in _ART) + 2:
         return None
-    if not art:
-        return None
-    if CONSOLE.width < max(len(ln) for ln in art) + 2:
-        return None
-    return art
+    return _ART
 
 
 def banner_group() -> RichGroup | None:
