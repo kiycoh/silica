@@ -117,6 +117,9 @@ ignore_imports = [
   # dispatciarli: e' l'attivazione decisa dal coordinator (P9), non un peer import.
   "silica.agent.subagent -> silica.capabilities",
 ]
+# Residuo: catene instradate attraverso questo arco ignorato (subagent ->
+# capabilities) sono invisibili a questo contratto — copre solo import diretti
+# e peer import fuori dalla rotta di dispatch.
 
 [[tool.importlinter.contracts]]
 name = "graph structure is deterministic — structural modules never import agent (P2/DKB)"
