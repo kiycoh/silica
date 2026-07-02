@@ -7,6 +7,15 @@ that aggregates results into a BulkResult.
 
 Keeping one executor means any future change to how a write reaches disk
 (e.g. atomic file writes at the DRIVER level) is inherited by every caller.
+
+Post-write verify (falsifiable gate): every successful write/overwrite/patch/
+delete dispatch is followed by a read-back through the DRIVER (_verify_landed /
+_verify_deleted) that is compared against the body actually composed for the
+DRIVER call — never raw op.content. `success: True` used to mean only "the
+DRIVER call didn't raise"; a mismatch here raises ValueError, which the
+existing exception handling in execute_one/execute_operations already turns
+into a failed op — no new failure machinery, just a stricter definition of
+success.
 """
 from __future__ import annotations
 
@@ -14,6 +23,35 @@ from silica.driver import DRIVER
 from silica.kernel import templates
 from silica.kernel.merge import three_way_merge
 from silica.kernel.ops import Op, OpType, FailedOp, BulkResult
+
+
+def _verify_landed(op: Op, path: str, intended: str | None) -> str | None:
+    """Falsifiable gate: rilegge dal DRIVER e confronta. None = ok, str = errore.
+
+    `intended` is the final body composed by the caller (post frontmatter/merge
+    enrichment) — never raw op.content — so this is a byte-for-byte check
+    against exactly what was handed to the DRIVER. For patch, `intended` is
+    None and the check degrades to "does the appended snippet survive the
+    merge" (substring, since patch merges rather than replaces).
+    """
+    try:
+        landed = DRIVER.read_note(path).content or ""
+    except RuntimeError as e:
+        return f"post-write verify: read-back failed: {e}"
+    if intended is not None and landed != intended:
+        return "post-write verify: content mismatch (backend altered payload)"
+    if intended is None and op.snippet and op.snippet not in landed:
+        return "post-write verify: patch snippet not found in note"
+    return None
+
+
+def _verify_deleted(path: str) -> str | None:
+    """Falsifiable gate for delete: read-back must now fail (existence negated)."""
+    try:
+        DRIVER.read_note(path)
+    except RuntimeError:
+        return None
+    return "post-write verify: note still present after delete"
 
 
 def _execute_write(op: Op, path: str) -> dict:
@@ -35,6 +73,9 @@ def _execute_write(op: Op, path: str) -> dict:
         parent=op.parent,
     )
     DRIVER.create(path, content)
+    err = _verify_landed(op, path, content)
+    if err:
+        raise ValueError(err)
     return {"path": path, "op": "write", "success": True}
 
 
@@ -71,6 +112,9 @@ def _execute_patch(op: Op, path: str) -> dict:
         from silica.kernel.contested import mark_contested
         new_content = mark_contested(new_content, op.contested_by)
     DRIVER.overwrite(path, new_content)
+    err = _verify_landed(op, path, None)
+    if err:
+        raise ValueError(err)
     return {"path": path, "op": "patch", "success": True}
 
 
@@ -95,6 +139,9 @@ def _execute_overwrite(op: Op, path: str) -> dict:
         content, had_conflict = three_way_merge(op.base_content, current, content)
 
     DRIVER.overwrite(path, content)
+    err = _verify_landed(op, path, content)
+    if err:
+        raise ValueError(err)
     result = {"path": path, "op": "overwrite", "success": True}
     if had_conflict:
         result["conflict"] = True
@@ -104,6 +151,9 @@ def _execute_overwrite(op: Op, path: str) -> dict:
 def _execute_delete(op: Op, path: str) -> dict:
     """Delete a note."""
     DRIVER.delete(path)
+    err = _verify_deleted(path)
+    if err:
+        raise ValueError(err)
     return {"path": path, "op": "delete", "success": True}
 
 

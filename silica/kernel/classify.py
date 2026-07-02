@@ -27,7 +27,27 @@ from collections import Counter
 from dataclasses import dataclass, field
 from typing import Any
 
+from pydantic import BaseModel
+
 logger = logging.getLogger(__name__)
+
+
+# ---------------------------------------------------------------------------
+# L2 arbiter — constrained-decoding wrapper models
+#
+# json_schema (response_format) requires an object root, so the arbiter's
+# per-note assignments are wrapped in an object instead of returned as a
+# bare JSON array.
+# ---------------------------------------------------------------------------
+
+class FolderAssignment(BaseModel):
+    index: int
+    folder: str
+
+
+class ArbitrationResult(BaseModel):
+    assignments: list[FolderAssignment]
+
 
 # Ambiguous band: scores in this range trigger the LLM arbiter.
 _DEFAULT_TAU_HIGH = 0.55   # above → clear L1 winner
@@ -266,7 +286,7 @@ def _llm_arbitrate(
 
     system_prompt = (
         "You are a vault organizer. Assign each note to exactly one folder from the list.\n"
-        "Return a JSON array of objects: [{\"index\": 0, \"folder\": \"Concepts/AI\"}, ...]\n"
+        "Return a JSON object: {\"assignments\": [{\"index\": 0, \"folder\": \"Concepts/AI\"}, ...]}\n"
         "Use only the folder values listed. No explanation."
     )
     user_msg = (
@@ -282,19 +302,21 @@ def _llm_arbitrate(
                 {"role": "user", "content": user_msg},
             ],
             tools=None,
+            response_format=ArbitrationResult,
         )
         parsed, _ = parse_json(response.text or "", strict=False)
     except Exception as exc:
         logger.warning("LLM arbiter failed (%s) — falling back to uncategorized", exc)
         return {note_path: taxonomy.uncategorized for note_path, _s, _r in ambiguous}
 
-    if not isinstance(parsed, list):
+    assignments = parsed.get("assignments") if isinstance(parsed, dict) else None
+    if not isinstance(assignments, list):
         logger.warning("LLM arbiter returned non-list: %r — falling back", parsed)
         return {note_path: taxonomy.uncategorized for note_path, _s, _r in ambiguous}
 
     valid_folders = {r.folder for r in taxonomy.rules} | {taxonomy.uncategorized}
     result: dict[str, str] = {}
-    for entry in parsed:
+    for entry in assignments:
         if not isinstance(entry, dict):
             continue
         idx = entry.get("index")

@@ -233,6 +233,7 @@ def run_distiller(
             messages=[{"role": "user", "content": user_message}],
             tools=None,
             max_tokens=max_tokens,
+            response_format=DistillerOutput,
         )
 
     raw_output = response.text or ""
