@@ -1,10 +1,9 @@
 # Silica Agent
 
-[![Python 3.11+](https://img.shields.io/badge/python-3.11+-blue.svg)](https://www.python.org/)
-[![Filesystem Native](https://img.shields.io/badge/Backend-Filesystem--Native-brightgreen.svg)](#)
-[![Obsidian Compatible](https://img.shields.io/badge/Obsidian-Compatible-purple.svg)](https://obsidian.md/)
-[![License: Apache 2.0](https://img.shields.io/badge/License-Apache_2.0-yellow.svg)](https://opensource.org/licenses/Apache-2.0)
-[![Powered by UV](https://img.shields.io/badge/package--manager-uv-brightgreen.svg)](https://github.com/astral-sh/uv)
+[![Python 3.11+](https://img.shields.io/badge/python-3.11+-22d3ee.svg)](https://www.python.org/)
+[![Obsidian Compatible](https://img.shields.io/badge/Obsidian-Compatible-38afef.svg)](https://obsidian.md/)
+[![License: AGPL 3.0](https://img.shields.io/badge/License-AGPL_v3-4d8af0.svg)](https://opensource.org/licenses/AGPL-3.0)
+[![Powered by UV](https://img.shields.io/badge/package--manager-uv-6366f1.svg)](https://github.com/astral-sh/uv)
 
 > **Silica** is a conversational CLI agent and automated curation engine that operates **filesystem-native** — no Obsidian installation required. It manages logs, links notes, and structures concepts directly on your markdown vault while preserving integrity through strict quality gates. The Obsidian desktop app is supported as an optional enhancement (adds version-history rollback and live metadata-cache reads).
 
@@ -277,6 +276,6 @@ We maintain a set of structural patterns and trade-offs documented as Architectu
 
 ## License
 
-This project is licensed under the **Apache License 2.0**.
+This project is licensed under the **GNU Affero General Public License v3.0** (AGPL-3.0).
 
 See [LICENSE](LICENSE) for details.

@@ -11,7 +11,7 @@ dynamic = ["version"]
 description = "Obsidian-native agentic CLI — vault curation with quality gates"
 readme = "README.md"
 requires-python = ">=3.11"
-license = { text = "Apache-2.0" }
+license = { text = "AGPL-3.0-or-later" }
 dependencies = [
   "litellm",
   "httpx",
@@ -34,8 +34,7 @@ dependencies = [
 ]
 
 [project.optional-dependencies]
-# AGPL-3.0 (or Artifex commercial) — kept OUT of the Apache-2.0 core. Opt-in:
-# `pip install silica[pdf]`. Using it makes the running combination AGPL for you.
+# Opt-in PDF support (requires pymupdf4llm):
 pdf = ["pymupdf4llm>=1.27.2.3"]
 dev = ["pytest>=8.0", "mypy>=1.10", "import-linter>=2.0"]
 
