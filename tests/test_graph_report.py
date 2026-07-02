@@ -362,3 +362,158 @@ def test_duplicate_pairs_split_confirmed_vs_borderline(monkeypatch):
 
     assert [(d.source, d.target) for d in confirmed] == [("a", "b")]
     assert [(d.source, d.target) for d in borderline] == [("c", "d")]
+
+
+# ---------------------------------------------------------------------------
+# Contested notes (spec-hermes-coherence §1): analytics triage surfaces
+# contested frontmatter so contradictions never silently harden into fact.
+# ---------------------------------------------------------------------------
+
+CONTESTED_NOTE = """---
+AI: true
+tags:
+  - farmacologia
+last modified: 2026, 07, 02
+related:
+  - "[[B]]"
+contested: true
+contradictions:
+  - "fonte: appunti.md"
+---
+
+# A
+
+corpo con [[B]]
+"""
+
+PLAIN_NOTE = """---
+AI: true
+tags:
+  - t
+last modified: 2026, 07, 02
+related:
+  - "[[A]]"
+---
+
+# B
+
+corpo
+"""
+
+
+def test_contested_notes_surface_in_analytics_report(tmp_vault):
+    tmp_vault.note("A.md", CONTESTED_NOTE)
+    tmp_vault.note("B.md", PLAIN_NOTE)
+    nodes = [_make_node("A", "A", group=0), _make_node("B", "B", group=0)]
+    edges = [_make_edge("e0", "A", "B")]
+
+    r = compute_report(_nodes_edges_override=(nodes, edges), analytics=True)
+
+    assert [c.path for c in r.contested] == ["A"]
+    assert r.contested[0].refs == ["fonte: appunti.md"]
+    assert r.totals["contested"] == 1
+
+
+def test_contested_skipped_without_analytics(tmp_vault):
+    tmp_vault.note("A.md", CONTESTED_NOTE)
+    nodes = [_make_node("A", "A", group=0)]
+    r = compute_report(_nodes_edges_override=(nodes, []))
+    assert r.contested == []
+
+
+def test_contested_section_rendered(tmp_vault):
+    tmp_vault.note("A.md", CONTESTED_NOTE)
+    tmp_vault.note("B.md", PLAIN_NOTE)
+    nodes = [_make_node("A", "A", group=0), _make_node("B", "B", group=0)]
+    edges = [_make_edge("e0", "A", "B")]
+    r = compute_report(_nodes_edges_override=(nodes, edges), analytics=True)
+
+    md = to_markdown(r)
+    assert "Contested" in md and "appunti.md" in md
+    digest = to_digest(r)
+    assert "contested" in digest.lower()
+
+
+# ---------------------------------------------------------------------------
+# Source drift (spec-hermes-coherence §3): note<->source drift via sha256
+# provenance records. Embedder-free, pure read of .silica/provenance.json —
+# no note bodies touched, unlike Contested above.
+# ---------------------------------------------------------------------------
+
+def test_source_drift_acceptance_v2_touching_half_drifts_the_other_half(tmp_vault):
+    """Ingest v1 (A,B) -> modify source -> re-ingest v2 (A only) -> graph_report
+    lists B as drifted from lezione-03.md."""
+    from silica.kernel.provenance import append_record
+
+    append_record("lezione-03.md", "sha-v1", "run1", ["A", "B"])
+    append_record("lezione-03.md", "sha-v2", "run2", ["A"])
+
+    nodes = [_make_node("A", "A", group=0), _make_node("B", "B", group=0)]
+    r = compute_report(_nodes_edges_override=(nodes, []), analytics=True)
+
+    assert [(d.note, d.source) for d in r.source_drift] == [("B", "lezione-03.md")]
+    assert r.totals["source_drift"] == 1
+
+
+def test_source_drift_empty_without_provenance_file(tmp_vault):
+    """No .silica/provenance.json -> no drift, nothing fails (additive)."""
+    nodes = [_make_node("A", "A", group=0)]
+    r = compute_report(_nodes_edges_override=(nodes, []), analytics=True)
+    assert r.source_drift == []
+    assert r.totals["source_drift"] == 0
+
+
+def test_source_drift_skipped_without_analytics(tmp_vault):
+    from silica.kernel.provenance import append_record
+
+    append_record("a.md", "sha1", "run1", ["A", "B"])
+    append_record("a.md", "sha2", "run2", ["A"])
+
+    nodes = [_make_node("A", "A", group=0), _make_node("B", "B", group=0)]
+    r = compute_report(_nodes_edges_override=(nodes, []))
+    assert r.source_drift == []
+
+
+def test_source_drift_section_rendered(tmp_vault):
+    from silica.kernel.provenance import append_record
+
+    append_record("lezione-03.md", "sha-v1", "run1", ["A", "B"])
+    append_record("lezione-03.md", "sha-v2", "run2", ["A"])
+
+    nodes = [_make_node("A", "A", group=0), _make_node("B", "B", group=0)]
+    r = compute_report(_nodes_edges_override=(nodes, []), analytics=True)
+
+    md = to_markdown(r)
+    assert "Source Drift" in md
+    assert "lezione-03.md" in md
+    assert "[[B]]" in md
+    digest = to_digest(r)
+    assert "drift" in digest.lower()
+
+
+def test_source_drift_no_section_when_empty(tmp_vault):
+    nodes = [_make_node("A", "A", group=0)]
+    r = compute_report(_nodes_edges_override=(nodes, []), analytics=True)
+    md = to_markdown(r)
+    assert "Source Drift" not in md
+
+
+def test_source_drift_matches_despite_md_suffix_on_node_ids(tmp_vault):
+    """Regression: real vault node ids carry `.md` (driver index keys) while
+    provenance notes are recorded WITHOUT it (RunManifestEntry.path strips
+    the suffix). The id-form mismatch must not swallow the intersection —
+    drift has to surface even when the graph node id is `Concepts/A.md` and
+    the provenance note is `Concepts/A`."""
+    from silica.kernel.provenance import append_record
+
+    append_record("lezione-03.md", "sha-v1", "run1", ["Concepts/A", "Concepts/B"])
+    append_record("lezione-03.md", "sha-v2", "run2", ["Concepts/A"])
+
+    nodes = [
+        _make_node("Concepts/A.md", "A", group=0),
+        _make_node("Concepts/B.md", "B", group=0),
+    ]
+    r = compute_report(_nodes_edges_override=(nodes, []), analytics=True)
+
+    assert [(d.note, d.source) for d in r.source_drift] == [("Concepts/B", "lezione-03.md")]
+    assert r.totals["source_drift"] == 1

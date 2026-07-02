@@ -81,6 +81,18 @@ class MissingHub:          # central concept in the discourse with no hub note
 
 
 @dataclass
+class ContestedNote:       # AUTHORITATIVE — frontmatter `contested: true`
+    path: str              # node id
+    refs: list[str]        # `contradictions:` entries (sources / notes in conflict)
+
+
+@dataclass
+class SourceDrift:         # AUTHORITATIVE — derived from .silica/provenance.json
+    note: str               # node id, derived from a superseded source version
+    source: str              # source basename whose version moved on without this note
+
+
+@dataclass
 class VaultReport:
     generated_at: str
     scope: str
@@ -98,4 +110,6 @@ class VaultReport:
     missing_hubs: list[MissingHub] = field(default_factory=list)
     lean_notes: list[str] = field(default_factory=list)
     reformat_notes: list[str] = field(default_factory=list)
+    contested: list[ContestedNote] = field(default_factory=list)
+    source_drift: list[SourceDrift] = field(default_factory=list)
     pagerank_map: dict[str, float] = field(default_factory=dict)  # all nodes: vault-relative path (no .md) → pagerank

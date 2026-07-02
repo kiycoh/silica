@@ -19,7 +19,9 @@ from silica.kernel.graph_report.embed_signals import (
 from silica.kernel.graph_report.models import (
     BridgeStat,
     ClusterStat,
+    ContestedNote,
     NodeStat,
+    SourceDrift,
     VaultReport,
 )
 
@@ -94,6 +96,7 @@ def compute_report(
     # the per-note read entirely.
     lean_notes: list[str] = []
     reformat_notes: list[str] = []
+    contested: list[ContestedNote] = []
     if analytics:
         try:
             from silica.kernel import ofm, frontmatter
@@ -105,6 +108,10 @@ def compute_report(
                     if not nc.content:
                         continue
                     data, _, body = frontmatter.split(nc.content)
+                    if data and data.get("contested"):
+                        contested.append(
+                            ContestedNote(path=nid, refs=list(data.get("contradictions") or []))
+                        )
                     is_empty = len(body.strip()) == 0
                     is_lean = ofm.is_lean(body)
                     if is_empty or is_lean:
@@ -115,6 +122,27 @@ def compute_report(
                     pass
         except Exception as exc:
             logger.warning("graph_report: triage failed — %s", exc)
+
+    # Source drift (spec-hermes-coherence §3) — analytics-only for parity with
+    # the other on-demand /report signals above, though the read itself is
+    # cheap (one .silica/provenance.json parse, no per-note driver reads).
+    source_drift: list[SourceDrift] = []
+    if analytics:
+        try:
+            from silica.kernel.provenance import drifted_notes
+
+            # Provenance notes are recorded WITHOUT the `.md` extension
+            # (RunManifestEntry.path strips it), but graph node ids (real_ids)
+            # carry `.md` (driver index keys) — strip at the seam before
+            # intersecting, per codebase convention.
+            real_stems = {i.removesuffix(".md") for i in real_ids}
+            source_drift = [
+                SourceDrift(note=note, source=source)
+                for note, source in drifted_notes()
+                if note in real_stems
+            ]
+        except Exception as exc:
+            logger.warning("graph_report: source drift check failed — %s", exc)
 
     # PageRank — analytics-only (200-iteration power method); the structural
     # core leaves it empty so god-node tiebreaks and pagerank_map are all-zero.
@@ -239,6 +267,8 @@ def compute_report(
         pagerank_map={nid: round(pr.get(nid, 0.0), 5) for nid in real_ids},
         lean_notes=lean_notes,
         reformat_notes=reformat_notes,
+        contested=contested,
+        source_drift=source_drift,
     )
 
     if with_embeddings:
@@ -266,6 +296,8 @@ def compute_report(
         "missing_hubs": len(report.missing_hubs),
         "lean_notes": len(lean_notes),
         "reformat_notes": len(reformat_notes),
+        "contested": len(contested),
+        "source_drift": len(source_drift),
         "orphans": len(orphans),
         "clusters": len(clusters),
     }

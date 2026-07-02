@@ -26,6 +26,8 @@ def build_vault_map(
     max_clusters: int = 8,
     max_vocab: int = 15,
     max_hubs: int = 8,
+    max_contested: int = 8,
+    log_tail: int = 5,
 ) -> str | None:
     try:
         from silica.config import CONFIG
@@ -40,25 +42,59 @@ def build_vault_map(
             "puo' non riflettere le scritture di questa sessione)"
         ]
 
-        # Conteggio note + cartelle principali
+        # Un solo giro di vault: refs alimenta sia il blocco cartelle sia lo
+        # scan contested (una sola list_files, non due).
+        refs: list = []
         try:
             from silica.driver import DRIVER
 
             refs = DRIVER.list_files()
-            folder_counts: Counter[str] = Counter(
-                (r.path.rsplit("/", 1)[0] if "/" in r.path else "(root)")
-                for r in refs
-                if getattr(r, "path", "")
-            )
-            lines.append(f"- Note: {len(refs)} in {len(folder_counts)} cartelle")
-            top = folder_counts.most_common(max_folders)
-            if top:
-                lines.append(
-                    "- Cartelle principali: "
-                    + ", ".join(f"{f} ({c})" for f, c in top)
+        except Exception as e:  # best-effort
+            logger.debug("build_vault_map: list_files fallito: %s", e)
+
+        # Conteggio note + cartelle principali
+        try:
+            if refs:
+                folder_counts: Counter[str] = Counter(
+                    (r.path.rsplit("/", 1)[0] if "/" in r.path else "(root)")
+                    for r in refs
+                    if getattr(r, "path", "")
                 )
+                lines.append(f"- Note: {len(refs)} in {len(folder_counts)} cartelle")
+                top = folder_counts.most_common(max_folders)
+                if top:
+                    lines.append(
+                        "- Cartelle principali: "
+                        + ", ".join(f"{f} ({c})" for f, c in top)
+                    )
         except Exception as e:  # best-effort
             logger.debug("build_vault_map: blocco cartelle saltato: %s", e)
+
+        # Note contestate (spec-hermes-coherence §1 residuo): frontmatter
+        # `contested: true`, stesso pattern di scan di graph_report/compute.py
+        # ma via props_of (frontmatter-only, niente body) — embedder-free,
+        # kernel-only. Nessuna riga se N == 0.
+        try:
+            from silica.driver import DRIVER
+
+            contested_names: list[str] = []
+            for ref in refs:
+                try:
+                    props = DRIVER.props_of(ref)
+                except Exception:
+                    continue
+                if props and props.get("contested"):
+                    contested_names.append(
+                        ref.path.rsplit("/", 1)[-1].removesuffix(".md")
+                    )
+            if contested_names:
+                shown = ", ".join(f"[[{n}]]" for n in contested_names[:max_contested])
+                extra = len(contested_names) - max_contested
+                if extra > 0:
+                    shown += f" … +{extra}"
+                lines.append(f"⚠ {len(contested_names)} note contestate: {shown}")
+        except Exception as e:  # best-effort
+            logger.debug("build_vault_map: blocco contested saltato: %s", e)
 
         # Cluster principali (Louvain sul grafo concetti; ogni community e'
         # etichettata dai suoi stem a peso maggiore — community_labels NON va
@@ -109,6 +145,18 @@ def build_vault_map(
                 )
         except Exception as e:
             logger.debug("build_vault_map: blocco hub saltato: %s", e)
+
+        # Coda del log.md — l'agente vede cosa e' successo di recente senza
+        # dover aprire il JSON dei run (Task 2: journal umano append-only).
+        try:
+            from silica.kernel.run_log import tail_log
+
+            recent = tail_log(log_tail)
+            if recent:
+                lines.append("- Log recente:")
+                lines.extend(f"  {ln}" for ln in recent)
+        except Exception as e:
+            logger.debug("build_vault_map: blocco log saltato: %s", e)
 
         # Solo l'header → niente di utile: comportati come vault vuoto.
         if len(lines) == 1:

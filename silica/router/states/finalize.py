@@ -159,6 +159,80 @@ def handle_lint(fsm: "InjectorFSM") -> None:
     fsm._transition_success()
 
 
+def _log_ingest_completion(fsm: "InjectorFSM", fi: int, source_file: str) -> None:
+    """Append one line to the vault's human journal (log.md).
+
+    Pure projection of state WRITE/VALIDATE already recorded — the manifest
+    (new/patch counts) and the deferred store (deferred count) — onto the
+    log.md line shape. No new computation. Idempotent per (run_id, source
+    file): a multi-file run shares one run_id and fires this once per file,
+    so each file needs its own line, while a resume of the same run must not
+    duplicate any (dedup_key). Best-effort and must never block CLEANUP.
+    """
+    try:
+        from silica.kernel.run_log import append_log_line, format_ingest_event
+
+        basename = os.path.basename(source_file)
+        new_count = sum(
+            1 for e in fsm.manifest.entries
+            if e.source_basename == basename and e.op == "write"
+        )
+        patch_count = sum(
+            1 for e in fsm.manifest.entries
+            if e.source_basename == basename and e.op == "patch"
+        )
+
+        deferred_count = 0
+        content_hashes = getattr(fsm, "_file_content_hashes", [])
+        if fi < len(content_hashes):
+            try:
+                from silica.kernel.deferred import get_deferred_store
+                bundle = get_deferred_store().get(content_hashes[fi])
+                if bundle:
+                    deferred_count = len(bundle.get("rejected_ops", []))
+            except Exception as _de:
+                logger.debug("CLEANUP: deferred count lookup failed (non-fatal): %s", _de)
+
+        event = format_ingest_event(basename, new_count, patch_count, deferred_count)
+        append_log_line(event, fsm.progress.run_id, dedup_key=f"`{basename}`")
+    except Exception as exc:
+        logger.debug("CLEANUP: log.md append skipped (non-fatal): %s", exc)
+
+
+def _record_provenance(fsm: "InjectorFSM", fi: int, source_file: str) -> None:
+    """Append one .silica/provenance.json record (spec-hermes-coherence §3).
+
+    Sibling projection to _log_ingest_completion, at the same CLEANUP point:
+    reuses fsm._file_content_hashes[fi] — the sha256 already computed once
+    per file at RUN start (silica.router.orchestrator.InjectorFSM.run), the
+    same value the /ingest pre-check will later compare against. Recomputing
+    it here would fail anyway: by CLEANUP the source file has already been
+    archived (moved) out of its original inbox path. `notes` is the
+    projection of this run's validated write/patch ops for this source,
+    already recorded in fsm.manifest.entries — no new computation. Records
+    even when notes is empty: a version change with zero touched notes still
+    means every note derived from the prior version is now stale. Best-
+    effort and must never block CLEANUP.
+    """
+    try:
+        from silica.kernel.provenance import append_record
+
+        basename = os.path.basename(source_file)
+        content_hashes = getattr(fsm, "_file_content_hashes", [])
+        sha256 = content_hashes[fi] if fi < len(content_hashes) else ""
+        if not sha256:
+            return
+
+        notes = sorted({
+            e.path for e in fsm.manifest.entries
+            if e.source_basename == basename and e.op in ("write", "patch")
+        })
+
+        append_record(basename, sha256, fsm.progress.run_id, notes)
+    except Exception as exc:
+        logger.debug("CLEANUP: provenance append skipped (non-fatal): %s", exc)
+
+
 def handle_cleanup(fsm: "InjectorFSM") -> None:
     from silica.tools.wrapped import silica_cleanup
 
@@ -186,6 +260,8 @@ def handle_cleanup(fsm: "InjectorFSM") -> None:
             res = silica_cleanup(inbox_file_for_fi, "done")
             if "error" in res:
                 fsm.context["cleanup_warning"] = res["error"]
+            _log_ingest_completion(fsm, fi, inbox_file_for_fi)
+            _record_provenance(fsm, fi, inbox_file_for_fi)
         else:
             logger.info(
                 "File %d (%s) had chunk failures — not archiving.",

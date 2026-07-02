@@ -77,6 +77,10 @@ def to_markdown(r: VaultReport, title: str = "Silica Vault Report") -> str:
         health.append(f"{t['orphans']} orphans (no incoming links)")
     if t.get("dangling_links"):
         health.append(f"{t['dangling_links']} broken links (point to notes that don't exist)")
+    if t.get("contested"):
+        health.append(f"{t['contested']} contested notes (unresolved contradictions)")
+    if t.get("source_drift"):
+        health.append(f"{t['source_drift']} notes derived from a superseded source version")
     if health:
         add("Health: " + "; ".join(health) + ".")
     fixes = [
@@ -172,6 +176,26 @@ def to_markdown(r: VaultReport, title: str = "Silica Vault Report") -> str:
     else:
         add("_No unresolved wikilinks._")
     add("")
+
+    # Contested claims — authoritative, kept visible until a human resolves them
+    if r.contested:
+        add("## Contested Claims (Unresolved Contradictions)")
+        for c in r.contested[:_LIST_CAP]:
+            refs = "; ".join(c.refs) if c.refs else "—"
+            add(f"- [[{_short(c.path)}]] ↮ {refs}")
+        if len(r.contested) > _LIST_CAP:
+            add(f"- _… +{len(r.contested) - _LIST_CAP} more (see GRAPH_REPORT.json)_")
+        add("")
+
+    # Source drift — authoritative, from .silica/provenance.json: notes still
+    # carrying claims from a source version that has since been re-ingested
+    if r.source_drift:
+        add("## Source Drift (Notes From a Superseded Source Version)")
+        for d in r.source_drift[:_LIST_CAP]:
+            add(f"- [[{_short(d.note)}]] — derivate da versione superata di {d.source}")
+        if len(r.source_drift) > _LIST_CAP:
+            add(f"- _… +{len(r.source_drift) - _LIST_CAP} more (see GRAPH_REPORT.json)_")
+        add("")
 
     # Missing links (proposed)
     if r.missing_links:
@@ -291,6 +315,20 @@ def to_digest(report: VaultReport, *, max_items: int = 8) -> str:
             for d in report.dangling[:max_items]
         )
         lines.append(f"DANGLING  {dang}")
+
+    if report.contested:
+        con = ", ".join(
+            c.path.rsplit("/", 1)[-1].removesuffix(".md")
+            for c in report.contested[:max_items]
+        )
+        lines.append(f"CONTESTED  {con}")
+
+    if report.source_drift:
+        sd = ", ".join(
+            f"{d.note.rsplit('/', 1)[-1].removesuffix('.md')}←{d.source}"
+            for d in report.source_drift[:max_items]
+        )
+        lines.append(f"SOURCE DRIFT  {sd}")
 
     if report.clusters:
         clist = ", ".join(
