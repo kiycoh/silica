@@ -203,6 +203,85 @@ class TestRunDistillerSchemaPassing:
 
 
 # ---------------------------------------------------------------------------
+# 5. litellm fallback branch also wires response_format=DistillerOutput
+#
+# When the primary provider call raises, run_distiller falls back to the
+# generic litellm call_llm() path. That recovery path must not silently drop
+# constrained decoding — it is the branch where reliability matters most.
+# ---------------------------------------------------------------------------
+
+def _litellm_mock_response(text: str, finish_reason: str = "stop"):
+    """Build a litellm.completion-style mock response (mirrors
+    test_llm_structured_output.py's _mock_completion helper)."""
+    message = MagicMock()
+    message.content = text
+    message.tool_calls = None
+    message.reasoning_content = None
+    message.reasoning = None
+    message.thinking_blocks = None
+
+    choice = MagicMock()
+    choice.message = message
+    choice.finish_reason = finish_reason
+
+    response = MagicMock()
+    response.choices = [choice]
+    response.usage = MagicMock(prompt_tokens=10, completion_tokens=20, total_tokens=30)
+    return response
+
+
+class TestRunDistillerFallbackSchemaPassing:
+    @patch("litellm.completion")
+    @patch("silica.agent.providers.get_provider")
+    def test_fallback_passes_response_format_to_litellm(self, mock_get_provider, mock_completion):
+        """The litellm fallback must request response_format=DistillerOutput,
+        exactly like the primary provider path does via response_schema."""
+        mock_provider = MagicMock()
+        mock_get_provider.return_value = mock_provider
+        mock_provider.call_llm.side_effect = RuntimeError("primary provider unavailable")
+
+        valid_output = json.dumps({"updates": [_op_dict()]})
+        mock_completion.return_value = _litellm_mock_response(valid_output)
+
+        from silica.kernel.prep_delegation import run_distiller
+        result = run_distiller(
+            payload={"schema_version": "1.0", "batches": []},
+            target="1 Cultura/Test",
+        )
+
+        assert mock_completion.called
+        call_kwargs = mock_completion.call_args.kwargs
+        assert call_kwargs.get("response_format") is DistillerOutput
+        assert "updates" in result
+
+    @patch("litellm.completion")
+    @patch("silica.agent.providers.get_provider")
+    def test_fallback_still_salvages_truncated_prefix(self, mock_get_provider, mock_completion):
+        """The truncated-prefix salvage (#1) must keep working when the response
+        came from the litellm fallback rather than the primary provider."""
+        mock_provider = MagicMock()
+        mock_get_provider.return_value = mock_provider
+        mock_provider.call_llm.side_effect = RuntimeError("primary provider unavailable")
+
+        truncated = (
+            '{"main_thematic_axes": ["x"], "updates": ['
+            '{"heading": "Done", "op": "skip", "source_basename": "f.md"}, '
+            '{"heading": "Cut", "op": "write", "snippet": "half'
+        )
+        mock_completion.return_value = _litellm_mock_response(truncated, finish_reason="length")
+
+        from silica.kernel.prep_delegation import run_distiller
+        result = run_distiller(
+            payload={"schema_version": 1, "batches": []},
+            target="1 Cultura/Test",
+        )
+
+        assert "error" not in result
+        assert len(result["updates"]) == 1
+        assert result["updates"][0]["heading"] == "Done"
+
+
+# ---------------------------------------------------------------------------
 # #9 prompt instruction: the distiller is told to emit normalized concepts
 # ---------------------------------------------------------------------------
 

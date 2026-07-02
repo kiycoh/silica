@@ -5,6 +5,7 @@ and in-memory data to validate the pipeline mechanics.
 """
 from __future__ import annotations
 
+import json
 from unittest.mock import MagicMock, patch
 
 import pytest
@@ -286,6 +287,121 @@ class TestClassifyNotes:
             props_map={"report_a.md": {"date": "2026-06-08"}}
         )
         assert results[0].target_folder == "Archive/2026"
+
+
+# ---------------------------------------------------------------------------
+# _llm_arbitrate — L2 arbiter: constrained decoding via response_format
+#
+# json_schema requires an object root, so the arbiter asks for a wrapper
+# object ({"assignments": [...]}) instead of a bare JSON array. The tolerant
+# parse_json() downstream, and the "fall back to uncategorized" degradation
+# on exception/malformed output, must stay exactly as before.
+# ---------------------------------------------------------------------------
+
+def _litellm_mock_response(text: str):
+    """Build a litellm.completion-style mock response (mirrors
+    test_llm_structured_output.py's _mock_completion helper)."""
+    message = MagicMock()
+    message.content = text
+    message.tool_calls = None
+    message.reasoning_content = None
+    message.reasoning = None
+    message.thinking_blocks = None
+
+    choice = MagicMock()
+    choice.message = message
+    choice.finish_reason = "stop"
+
+    response = MagicMock()
+    response.choices = [choice]
+    response.usage = MagicMock(prompt_tokens=10, completion_tokens=20, total_tokens=30)
+    return response
+
+
+class TestLLMArbitrate:
+    @pytest.fixture
+    def taxonomy_with_two_folders(self) -> Taxonomy:
+        return Taxonomy(
+            rules=[
+                FolderRule(folder="Concepts/AI", themes=["machine learning"]),
+                FolderRule(folder="Life/Food", themes=["cooking"]),
+            ],
+            uncategorized="Misc",
+        )
+
+    @staticmethod
+    def _ambiguous():
+        return [
+            ("note-a.md", "some ambiguous snippet about AI and food", []),
+            ("note-b.md", "another ambiguous snippet", []),
+        ]
+
+    def test_response_format_passed_to_litellm(self, taxonomy_with_two_folders):
+        """Both call-sites must request response_format at the litellm boundary,
+        not just call call_llm() with a bare prompt."""
+        from silica.kernel.classify import ArbitrationResult, _llm_arbitrate
+
+        mock_resp = _litellm_mock_response(json.dumps({
+            "assignments": [
+                {"index": 0, "folder": "Concepts/AI"},
+                {"index": 1, "folder": "Life/Food"},
+            ]
+        }))
+        with patch("litellm.completion", return_value=mock_resp) as mock_completion:
+            result = _llm_arbitrate(self._ambiguous(), taxonomy_with_two_folders)
+
+        assert mock_completion.called
+        call_kwargs = mock_completion.call_args.kwargs
+        assert call_kwargs.get("response_format") is ArbitrationResult
+        assert result == {"note-a.md": "Concepts/AI", "note-b.md": "Life/Food"}
+
+    def test_wrapper_conformant_response_applies_assignments(self, taxonomy_with_two_folders):
+        """A response matching the ArbitrationResult wrapper is applied as before."""
+        from silica.kernel.classify import _llm_arbitrate
+
+        mock_resp = _litellm_mock_response(json.dumps({
+            "assignments": [
+                {"index": 0, "folder": "Life/Food"},
+                {"index": 1, "folder": "Concepts/AI"},
+            ]
+        }))
+        with patch("litellm.completion", return_value=mock_resp):
+            result = _llm_arbitrate(self._ambiguous(), taxonomy_with_two_folders)
+
+        assert result == {"note-a.md": "Life/Food", "note-b.md": "Concepts/AI"}
+
+    def test_malformed_shaped_response_falls_back_to_uncategorized(self, taxonomy_with_two_folders):
+        """Valid JSON that doesn't match the wrapper shape (e.g. a bare list, the
+        old pre-fix format) degrades to uncategorized — degradation unchanged."""
+        from silica.kernel.classify import _llm_arbitrate
+
+        mock_resp = _litellm_mock_response(json.dumps([
+            {"index": 0, "folder": "Concepts/AI"},
+        ]))
+        with patch("litellm.completion", return_value=mock_resp):
+            result = _llm_arbitrate(self._ambiguous(), taxonomy_with_two_folders)
+
+        assert result == {"note-a.md": "Misc", "note-b.md": "Misc"}
+
+    def test_unparseable_response_falls_back_to_uncategorized(self, taxonomy_with_two_folders):
+        """Completely non-JSON output (parse_json raises) hits the except branch."""
+        from silica.kernel.classify import _llm_arbitrate
+
+        mock_resp = _litellm_mock_response("not json at all <<<")
+        with patch("litellm.completion", return_value=mock_resp):
+            result = _llm_arbitrate(self._ambiguous(), taxonomy_with_two_folders)
+
+        assert result == {"note-a.md": "Misc", "note-b.md": "Misc"}
+
+    def test_call_llm_exception_falls_back_to_uncategorized(self, taxonomy_with_two_folders):
+        """The provider call itself failing (network, timeout, ...) must still
+        degrade cleanly, exactly as before."""
+        from silica.kernel.classify import _llm_arbitrate
+
+        with patch("litellm.completion", side_effect=RuntimeError("network down")):
+            result = _llm_arbitrate(self._ambiguous(), taxonomy_with_two_folders)
+
+        assert result == {"note-a.md": "Misc", "note-b.md": "Misc"}
 
 
 # ---------------------------------------------------------------------------
