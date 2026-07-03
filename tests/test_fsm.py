@@ -1,6 +1,11 @@
 from unittest.mock import patch, MagicMock, call
 from silica.router.orchestrator import InjectorFSM, InjectorState
+from silica.router.recipe_parser import load_recipe
 from silica.tools import TOOLS
+
+# Loaded before any test patches builtins.open: tests that mock open() would
+# otherwise break the (fail-fast) recipe load inside InjectorFSM.__init__.
+_RECIPE = load_recipe("injector")
 
 def test_injector_fsm_initialization():
     fsm = InjectorFSM("Inbox/test.md", "TargetDir")
@@ -310,6 +315,7 @@ def test_fsm_gate_partial_rejection_continues(mock_validate):
 @patch("silica.router.orchestrator.silica_lint")
 @patch("silica.router.orchestrator.DRIVER")
 @patch("silica.tools.wrapped.silica_restore")
+@patch("silica.router.recipe_parser.load_recipe", new=lambda *a, **k: _RECIPE)
 @patch("builtins.open")
 def test_fsm_graph_regression_orphan_is_warning(mock_open, mock_restore, mock_driver, mock_lint):
     """Orphan-only regression errors must emit a WARNING and not trigger ROLLBACK."""
@@ -343,6 +349,7 @@ def test_fsm_graph_regression_orphan_is_warning(mock_open, mock_restore, mock_dr
 @patch("silica.router.orchestrator.silica_lint")
 @patch("silica.router.orchestrator.DRIVER")
 @patch("silica.tools.wrapped.silica_restore")
+@patch("silica.router.recipe_parser.load_recipe", new=lambda *a, **k: _RECIPE)
 @patch("builtins.open")
 def test_fsm_graph_regression_gate_rollback(mock_open, mock_restore, mock_driver, mock_lint):
     """Blocking regression errors (broken backlinks, unresolved links) still trigger ROLLBACK."""
@@ -840,7 +847,7 @@ def test_worker_read_only(mock_get_provider, mock_call_llm):
     # Test 2: Verify that every builtin worker profile allowlists only atomic
     # read-only tools (the profile.tools tuple is the single enforcement seam:
     # AgentConstraints receives it verbatim in run_worker).
-    from silica.capabilities.profile import PROFILES
+    from silica.capabilities.profiles_builtin import READER, ROUTER
     import silica.tools.atomic  # noqa: F401 — populates TOOLS via @tool decorators
     from silica.tools import TOOLS
 
@@ -853,12 +860,11 @@ def test_worker_read_only(mock_get_provider, mock_call_llm):
         "silica_restore",
         "silica_cleanup",
     }
-    assert PROFILES, "expected builtin worker profiles to be registered"
-    for profile_name, profile in PROFILES.items():
+    for profile in (READER, ROUTER):
         for name in profile.tools:
-            assert name in TOOLS, f"profile '{profile_name}' lists unknown tool '{name}'"
-            assert TOOLS[name].cls == "atomic", f"profile '{profile_name}' exposes non-atomic tool '{name}'"
-            assert name not in mutation_tools, f"profile '{profile_name}' exposes mutation tool '{name}'"
+            assert name in TOOLS, f"profile '{profile.name}' lists unknown tool '{name}'"
+            assert TOOLS[name].cls == "atomic", f"profile '{profile.name}' exposes non-atomic tool '{name}'"
+            assert name not in mutation_tools, f"profile '{profile.name}' exposes mutation tool '{name}'"
 
 
 @patch("silica.router.orchestrator.silica_validate_ops")
@@ -984,28 +990,6 @@ def test_crossdedup_removes_cross_file_near_duplicate():
     assert fsm.context["recon"][0]["new_concepts"] == ["PIL"]        # winner kept
     assert fsm.context["recon"][1]["new_concepts"] == []             # loser removed
     assert fsm.context["crossdedup_merged"] == 1
-
-
-def test_crossdedup_records_recurrence_on_winner():
-    """A cross-file merge records the concept's file count on the winner's report
-    (concept_recurrence) — the recurrence-gate signal consumed by build_payload."""
-    recon = [
-        {"file": "Inbox/a.md", "new_concepts": ["PIL"],                   "collisions": []},
-        {"file": "Inbox/b.md", "new_concepts": ["Prodotto Interno Lordo"], "collisions": []},
-    ]
-    fsm = _make_fsm_at_crossdedup(recon)
-
-    similar_vec = [1.0, 0.0, 0.0]
-    mock_embedder = MagicMock()
-    mock_embedder.embed.return_value = [similar_vec, similar_vec]
-
-    with patch("silica.agent.providers.get_embedder", return_value=mock_embedder), \
-         patch("silica.router.orchestrator.CONFIG") as mock_cfg:
-        mock_cfg.sim_threshold_high = 0.85
-        fsm.step()
-
-    assert fsm.context["recon"][0]["concept_recurrence"] == {"PIL": 2}
-    assert "concept_recurrence" not in fsm.context["recon"][1]
 
 
 def test_crossdedup_keeps_distinct_concepts():

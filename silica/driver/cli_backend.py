@@ -24,7 +24,7 @@ import time
 from typing import Any
 import networkx as nx
 from silica.config import CONFIG
-from silica.kernel.wikilink import extract_links
+from silica.kernel.ast import extract_links
 
 from silica.driver.base import (
     GraphIndexMixin,

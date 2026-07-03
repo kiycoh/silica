@@ -1,4 +1,4 @@
-"""Unit tests for silica.kernel.media — strip_images and preprocess_text."""
+"""Unit tests for silica.kernel.media — strip_images and section images."""
 from __future__ import annotations
 
 import textwrap
@@ -6,7 +6,6 @@ import textwrap
 import pytest
 from silica.kernel.media import (
     strip_images,
-    preprocess_text,
     images_for_section,
     append_section_images,
 )
@@ -136,18 +135,6 @@ class TestStripPreservation:
         assert "Line B" in result
         # Should not have 3+ consecutive newlines
         assert "\n\n\n" not in result
-
-
-# ---------------------------------------------------------------------------
-# preprocess_text
-# ---------------------------------------------------------------------------
-
-class TestPreprocessText:
-    def test_removes_images(self):
-        raw = "Text\n![[img.png]]\nMore text"
-        result = preprocess_text(raw)
-        assert "![[" not in result
-        assert "Text" in result
 
 
 # ---------------------------------------------------------------------------

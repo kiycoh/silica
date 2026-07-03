@@ -1,4 +1,4 @@
-from silica.kernel.wikilink import extract_links
+from silica.kernel.ast import extract_links
 
 def test_extract_links():
     content = """

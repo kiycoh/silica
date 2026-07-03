@@ -1,7 +1,25 @@
 import json
 import re
 
-from silica.kernel.latex import replace_outside_math
+# Inline ($...$) must not cross newlines; block ($$...$$) may.
+_MATH = re.compile(r"\$\$.*?\$\$|\$[^\n$]+?\$", re.DOTALL)
+
+
+def replace_outside_math(text: str, old: str, new: str) -> str:
+    """`text.replace(old, new)` everywhere EXCEPT inside `$...$` / `$$...$$` spans.
+
+    Lets the distiller post-processor turn double-escaped prose newlines into real
+    ones without shredding `\\nabla`/`\\neq` or splitting inline math.
+    """
+    out: list[str] = []
+    last = 0
+    for m in _MATH.finditer(text):
+        out.append(text[last:m.start()].replace(old, new))
+        out.append(m.group(0))  # math span: verbatim
+        last = m.end()
+    out.append(text[last:].replace(old, new))
+    return "".join(out)
+
 
 # Matches [[any/path/to/Note.md]] or [[Note.md]] (with optional #anchor and |alias)
 _MD_EXT_WIKILINK_RE = re.compile(

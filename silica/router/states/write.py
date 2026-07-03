@@ -111,7 +111,7 @@ def handle_snapshot(fsm: "InjectorFSM") -> None:
 
     # S3.2: Take pre-write graph snapshot incrementally
     try:
-        from silica.kernel.wikilink import extract_links as _extract_links
+        from silica.kernel.ast import extract_links as _extract_links
         ops = orch.load_ops(fsm._chunk_ctx["ops_path"])
         touched_refs = []
         snapshot_domain = set()
@@ -169,7 +169,7 @@ def handle_snapshot(fsm: "InjectorFSM") -> None:
 def _attach_section_images(fsm: "InjectorFSM", ops: list) -> None:
     """Re-attach source images to the notes distilled from their section.
 
-    The distiller never saw these embeds (media.preprocess_text strips them from
+    The distiller never saw these embeds (media.strip_images strips them from
     its payload), so the produced notes would otherwise lose every figure. Here
     we read the chunk's raw source file and, for each new/patched note, append
     the images from the section whose heading matches the note's concept — the

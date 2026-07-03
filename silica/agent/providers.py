@@ -265,9 +265,8 @@ def get_provider(config: Any, role: str = "router") -> OpenAICompatibleProvider:
     role="worker"            → uses config.worker_provider / config.worker_model so
                                leashed sub-agents can run on a separate small model.
 
-    When the worker role specifies explicit endpoint overrides (worker_base_url /
-    worker_api_key) those win over the preset, so a worker can point at a different
-    LM Studio instance/port than the router.
+    When the worker role specifies an explicit worker_api_key it wins over the
+    preset; the endpoint always comes from the worker_provider preset.
     """
     if role == "worker":
         provider_name = getattr(config, "worker_provider", None)
@@ -289,9 +288,8 @@ def get_provider(config: Any, role: str = "router") -> OpenAICompatibleProvider:
     if "api_key_env" in preset:
         api_key = os.getenv(preset["api_key_env"], "dummy-key")
 
-    # Worker role: explicit endpoint overrides take precedence over the preset.
+    # Worker role: explicit api-key override takes precedence over the preset.
     if role == "worker":
-        base_url = getattr(config, "worker_base_url", None) or base_url
         api_key = getattr(config, "worker_api_key", None) or api_key
 
     if provider_name == "openrouter" and model_name.startswith("openrouter/"):

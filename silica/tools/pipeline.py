@@ -62,28 +62,9 @@ def silica_recon(inbox_file: str, limit: int = 0) -> dict[str, Any]:
         lang=CONFIG.cooccurrence_lang, embedder=embedder,
     )
 
-    # Degraded extraction (embedder configured but down → no downstream salience gate):
-    # hold back single-signal (INFERRED) concepts for a later embedder-up pass rather
-    # than admit ungated junk. Structurally-corroborated (EXTRACTED) concepts proceed —
-    # author markup needs no embedder. Re-derivable from the source, so we list them,
-    # we don't persist them. ponytail: deferred concepts are lost if the file leaves the
-    # inbox before the embedder returns — re-inject to recover; durable parking is a
-    # separate decision. Gated off by default (see CONFIG.defer_uncorroborated_concepts).
-    deferred_concepts: list[str] = []
-    if embedder is None and getattr(CONFIG, "defer_uncorroborated_concepts", False):
-        deferred_concepts = [c.phrase for c in cands if c.confidence != "EXTRACTED"]
-        cands = [c for c in cands if c.confidence == "EXTRACTED"]
-
-    # Structural provenance (author markup — _seed_structural / confidence
-    # EXTRACTED): the centrality signal the recurrence gate in build_payload
-    # consumes (CONFIG.min_recurrence_for_create). Admitted concepts only.
-    structural_concepts = [c.phrase for c in cands if c.confidence == "EXTRACTED"]
-
     concepts = [c.phrase for c in cands]
     if not concepts:
-        return {"file": inbox_file, "collisions": [], "new_concepts": [],
-                "deferred_concepts": deferred_concepts,
-                "structural_concepts": []}
+        return {"file": inbox_file, "collisions": [], "new_concepts": []}
 
     collisions = []
     new_concepts = []
@@ -136,8 +117,6 @@ def silica_recon(inbox_file: str, limit: int = 0) -> dict[str, Any]:
         "file": inbox_file,
         "collisions": collisions,
         "new_concepts": new_concepts,
-        "deferred_concepts": deferred_concepts,
-        "structural_concepts": structural_concepts,
     }
 
 

@@ -4,7 +4,7 @@ from pydantic import BaseModel
 from silica.driver import DRIVER
 from silica.kernel.ops import Op, OpType
 from silica.kernel.templates import slugify
-from silica.kernel.wikilink import extract_links
+from silica.kernel.ast import extract_links
 
 logger = logging.getLogger(__name__)
 

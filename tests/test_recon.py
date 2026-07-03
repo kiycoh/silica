@@ -127,56 +127,6 @@ _RECON_BODY = (
 )
 
 
-class TestReconDeferral:
-    """Embedder is None here (autouse _no_recon_embedder) → degraded extraction."""
-
-    def test_defers_uncorroborated_when_flag_on(self, monkeypatch):
-        import silica.tools.pipeline as pipe
-        from silica.config import CONFIG
-        monkeypatch.setattr(pipe, "DRIVER", _FakeDriver(_RECON_BODY))
-        monkeypatch.setattr(CONFIG, "defer_uncorroborated_concepts", True, raising=False)
-
-        res = pipe.silica_recon("inbox/note.md")
-
-        admitted = set(res["new_concepts"]) | {c["name"] for c in res["collisions"]}
-        deferred = set(res["deferred_concepts"])
-        assert _STRUCTURAL in admitted    # structural → corroborated → admitted now
-        assert deferred                          # single-signal concepts held back
-        assert not (admitted & deferred)         # admitted XOR deferred — never both
-
-    def test_admits_everything_when_flag_off(self, monkeypatch):
-        """Default: embedder-free vaults must not defer (no later pass is coming)."""
-        import silica.tools.pipeline as pipe
-        from silica.config import CONFIG
-        monkeypatch.setattr(pipe, "DRIVER", _FakeDriver(_RECON_BODY))
-        monkeypatch.setattr(CONFIG, "defer_uncorroborated_concepts", False, raising=False)
-
-        res = pipe.silica_recon("inbox/note.md")
-
-        assert res["deferred_concepts"] == []    # nothing held back
-        admitted = set(res["new_concepts"]) | {c["name"] for c in res["collisions"]}
-        assert _STRUCTURAL in admitted     # uncorroborated concepts still admitted
-
-
-class TestReconStructural:
-    def test_report_lists_structural_concepts(self, monkeypatch):
-        """The recon report surfaces which concepts came from author markup
-        (_seed_structural → confidence EXTRACTED) — the centrality signal the
-        recurrence gate in build_payload/classify_action consumes."""
-        import silica.tools.pipeline as pipe
-        from silica.config import CONFIG
-        monkeypatch.setattr(pipe, "DRIVER", _FakeDriver(_RECON_BODY))
-        monkeypatch.setattr(CONFIG, "defer_uncorroborated_concepts", False, raising=False)
-
-        res = pipe.silica_recon("inbox/note.md")
-
-        structural = set(res["structural_concepts"])
-        admitted = set(res["new_concepts"]) | {c["name"] for c in res["collisions"]}
-        assert _STRUCTURAL in structural         # markup concept flagged
-        assert structural <= admitted            # flags refer to reported concepts
-        assert admitted - structural             # prose-only concepts NOT flagged
-
-
 class TestReconBatch:
     def test_recon_uses_batch_search_once(self, monkeypatch):
         """Hot path issues ONE batch call (N->1) and never per-concept search."""

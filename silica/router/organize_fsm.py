@@ -73,12 +73,10 @@ class OrganizerFSM(BaseFSM[OrganizerState]):
         self._txn = None
         self._pre_graph: GraphSnapshot | None = None
 
+        # Bundled package data — if it's missing the install is broken; fail fast.
         from silica.router.recipe_parser import load_recipe
         from silica.config import CONFIG
-        try:
-            self._recipe = load_recipe("organizer", domain=getattr(CONFIG, "domain", None))
-        except Exception:
-            self._recipe = _default_recipe()
+        self._recipe = load_recipe("organizer", domain=getattr(CONFIG, "domain", None))
 
         # BaseFSM contract
         self._phase_label = "Organizer"
@@ -522,26 +520,3 @@ class OrganizerFSM(BaseFSM[OrganizerState]):
             logger.warning("ORGANIZER: ledger write failed: %s", exc)
 
 
-# ---------------------------------------------------------------------------
-# Default recipe (inline fallback — mirrors organizer.yaml)
-# ---------------------------------------------------------------------------
-
-def _default_recipe() -> dict:
-    return {
-        "name": "organizer",
-        "gates": {
-            "move_failure_max": 0.10,
-            "graph_regression": "forbid_new_orphans",
-        },
-        "phases": [
-            {"id": "scan",      "kind": "mechanical"},
-            {"id": "classify",  "kind": "mechanical"},
-            {"id": "arbitrate", "kind": "semantic",   "best_effort": True},
-            {"id": "plan",      "kind": "mechanical"},
-            {"id": "snapshot",  "kind": "txn"},
-            {"id": "move",      "kind": "mechanical"},
-            {"id": "lint",      "kind": "gate"},
-            {"id": "cleanup",   "kind": "mechanical",  "on_success_only": True},
-            {"id": "rollback",  "kind": "txn",         "on_gate_fail": True},
-        ],
-    }

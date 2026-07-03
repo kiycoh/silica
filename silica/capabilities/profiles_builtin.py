@@ -1,15 +1,17 @@
-"""Built-in worker profiles registered into PROFILES on import.
+"""Built-in worker profiles.
 
 Phase A ships two read-only profiles:
   * reader — gathers context, returns a digest (orchestrator's retrieval relief).
   * router — adjudicates a high-sim patch-vs-new-note decision (ADR-0003). Its Op
     consumer lands in Phase C; here it parses a {decision,target} dict.
+
+Registered directly in CAPABILITIES (silica/capabilities/__init__.py).
 """
 from __future__ import annotations
 
 import orjson
 
-from silica.capabilities.profile import WorkerProfile, WorkerResult, PROFILES
+from silica.capabilities.profile import WorkerProfile, WorkerResult
 
 
 def _reader_parser(final_text: str, trace: list[dict]) -> WorkerResult:
@@ -54,6 +56,3 @@ ROUTER = WorkerProfile(
     ),
     result_parser=_router_parser,
 )
-
-PROFILES["reader"] = READER
-PROFILES["router"] = ROUTER

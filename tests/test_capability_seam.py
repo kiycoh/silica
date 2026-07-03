@@ -38,19 +38,17 @@ def test_every_produced_workitem_kind_has_a_capability():
 
 def test_every_worker_profile_is_dispatchable_through_the_seam():
     from silica.capabilities import CAPABILITIES
-    from silica.capabilities import run_worker_item
-    from silica.capabilities.profile import PROFILES
+    from silica.capabilities.profiles_builtin import READER, ROUTER
 
-    assert PROFILES, "no worker profiles registered"
-    for name in PROFILES:
-        assert CAPABILITIES.get(name) is run_worker_item, (
-            f"profile '{name}' is not dispatchable via CAPABILITIES — "
-            "the worker adapter must cover every registered profile"
+    for profile in (READER, ROUTER):
+        assert profile.name in CAPABILITIES, (
+            f"profile '{profile.name}' is not dispatchable via CAPABILITIES — "
+            "the worker capability must cover every built-in profile"
         )
 
 
 def test_worker_item_round_trip_through_dispatch(monkeypatch):
-    """A WorkItem with kind=<profile> flows BoundedSubAgent → adapter → run_worker."""
+    """A WorkItem with kind=<profile> flows BoundedSubAgent → capability → run_worker."""
     from silica.agent.subagent import BoundedSubAgent
     from silica.config import SilicaConfig
     from silica.kernel.workqueue import WorkItem
@@ -58,9 +56,9 @@ def test_worker_item_round_trip_through_dispatch(monkeypatch):
 
     seen: dict = {}
 
-    def fake_run_worker(task, *, config, cancel_token=None, profiles=None):
-        seen["profile"] = task.profile
-        seen["goal"] = task.goal
+    def fake_run_worker(profile, goal, inputs=None, *, config, cancel_token=None):
+        seen["profile"] = profile.name
+        seen["goal"] = goal
         return WorkerResult(status="ok", output="digest")
 
     monkeypatch.setattr("silica.capabilities.run_worker", fake_run_worker)

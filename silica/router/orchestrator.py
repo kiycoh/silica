@@ -75,7 +75,10 @@ def _refresh_cooccurrence_for_ops(
     only the cooccurrence module (never the embedder/provider stack), so the
     index stays fresh even when LM Studio is down. Uses build_index(force=True)
     so a note's prior contribution is replaced, never inflated, with a single
-    save. Best-effort: a per-note read failure is skipped and the whole call
+    save — replacement semantics only: it deliberately does NOT pass
+    refreeze=True, so the store's frozen stemming language is never re-detected
+    from a write batch (re-detection is reserved for /cooccur --force).
+    Best-effort: a per-note read failure is skipped and the whole call
     never raises. Returns the number of notes refreshed.
     """
     from silica.kernel.cooccurrence import build_index as _cooccur_build
@@ -132,7 +135,7 @@ def _reconcile_embed_index(*, folder: str = "") -> int:
     try:
         from silica.agent.providers import get_embedder
         from silica.kernel.embed import build_index, get_store
-        from silica.kernel.media import preprocess_text
+        from silica.kernel.media import strip_images
 
         store = get_store()
         if len(store) == 0:
@@ -155,7 +158,7 @@ def _reconcile_embed_index(*, folder: str = "") -> int:
         notes: list[tuple[str, str, str]] = []
         for idx_path, name in missing:
             try:
-                body = preprocess_text(DRIVER.read_note(idx_path + ".md").content or "")
+                body = strip_images(DRIVER.read_note(idx_path + ".md").content or "")
             except Exception:
                 continue
             notes.append((idx_path, name, body))
@@ -293,39 +296,13 @@ class InjectorFSM(BaseFSM[InjectorState]):
         self._file_chunks: list[dict] = []  # [{"source_file": str, "chunks": [...]}, ...]
         self._chunk_flat_to_fi_ci: dict[int, tuple[int, int]] = {}  # flat_idx → (file_idx, chunk_idx)
 
-        # S3.3: Load the recipe for dynamic configuration
+        # S3.3: Load the recipe for dynamic configuration. The recipe is bundled
+        # package data — if it's missing the install is broken; fail fast.
         from silica.router.recipe_parser import load_recipe
-        try:
-            self._recipe = load_recipe("injector", domain=getattr(CONFIG, "domain", None))
-        except Exception as e:
-            logger.warning("Failed to load recipe 'injector', using defaults: %s", e)
-            self._recipe = {}
-
-        if not self._recipe or "phases" not in self._recipe:
-            self._recipe = {
-                "name": "injector",
-                "gates": {
-                    "rejection_rate_max": 0.10,
-                    "graph_regression": "forbid_new_orphans"
-                },
-                "phases": [
-                    { "id": "recon",        "kind": "mechanical", "tool": "silica_recon" },
-                    { "id": "crossdedup",   "kind": "mechanical", "best_effort": True },
-                    { "id": "payload",      "kind": "mechanical", "tool": "silica_payload", "partition_if_over": 200 },
-                    { "id": "collision",    "kind": "mechanical", "best_effort": True },
-                    { "id": "distill",      "kind": "semantic",   "worker": "distiller", "fanout": True, "max_workers": 7 },
-                    { "id": "sanitize",     "kind": "mechanical", "tool": "silica_sanitize" },
-                    { "id": "validate",     "kind": "gate",       "tool": "silica_validate_ops", "abort_code": 2 },
-                    { "id": "snapshot",     "kind": "txn",        "tool": "silica_snapshot" },
-                    { "id": "write",        "kind": "mechanical", "tool": "silica_bulk_write" },
-                    { "id": "hub_update",   "kind": "mechanical", "tool": "silica_hub_update" },
-                    { "id": "autolink",     "kind": "mechanical", "tool": "silica_autolink",  "best_effort": True },
-                    { "id": "backlink",     "kind": "mechanical", "tool": "silica_backlink",  "best_effort": True },
-                    { "id": "lint",         "kind": "gate",       "tool": "silica_lint" },
-                    { "id": "cleanup",      "kind": "mechanical", "tool": "silica_cleanup", "on_success_only": True },
-                    { "id": "rollback",     "kind": "txn",        "tool": "silica_restore", "on_gate_fail": True }
-                ]
-            }
+        self._recipe = load_recipe("injector", domain=getattr(CONFIG, "domain", None))
+        self._has_collision_phase = any(
+            p.get("id") == "collision" for p in self._recipe.get("phases", [])
+        )
 
         # Run facade — TaskLedger (immutable plan, built from the recipe) +
         # ProgressLedger (mutable state) + RunManifest (short-term memory)
@@ -646,11 +623,7 @@ class InjectorFSM(BaseFSM[InjectorState]):
             self._emit_files_progress(next_idx)
             logger.info(f"✔ Batch completed successfully. Advancing to batch {self._current_chunk_idx + 1}")
             # Restart per-chunk loop from COLLISION (Phase 5) if present, else DELEGATE
-            has_collision = any(
-                p.get("id") == "collision"
-                for p in self._recipe.get("phases", [])
-            )
-            self.state = InjectorState.COLLISION if has_collision else InjectorState.DELEGATE
+            self.state = InjectorState.COLLISION if self._has_collision_phase else InjectorState.DELEGATE
         else:
             self._emit_files_progress(len(self._chunks))
             logger.info("🎉 All batched chunks have been successfully injected and verified!")
@@ -720,10 +693,6 @@ class InjectorFSM(BaseFSM[InjectorState]):
                 pass
         return os.path.splitext(os.path.basename(inbox_file))[0].lower()
 
-    def _source_canonical(self) -> str:
-        """Vault-relative canonical path for the first inbox file (compat wrapper)."""
-        return self._source_canonical_for(self.inbox_file)
-
     def _chunk_task_id(self, cap: str) -> str:
         """Return the task ID for the current chunk using the f{fi}_c{ci}_{cap} scheme."""
         fi, ci = self._chunk_flat_to_fi_ci.get(self._current_chunk_idx, (0, self._current_chunk_idx))
@@ -775,11 +744,7 @@ class InjectorFSM(BaseFSM[InjectorState]):
                 "Chunk f%d_c%d failed — advancing to chunk %d of %d.",
                 fi, ci, self._current_chunk_idx + 1, len(self._chunks),
             )
-            has_collision = any(
-                p.get("id") == "collision"
-                for p in self._recipe.get("phases", [])
-            )
-            self.state = InjectorState.COLLISION if has_collision else InjectorState.DELEGATE
+            self.state = InjectorState.COLLISION if self._has_collision_phase else InjectorState.DELEGATE
         else:
             self._emit_files_progress(len(self._chunks))
             logger.info(

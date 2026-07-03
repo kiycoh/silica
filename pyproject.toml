@@ -127,7 +127,7 @@ type = "forbidden"
 source_modules = [
   "silica.kernel.cooccurrence",
   "silica.kernel.keyphrase",
-  "silica.kernel.wikilink",
+  "silica.kernel.ast",
   "silica.kernel.graph_diff",
   "silica.kernel.autolink",
   "silica.kernel.graph_report.compute",

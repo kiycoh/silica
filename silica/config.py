@@ -65,10 +65,7 @@ class SilicaConfig:
     worker_provider: str | None = field(
         default_factory=lambda: os.getenv("SILICA_WORKER_PROVIDER", None)
     )
-    # Explicit endpoint overrides for the worker model (default → local LM Studio).
-    worker_base_url: str | None = field(
-        default_factory=lambda: os.getenv("SILICA_WORKER_BASE_URL", None)
-    )
+    # Explicit API-key override for the worker model (endpoint comes from the preset).
     worker_api_key: str | None = field(
         default_factory=lambda: os.getenv("SILICA_WORKER_API_KEY", None)
     )
@@ -82,10 +79,6 @@ class SilicaConfig:
     # (API rate limit or local GPU slots).
     worker_max_concurrent: int = field(
         default_factory=lambda: int(os.getenv("SILICA_WORKER_MAX_CONCURRENT", "4"))
-    )
-    # Master switch: when False, silica_inject runs the legacy single-FSM path.
-    subagents_enabled: bool = field(
-        default_factory=lambda: os.getenv("SILICA_SUBAGENTS_ENABLED", "True").lower() in ("true", "1", "t")
     )
 
     # Vault path — used by the fs backend and for context.
@@ -150,9 +143,9 @@ class SilicaConfig:
     # Runtime session state — updated by cli.py after each agent turn
     context_tokens: int = 0
 
-    # Startup banner style (wordmark, minimal)
-    banner_style: Literal["wordmark", "minimal"] = field(
-        default_factory=lambda: os.getenv("SILICA_BANNER_STYLE", "wordmark")  # type: ignore
+    # Startup banner art (True → wordmark, False → plain one-liner)
+    show_banner: bool = field(
+        default_factory=lambda: os.getenv("SILICA_SHOW_BANNER", "True").lower() in ("true", "1", "t")
     )
 
     # Embedding model — used by silica/kernel/embed.py (Phase 3)
@@ -209,20 +202,6 @@ class SilicaConfig:
     sim_threshold_theme: float = field(
         default_factory=lambda: float(os.getenv("SILICA_SIM_THRESHOLD_THEME", "0.35"))
     )
-    salience_gate_enabled: bool = field(
-        default_factory=lambda: os.getenv("SILICA_SALIENCE_GATE", "True").lower() in ("true", "1", "t")
-    )
-
-    # Defer uncorroborated concepts on degraded (embedder-down) extraction.
-    # When the embedder is configured but unavailable, the salience gate can't run;
-    # with this ON, single-signal (INFERRED) concepts are held back for a later
-    # embedder-up pass instead of admitted ungated. Only structurally-corroborated
-    # (EXTRACTED) concepts pass — author markup needs no embedder.
-    # OFF by default: an embedder-free vault has no "later pass", so deferral there
-    # would lose concepts permanently. Turn ON only with a real, occasionally-flaky embedder.
-    defer_uncorroborated_concepts: bool = field(
-        default_factory=lambda: os.getenv("SILICA_DEFER_UNCORROBORATED", "False").lower() in ("true", "1", "t")
-    )
 
     # Hard timeout (seconds) for each individual Obsidian CLI subprocess call.
     # The CDP bridge should respond in < 1 s normally; 8 s gives headroom for
@@ -242,17 +221,6 @@ class SilicaConfig:
     # replacement. Only takes effect when the vault sits inside a git repo.
     git_commit: Literal["off", "auto"] = field(
         default_factory=lambda: os.getenv("SILICA_GIT_COMMIT", "off")  # type: ignore
-    )
-
-    # Recurrence-gated note creation (llm-wiki rule: "create a page when a
-    # concept appears in 2+ sources OR is central; never for passing
-    # mentions"). PAYLOAD's classify_action requires a no-collision concept to
-    # either be structurally corroborated (author markup) or recur (cross-file
-    # via CROSSDEDUP, or 2+ times intra-file) before hinting "create"; below
-    # the bar it hints "likely_skip" instead. Default 1 = today's behavior
-    # (every no-collision concept creates) — the gate only activates above 1.
-    min_recurrence_for_create: int = field(
-        default_factory=lambda: int(os.getenv("SILICA_MIN_RECURRENCE_FOR_CREATE", "1"))
     )
 
     @property

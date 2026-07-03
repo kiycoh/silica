@@ -36,12 +36,11 @@ class TestProviders(unittest.TestCase):
 
     def test_get_provider_worker(self):
         class DummyWorkerConfig:
-            def __init__(self, provider, model, worker_provider=None, worker_model=None, worker_base_url=None, worker_api_key=None):
+            def __init__(self, provider, model, worker_provider=None, worker_model=None, worker_api_key=None):
                 self.provider = provider
                 self.model = model
                 self.worker_provider = worker_provider
                 self.worker_model = worker_model
-                self.worker_base_url = worker_base_url
                 self.worker_api_key = worker_api_key
 
         # 1. Fallback to router when worker not configured
@@ -58,15 +57,15 @@ class TestProviders(unittest.TestCase):
             self.assertEqual(provider.model, "worker-or-model")
             self.assertIn("openrouter.ai", str(provider.client.base_url))
 
-        # 3. Worker explicit overrides
+        # 3. Worker explicit api-key override (endpoint always from the preset)
         config_worker_override = DummyWorkerConfig(
             "lmstudio", "lm-model",
             worker_provider="openrouter", worker_model="worker-or-model",
-            worker_base_url="http://custom-worker:5000/v1", worker_api_key="custom-key"
+            worker_api_key="custom-key"
         )
         provider = get_provider(config_worker_override, role="worker")
         self.assertEqual(provider.model, "worker-or-model")
-        self.assertEqual(str(provider.client.base_url), "http://custom-worker:5000/v1/")
+        self.assertIn("openrouter.ai", str(provider.client.base_url))
         self.assertEqual(provider.client.api_key, "custom-key")
 
 

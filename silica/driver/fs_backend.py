@@ -17,7 +17,7 @@ import time
 from pathlib import Path
 from typing import Any
 import networkx as nx
-from silica.kernel.wikilink import extract_links
+from silica.kernel.ast import extract_links
 
 from silica.driver.base import (
     GraphIndexMixin,

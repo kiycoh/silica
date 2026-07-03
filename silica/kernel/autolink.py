@@ -142,9 +142,9 @@ def autolink(
     # Pre-scan: collect titles that are already wikilinked in the body.
     # A note should have at most one [[title]] link — if it's already there,
     # skip that title entirely regardless of where in the body it appears.
+    from silica.kernel.ast import WIKILINK_TARGET_RE
     existing_links: set[str] = {
-        m.group(1).split("|")[0].strip().lower()   # handle [[Title|alias]] form
-        for m in re.finditer(r"\[\[([^\]]+)\]\]", body)
+        m.strip().lower() for m in WIKILINK_TARGET_RE.findall(body)
     }
 
     added: list[str] = []

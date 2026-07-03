@@ -33,7 +33,7 @@ def _gradient(n: int, c0: tuple[int, int, int] = BRAND_CYAN, c1: tuple[int, int,
 
 def _compute_art() -> list[str] | None:
     """Return art lines if banner would render, else None."""
-    if CONFIG.banner_style != "wordmark":
+    if not CONFIG.show_banner:
         return None
     if CONSOLE.width < max(len(ln) for ln in _ART) + 2:
         return None

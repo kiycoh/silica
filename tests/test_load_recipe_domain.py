@@ -17,9 +17,9 @@ def test_missing_domain_file_falls_back_to_base(caplog):
     assert out == base  # warn, do not crash
 
 
-def test_legal_pack_real_file():
-    """Integration: legal.yaml in silica/domains/ applies both overrides."""
-    out = load_recipe("injector", domain="legal")
+def test_codebase_pack_real_file():
+    """Integration: codebase.yaml in silica/domains/ applies both overrides."""
+    out = load_recipe("injector", domain="codebase")
     assert out["gates"]["rejection_rate_max"] == 0.05
     payload = next(p for p in out["phases"] if p["id"] == "payload")
     assert payload["partition_if_over"] == 4

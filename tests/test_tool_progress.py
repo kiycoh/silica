@@ -676,32 +676,24 @@ def test_print_banner_styles(capsys):
     from silica.ui.banner import print_banner
     from rich.console import Console, ConsoleDimensions
     
-    orig_style = CONFIG.banner_style
+    orig_show = CONFIG.show_banner
     try:
-        # Minimal style
-        CONFIG.banner_style = "minimal"
+        # Banner off → plain one-liner
+        CONFIG.show_banner = False
         print_banner()
         captured = capsys.readouterr()
         assert "silica" in captured.out
         assert "Your personal note curator agent" in captured.out
 
-        # Wordmark/Crystal style with large terminal
+        # Banner on with a large terminal → multi-line wordmark art
         with patch.object(Console, "width", new_callable=PropertyMock, return_value=100), \
              patch.object(Console, "size", new_callable=PropertyMock, return_value=ConsoleDimensions(100, 40)):
-            CONFIG.banner_style = "wordmark"
+            CONFIG.show_banner = True
             print_banner()
             captured = capsys.readouterr()
-            # wordmark renders multi-line ASCII/block art; minimal would be a single line
             assert len(captured.out.splitlines()) > 2
             assert "Your personal note curator agent" in captured.out
-
-            # crystal is removed — falls back to minimal banner
-            CONFIG.banner_style = "crystal"
-            print_banner()
-            captured = capsys.readouterr()
-            assert "silica" in captured.out
-            assert "Your personal note curator agent" in captured.out
     finally:
-        CONFIG.banner_style = orig_style
+        CONFIG.show_banner = orig_show
 
 

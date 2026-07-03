@@ -33,16 +33,6 @@ def handle_recon(fsm: "InjectorFSM") -> None:
             raise RuntimeError(f"Recon failed for {inbox_file}: {res['error']}")
         recon_list.append(res)
 
-        # Degraded extraction held back uncorroborated concepts (see silica_recon /
-        # CONFIG.defer_uncorroborated_concepts) — make it visible, never silent.
-        deferred_concepts = res.get("deferred_concepts") or []
-        if deferred_concepts:
-            logger.info(
-                "RECON: %d uncorroborated concept(s) deferred for '%s' (embedder down) "
-                "— re-inject with the embedder available to admit them.",
-                len(deferred_concepts), inbox_file,
-            )
-
         # Surface any deferred ops from a previous run of this file
         content_hash = fsm._file_content_hashes[fi] if fi < len(fsm._file_content_hashes) else ""
         if content_hash:
@@ -130,13 +120,6 @@ def handle_crossdedup(fsm: "InjectorFSM") -> None:
                 continue
             if _cosine(vecs[i], vecs[j]) >= τ_high:
                 losers.add(j)
-                # Cross-file recurrence signal for the creation gate
-                # (CONFIG.min_recurrence_for_create, consumed by build_payload):
-                # credit the winner with each file it absorbed — a concept
-                # merged from N files has recurrence N, satisfying the llm-wiki
-                # "2+ sources" rule even when each file mentions it only once.
-                rec = recon_list[fi].setdefault("concept_recurrence", {})
-                rec[name_i] = rec.get(name_i, 1) + 1
                 logger.info(
                     "CROSSDEDUP: '%s' (file %d) merged into '%s' (file %d, score=%.3f)",
                     name_j, fj, name_i, fi, _cosine(vecs[i], vecs[j]),
@@ -375,10 +358,6 @@ def handle_salience(fsm: "InjectorFSM") -> None:
     Does NOT re-run on subsequent chunk iterations — _eval_loop_or_done
     restarts from COLLISION, which is correct.
     """
-    if not getattr(orch.CONFIG, "salience_gate_enabled", True):
-        fsm._transition_success()
-        return
-
     τ_theme = getattr(orch.CONFIG, "sim_threshold_theme", 0.35)
     try:
         from silica.agent.providers import get_embedder

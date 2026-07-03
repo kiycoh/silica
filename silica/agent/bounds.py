@@ -22,16 +22,13 @@ import re
 from dataclasses import dataclass, field
 from typing import Callable
 
+from silica.kernel.ast import WIKILINK_TARGET_RE
 from silica.kernel.ops import Op, OpType
-
-# Wikilink extraction for the anti-info-loss guard: matches [[Target]] and
-# [[Target|alias]] (the target before the first pipe is what matters for links).
-_WIKILINK_RE = re.compile(r"\[\[([^\]|#]+)")
 
 
 def _wikilinks(text: str) -> set[str]:
     """Return the set of wikilink targets in `text` (case-insensitive, trimmed)."""
-    return {m.strip().lower() for m in _WIKILINK_RE.findall(text or "") if m.strip()}
+    return {m.strip().lower() for m in WIKILINK_TARGET_RE.findall(text or "") if m.strip()}
 
 
 def _norm_path(path: str | None) -> str:

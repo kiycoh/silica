@@ -8,8 +8,8 @@ Producer/consumer model:
   * after the Injector finishes, the Coordinator closes the queue and joins the
     pool (drains remaining items) before returning an aggregated status.
 
-When `subagents_enabled` is false (or no items are ever produced) this collapses
-to the legacy single-FSM behaviour with negligible overhead.
+When no items are ever produced this collapses to single-FSM behaviour with
+negligible overhead.
 """
 from __future__ import annotations
 
@@ -52,9 +52,6 @@ class Coordinator:
         )
 
     def run(self) -> dict[str, Any]:
-        if not getattr(self.config, "subagents_enabled", True):
-            return self.fsm.run()
-
         from silica.kernel.workqueue import WorkQueue
         from silica.router.warning_ledger import WarningLedger
         from silica.agent.bus import BUS

@@ -55,10 +55,9 @@ def test_handle_catches_capability_errors():
 
 def test_default_registry_covers_builtin_kinds():
     from silica.capabilities import CAPABILITIES
-    from silica.capabilities.profile import PROFILES
     # Note-level behaviours plus every worker profile (kind == profile name):
     # one registry dispatches all background work.
-    assert set(CAPABILITIES) == {"dedup", "refine", "enrich", "orphan"} | set(PROFILES)
+    assert set(CAPABILITIES) == {"dedup", "refine", "enrich", "orphan", "reader", "router"}
 
 
 # --- dedup behaviour -------------------------------------------------------

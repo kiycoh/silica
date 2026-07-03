@@ -13,33 +13,29 @@ from typing import Any
 from silica.agent.loop import run_agent
 from silica.agent.constraints import AgentConstraints
 from silica.agent.events import ToolCompleteEvent
-from silica.capabilities.profile import WorkerProfile, WorkerTask, WorkerResult, PROFILES
+from silica.capabilities.profile import WorkerProfile, WorkerResult
 
 logger = logging.getLogger(__name__)
 
 
-def _render_goal(task: WorkerTask) -> str:
+def _render_goal(goal: str, inputs: dict[str, Any]) -> str:
     """Render the task into the user turn. Inputs are appended as JSON context."""
     import orjson
 
-    parts = [task.goal]
-    if task.inputs:
-        parts.append("\nInputs:\n" + orjson.dumps(task.inputs).decode())
+    parts = [goal]
+    if inputs:
+        parts.append("\nInputs:\n" + orjson.dumps(inputs).decode())
     return "\n".join(parts)
 
 
 def run_worker(
-    task: WorkerTask,
+    profile: WorkerProfile,
+    goal: str,
+    inputs: dict[str, Any] | None = None,
     *,
     config: Any,
     cancel_token: Any = None,
-    profiles: dict[str, WorkerProfile] | None = None,
 ) -> WorkerResult:
-    registry = profiles if profiles is not None else PROFILES
-    profile = registry.get(task.profile)
-    if profile is None:
-        return WorkerResult(status="error", detail=f"no profile '{task.profile}'")
-
     worker_model = getattr(config, "worker_model", None) or getattr(config, "model", None)
     if not worker_model:
         return WorkerResult(status="error", detail="no worker_model configured")
@@ -52,7 +48,7 @@ def run_worker(
 
     messages = [
         {"role": "system", "content": profile.system_prompt},
-        {"role": "user", "content": _render_goal(task)},
+        {"role": "user", "content": _render_goal(goal, inputs or {})},
     ]
 
     try:
@@ -68,11 +64,11 @@ def run_worker(
             ),
         )
     except Exception as e:  # a worker error must never crash the pool
-        logger.warning("run_worker '%s' failed: %s", task.profile, e)
+        logger.warning("run_worker '%s' failed: %s", profile.name, e)
         return WorkerResult(status="error", detail=str(e))
 
     try:
         return profile.result_parser(final or "", trace)
     except Exception as e:
-        logger.warning("result_parser '%s' failed: %s", task.profile, e)
+        logger.warning("result_parser '%s' failed: %s", profile.name, e)
         return WorkerResult(status="error", detail=f"parser error: {e}")

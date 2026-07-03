@@ -123,10 +123,3 @@ def append_section_images(snippet: str, source: str, concept: str) -> str:
     return f"{base}\n\n{block}" if base else block
 
 
-def preprocess_text(text: str) -> str:
-    """Apply all media preprocessing to *text*.
-
-    This is the single entry point callers should use so future modes
-    (e.g. LaTeX stripping, audio transcripts) can be added here centrally.
-    """
-    return strip_images(text)

@@ -14,7 +14,7 @@ def wikilink(name):
 def has_wikilink(content, name):
     return f"[[{name}]]" in content
 
-from silica.kernel.ast import parse_headings, _balanced
+from silica.kernel.ast import parse_headings, _balanced, WIKILINK_TARGET_RE
 
 def sections_by_h2(body):
     """Split body at H2 boundaries. Each section's content includes nested H3+.
@@ -68,12 +68,7 @@ def _effective_limits() -> dict:
     from silica.kernel.vault_manifest import get_active_manifest
 
     conv = get_active_manifest().conventions
-    return {
-        **LIMITS,
-        "max_tags": conv.max_tags,
-        "max_lines": conv.max_lines,
-        "max_chars": conv.max_chars,
-    }
+    return {**LIMITS, "max_tags": conv.max_tags}
 
 
 def _effective_callout_types() -> frozenset:
@@ -132,7 +127,7 @@ def ofm_lint(content, stem=None):
         F.append("'last modified' missing or malformed date prefix")
 
     # --- connectivity floor (any one of: parent note / related / body wikilinks) ---
-    body_links = re.findall(r'\[\[([^\]|#]+)', body)
+    body_links = WIKILINK_TARGET_RE.findall(body)
     if not (data.get("parent note") or data.get("related") or body_links):
         F.append("orphan note: no parent note / related / wikilinks")
 

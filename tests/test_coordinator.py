@@ -51,7 +51,6 @@ def _coordinator_with(fake_fsm, config):
 
 def test_coordinator_drains_all_items():
     cfg = SilicaConfig()
-    cfg.subagents_enabled = True
     cfg.subagent_max_concurrent = 3
     coord = _coordinator_with(_FakeFSM(8, per_item_delay=0.005), cfg)
 
@@ -63,23 +62,8 @@ def test_coordinator_drains_all_items():
     assert result["final_status"] == "ok"
 
 
-def test_coordinator_legacy_path_when_disabled():
-    cfg = SilicaConfig()
-    cfg.subagents_enabled = False
-    fake = _FakeFSM(5)
-    coord = _coordinator_with(fake, cfg)
-
-    with patch("silica.agent.subagent.BoundedSubAgent", _FakeAgent):
-        result = coord.run()
-
-    # Legacy path: FSM.run() called directly, no sub-agent summary, no queue wired.
-    assert "subagents" not in result
-    assert fake.work_queue is None
-
-
 def test_coordinator_handles_empty_production():
     cfg = SilicaConfig()
-    cfg.subagents_enabled = True
     coord = _coordinator_with(_FakeFSM(0), cfg)
     with patch("silica.agent.subagent.BoundedSubAgent", _FakeAgent):
         result = coord.run()
@@ -132,7 +116,6 @@ def test_current_orphans_uses_driver_graph_not_full_report(monkeypatch):
 
 def test_coordinator_enqueues_only_residual_orphans_and_reverifies():
     cfg = SilicaConfig()
-    cfg.subagents_enabled = True
     coord = _coordinator_with(_FakeFSMWithWarnings(), cfg)
 
     # After the run, only "Concepts/Lonely" is still orphaned (Connected got linked
@@ -200,7 +183,6 @@ def test_interrupt_mid_drain_stops_workers_and_renderer():
     from silica.ui.renderer import make_progress_callback
 
     cfg = SilicaConfig()
-    cfg.subagents_enabled = True
     cfg.subagent_max_concurrent = 2
 
     coord = _coordinator_with(_KIFakeFSM(), cfg)

@@ -4,16 +4,23 @@ import re
 import textwrap
 from markdown_it import MarkdownIt
 
+_MD = MarkdownIt()  # stateless parser, shared by every parse below
+
 NON_MD_EXTENSIONS = (
     '.png', '.jpg', '.jpeg', '.pdf', '.webp', '.svg', '.gif', '.mp4', '.zip', '.html', '.css'
 )
+
+# Wikilink target extraction: captures the target of [[Target]], [[Target|alias]]
+# and [[Target#anchor]] (everything before the first | or #). The shared regex
+# for quick target scans; extract_links below is the full AST-aware version.
+WIKILINK_TARGET_RE = re.compile(r"\[\[([^\]|#]+)")
 
 
 def extract_links(content: str) -> list[str]:
     """Extract clean wikilinks (both [[target]] and ![[target]]) using AST parsing."""
     content = textwrap.dedent(content)
-    md = MarkdownIt()
-    tokens = md.parse(content)
+
+    tokens = _MD.parse(content)
 
     text_pieces: list[str] = []
 
@@ -61,8 +68,8 @@ def extract_links(content: str) -> list[str]:
 def parse_headings(body: str) -> list[dict]:
     """Parse headings from the body using AST, ignoring code blocks."""
     body = textwrap.dedent(body)
-    md = MarkdownIt()
-    tokens = md.parse(body)
+
+    tokens = _MD.parse(body)
 
     lines = body.splitlines(keepends=True)
     line_offsets = []
@@ -94,8 +101,8 @@ def _balanced(body: str) -> list[str]:
     if body.count("```") % 2:
         issues.append("unclosed code fence")
 
-    md = MarkdownIt()
-    tokens = md.parse(body)
+
+    tokens = _MD.parse(body)
 
     text_pieces: list[str] = []
 
@@ -124,8 +131,8 @@ def _balanced(body: str) -> list[str]:
 def extract_callouts(body: str) -> list[str]:
     """Extract Obsidian callout types (e.g. 'note', 'tip') from blockquotes."""
     body = textwrap.dedent(body)
-    md = MarkdownIt()
-    tokens = md.parse(body)
+
+    tokens = _MD.parse(body)
 
     callout_types = []
     for idx, t in enumerate(tokens):
@@ -146,8 +153,8 @@ def extract_callouts(body: str) -> list[str]:
 def get_non_code_text(body: str) -> str:
     """Extract all text tokens from body, ignoring code blocks/fences/inline-code."""
     body = textwrap.dedent(body)
-    md = MarkdownIt()
-    tokens = md.parse(body)
+
+    tokens = _MD.parse(body)
     text_pieces = []
     def walk(toks: list) -> None:
         for t in toks:

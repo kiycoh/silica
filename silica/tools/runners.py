@@ -37,9 +37,9 @@ def silica_run_injector(
     remaining chunks continue.  Pass resume_run_id to re-run only the chunks
     that failed in a previous partial run (content-addressed idempotency).
 
-    When sub-agents are enabled (CONFIG.subagents_enabled), the run is driven by
-    the Coordinator, which fans borderline-pair dedup work out to leashed
-    sub-agents on the worker model concurrently with the injection batches.
+    The run is driven by the Coordinator, which fans borderline-pair dedup work
+    out to leashed sub-agents on the worker model concurrently with the
+    injection batches.
     """
     from silica.router.coordinator import Coordinator
 

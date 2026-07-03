@@ -1,6 +1,5 @@
 import re
 from typing import Any
-from silica.config import CONFIG
 from silica.driver import DRIVER
 
 DEFAULT_WINDOW = 450          # Chars on each side of a non-heading concept match.
@@ -8,33 +7,9 @@ MAX_EXCERPT_CHARS = 2000      # Hard per-excerpt cap.
 MAX_OCCURRENCES = 2           # Max non-overlapping windows per concept per file.
 FULL_INCLUDE_THRESHOLD = 6000 # Include whole note below this.
 
-def classify_action(
-    collision: dict | None,
-    in_new_concepts: bool,
-    recurrence_count: int = 1,
-    is_structural: bool = False,
-    min_recurrence_for_create: int = 1,
-) -> str:
-    """Mechanical action hint for a concept.
-
-    recurrence_count / is_structural / min_recurrence_for_create implement the
-    llm-wiki rule ("create a page when a concept appears in 2+ sources OR is
-    central; never for passing mentions") — but ONLY for the no-collision path
-    (`in_new_concepts`); the collision-tier logic below is untouched.
-
-    The `min_recurrence_for_create > 1` guard is deliberate and load-bearing:
-    at the default knob (1) the recurrence/structural check is never even
-    evaluated, so this function is bit-identical to the pre-gate behavior
-    regardless of what recurrence_count/is_structural are passed — the caller
-    doesn't need to get signal-computation right for the default path to be safe.
-    """
+def classify_action(collision: dict | None, in_new_concepts: bool) -> str:
+    """Mechanical action hint for a concept."""
     if in_new_concepts:
-        if (
-            min_recurrence_for_create > 1
-            and not is_structural
-            and recurrence_count < min_recurrence_for_create
-        ):
-            return "likely_skip"
         return "create"
     if not collision:
         return "skip"
@@ -108,8 +83,8 @@ def extract_windows(content: str, concept: str, window: int, max_occ: int) -> li
 def extract_excerpt_from_content(content: str, concept: str, window: int) -> str:
     if not content:
         return ""
-    from silica.kernel.media import preprocess_text
-    content = preprocess_text(content)
+    from silica.kernel.media import strip_images
+    content = strip_images(content)
     heading = find_heading(content, concept)
     if heading:
         return safe_truncate(extract_section(content, heading), MAX_EXCERPT_CHARS)
@@ -140,32 +115,12 @@ def build_concept_entry(
     collision: dict | None,
     in_new_concepts: bool,
     window: int,
-    *,
-    cross_file_recurrence: int = 1,   # a concept appears in at least this file
-    is_structural: bool = False,
 ) -> dict:
-    min_recurrence = CONFIG.min_recurrence_for_create
-    recurrence_count = cross_file_recurrence
-    if min_recurrence > 1 and inbox_content:
-        # Intra-file occurrence count — the mono-file fallback for signal 1
-        # (cross-file recurrence): a concept mentioned 2+ times in the SAME
-        # inbox file is "recurrent" too (degenerate-run case per the spec).
-        # Same regex the excerpt extraction uses; only computed when the gate
-        # is armed, so the default (knob=1) path costs nothing extra.
-        intra_file_count = len(compile_concept_regex(name).findall(inbox_content))
-        recurrence_count = max(recurrence_count, intra_file_count)
     entry: dict[str, Any] = {
         "name": name,
-        # Legacy fallback preserved bit-for-bit: collision=None WITHOUT
-        # in_new_concepts was hardcoded "create" before the gate existed and
-        # must stay so; the gate only intercepts the in_new_concepts path.
-        "action_hint": classify_action(
-            collision,
-            in_new_concepts,
-            recurrence_count=recurrence_count,
-            is_structural=is_structural,
-            min_recurrence_for_create=min_recurrence,
-        ) if (collision is not None or in_new_concepts) else "create",
+        # collision=None WITHOUT in_new_concepts is hardcoded "create" (legacy).
+        "action_hint": classify_action(collision, in_new_concepts)
+        if (collision is not None or in_new_concepts) else "create",
         "inbox_excerpt": extract_excerpt_from_content(inbox_content, name, window),
     }
     if collision and collision.get("hits"):
@@ -189,11 +144,6 @@ def build_payload(recon_reports: list, window: int) -> dict:
             inbox_content = DRIVER.read_note(inbox_name).content
         except RuntimeError:
             inbox_content = ""
-        # Recurrence-gate signals, present only when upstream produced them:
-        # structural_concepts from recon (_seed_structural markup provenance),
-        # concept_recurrence from CROSSDEDUP (cross-file merge counts).
-        structural = set(report.get("structural_concepts", []))
-        recurrence = report.get("concept_recurrence", {})
         concepts = []
         for collision in report.get("collisions", []):
             concepts.append(build_concept_entry(
@@ -210,8 +160,6 @@ def build_payload(recon_reports: list, window: int) -> dict:
                 collision=None,
                 in_new_concepts=True,
                 window=window,
-                cross_file_recurrence=recurrence.get(new_name, 1),
-                is_structural=new_name in structural,
             ))
         batches.append({"inbox_file": inbox_name, "concepts": concepts})
     return {"schema_version": 1, "batches": batches}

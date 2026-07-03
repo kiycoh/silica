@@ -6,9 +6,9 @@ from silica.tools.delegate_tool import silica_delegate
 from silica.capabilities.profile import WorkerResult
 
 
-def _fake_run_worker(task, *, config, cancel_token=None, profiles=None):
+def _fake_run_worker(profile, goal, inputs=None, *, config, cancel_token=None):
     # echo the goal so we can assert ordering + count
-    return WorkerResult(status="ok", output={"goal": task.goal})
+    return WorkerResult(status="ok", output={"goal": goal})
 
 
 def test_fan_out_aggregates_in_order():
@@ -39,7 +39,7 @@ def test_empty_tasks_returns_empty():
 
 
 def test_worker_error_is_captured_not_raised():
-    def boom(task, *, config, cancel_token=None, profiles=None):
+    def boom(profile, goal, inputs=None, *, config, cancel_token=None):
         return WorkerResult(status="error", detail="kaboom")
 
     with patch("silica.capabilities.run_worker", boom):

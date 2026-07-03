@@ -376,12 +376,12 @@ def _note_text(title: str, body: str, *, folder: str = "") -> str:
     (e.g. "[Robotica] CAN\n\n...") to anchor domain-ambiguous acronyms
     in their correct semantic neighbourhood. This never alters vault content.
 
-    Images and other media embeds are stripped via kernel.media.preprocess_text
+    Images and other media embeds are stripped via kernel.media.strip_images
     before the text is truncated, so they never pollute the embedding space.
     """
-    from silica.kernel.media import preprocess_text
+    from silica.kernel.media import strip_images
     prefix = f"[{folder}] " if folder else ""
-    combined = f"{prefix}{title}\n\n{preprocess_text(body)}"
+    combined = f"{prefix}{title}\n\n{strip_images(body)}"
     return combined[:_MAX_CHARS]
 
 def _note_title_text(title: str, *, folder: str = "") -> str:
