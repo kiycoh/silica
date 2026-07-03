@@ -297,7 +297,10 @@ class ObsidianCLIBackend(GraphIndexMixin):
             if "no matches" in str(e).lower() or "not found" in str(e).lower() or "error" in str(e).lower():
                 return []
             raise
-        if not raw or raw.lower().startswith("no matches"):
+        # Plain-text empty results ("No matches found.", "No frontmatter found.",
+        # ...) are expected CLI output, not malformed JSON — valid JSON can
+        # never start with "no ".
+        if not raw or raw.lower().startswith("no "):
             return []
         try:
             return json.loads(raw)

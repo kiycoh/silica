@@ -291,6 +291,19 @@ def test_cli_backend_sentinel_handling():
         res = cli._run_json("search:context", "query=something")
         assert res == []
 
+    # 3. "No frontmatter found." (properties on a bare note) is an expected
+    #    empty result, not a JSON parse failure — no warning must be logged
+    mock_nofm = MagicMock()
+    mock_nofm.stdout = "No frontmatter found."
+    mock_nofm.stderr = ""
+    mock_nofm.returncode = 0
+    import logging
+    with patch("subprocess.run", return_value=mock_nofm):
+        with patch.object(logging.getLogger("silica.driver.cli_backend"), "warning") as warn:
+            assert cli._run_json("properties", "file=SomeNote") == []
+            assert cli.props_of("SomeNote") == {}
+            warn.assert_not_called()
+
 
 def test_new_tools_registration():
     """Verify that silica_exists and silica_inbox_ls are registered in the registry."""
