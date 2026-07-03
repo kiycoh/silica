@@ -30,16 +30,14 @@ def silica_run_injector(
     resume_run_id: str = "",
     cancel_token: Any = None,
 ) -> dict[str, Any]:
-    """Execute the entire Injector pipeline deterministically with acceptance gates and rollback.
+    """Ingest one or more inbox files into the vault — the full pipeline with
+    quality gates and rollback. This is THE tool for "ingest/inject this file".
 
-    Accepts one or more inbox files in a single FSM run with per-chunk failure
-    containment: a failed chunk is rolled back and marked 'failed' while the
-    remaining chunks continue.  Pass resume_run_id to re-run only the chunks
-    that failed in a previous partial run (content-addressed idempotency).
-
-    The run is driven by the Coordinator, which fans borderline-pair dedup work
-    out to leashed sub-agents on the worker model concurrently with the
-    injection batches.
+    Per-chunk failure containment: a failed chunk is rolled back and marked
+    'failed' while the remaining chunks continue. Pass resume_run_id to re-run
+    only the chunks that failed in a previous partial run. Near-duplicate
+    merging runs concurrently in the background.
+    For a single quick note, silica_write_note/silica_patch_note are cheaper.
     """
     from silica.router.coordinator import Coordinator
 
@@ -64,10 +62,10 @@ class LedgerDigestArgs(BaseModel):
 
 @tool(LedgerDigestArgs, cls="composed")
 def silica_ledger_digest(run_id: str = "") -> dict[str, Any]:
-    """Returns a compact summary of a run's plan and progress (< 500 tokens).
+    """Compact summary of a run's plan and progress (< 500 tokens).
 
-    Loads TaskLedger (immutable plan) and ProgressLedger (execution state) from
-    ~/.silica/runs/<run_id>/. Pass run_id="" to inspect the most recently saved run.
+    Use to inspect an ingest/audit run before advancing it with
+    silica_ledger_next. Pass run_id="" for the most recently saved run.
     """
     from silica.kernel.progress import ProgressLedger, latest_run_id
 
@@ -90,10 +88,10 @@ class DedupPairsArgs(BaseModel):
 
 @tool(DedupPairsArgs, cls="composed")
 def silica_dedup_pairs(pairs: list[dict]) -> dict[str, Any]:
-    """Merge a provided list of duplicate note pairs.
-    
-    Delegates the provided duplicate pairs to the leashed dedup sub-agent batch processor.
-    The smaller note is appended to the larger note as a single patch.
+    """Merge an ALREADY-KNOWN list of duplicate note pairs (e.g. from a ledger task).
+
+    The smaller note's genuinely-new info is appended to the larger note as a
+    single patch. To discover duplicate pairs by scanning, use silica_dedup.
     """
     from silica.kernel.workqueue import WorkItem
     from silica.agent.subagent import run_subagent_batch
@@ -150,18 +148,17 @@ class DedupFolderArgs(BaseModel):
 
 @tool(DedupFolderArgs, cls="composed")
 def silica_dedup(folder: str = "", cancel_token: Any = None) -> dict[str, Any]:
-    """Find near-duplicate note pairs and merge the smaller into the larger.
+    """SCAN a folder (or the vault) for near-duplicate note pairs and merge each
+    smaller note into its larger twin.
 
-    Uses the embedding index to surface borderline pairs, then runs the leashed
-    dedup sub-agent on each pair: it appends only the smaller note's genuinely-new
-    info into the larger note (a single append-only patch). Never rewrites/deletes/
-    creates. Run /embed first.
+    Only the smaller note's genuinely-new info is appended to the larger note
+    (a single append-only patch) — never rewrites, deletes, or creates notes.
+    Requires the embedding index (silica_embed_refresh). If you already know
+    the pairs, use silica_dedup_pairs instead.
 
-    Pair admission criteria (either condition is sufficient):
-      • Full-note cosine similarity in (τ_low, τ_high)   ← body-level similarity
-      • Title-only cosine similarity ≥ sim_title_threshold ← title-level similarity
-    The second criterion catches cases like "ROS" / "JSON in ROS 2" where the bodies
-    are topically distinct but the titles share a strong semantic relationship.
+    A pair is admitted when its body similarity is borderline OR its titles are
+    strongly similar — the latter catches cases like "ROS" / "JSON in ROS 2"
+    where bodies diverge but titles are clearly related.
     """
     from silica.kernel.embed import get_store, _cosine
     from silica.kernel.workqueue import WorkItem
@@ -253,9 +250,10 @@ class RefineBatchArgs(BaseModel):
 
 @tool(RefineBatchArgs, cls="composed")
 def silica_refine_batch(note_paths: list[str], cancel_token: Any = None) -> dict[str, Any]:
-    """Stylistically refine a batch of notes (leashed refiner sub-agent).
+    """Stylistically refine a batch of notes: reformat for clarity and Obsidian
+    style WITHOUT adding or losing information.
 
-    Each note is reformatted for clarity/Obsidian style WITHOUT information loss.
+    To add missing content to thin notes, use silica_enrich_batch instead.
     """
     if not note_paths:
         return {"error": "No note paths provided."}
@@ -274,7 +272,9 @@ class EnrichBatchArgs(BaseModel):
 
 @tool(EnrichBatchArgs, cls="composed")
 def silica_enrich_batch(note_paths: list[str], cancel_token: Any = None) -> dict[str, Any]:
-    """Semantically enrich a batch of lean or empty notes (leashed enricher sub-agent)."""
+    """Semantically enrich a batch of lean or empty notes: adds substantive
+    content. To only fix style/formatting without changing content, use
+    silica_refine_batch instead."""
     if not note_paths:
         return {"error": "No note paths provided."}
 
@@ -471,22 +471,13 @@ def silica_run_organizer(
     llm_arbiter: bool = True,
     move_uncategorized: bool = False,
 ) -> dict[str, Any]:
-    """Execute the /organize pipeline — classify vault notes and move them to taxonomy folders.
+    """Classify vault notes against the taxonomy and move them into its folders.
 
-    Phase 1 (dry_run=True): returns a plan showing which notes would move and where.
-    Phase 2 (dry_run=False): executes the moves via DRIVER.move() (graph-safe, wikilinks updated).
-
-    The pipeline runs the OrganizeFSM which:
-      1. SCAN   — lists notes in scope
-      2. CLASSIFY — L1 co-occurrence matching (zero LLM cost)
-      3. ARBITRATE — LLM arbiter for borderline notes (optional)
-      4. PLAN   — generates MoveOps for notes that need relocation
-      5. SNAPSHOT — captures pre-move state for rollback
-      6. MOVE   — executes DRIVER.move() calls
-      7. LINT   — graph regression gate
-      8. CLEANUP — ledger commit
-
-    Rollback is automatic if the LINT gate fails.
+    Requires a taxonomy (silica_generate_taxonomy first). Two-phase:
+    dry_run=True (default) returns the move plan without touching anything;
+    dry_run=False executes the moves graph-safely (wikilinks updated), with
+    automatic rollback if the post-move lint gate fails. To move a single note
+    directly, use silica_move instead.
     """
     from silica.kernel.taxonomy import load_taxonomy
     from silica.router.organize_fsm import OrganizerFSM

@@ -22,7 +22,11 @@ class SearchArgs(BaseModel):
 
 @tool(SearchArgs, cls="atomic")
 def silica_search(query: str) -> list:
-    """Search for notes in the vault by name. Returns the names of notes matching the query."""
+    """Search for notes by NAME/title match. Returns the names of matching notes.
+
+    For text inside note bodies use silica_search_context; for meaning-based
+    search when you don't know the exact words use silica_semantic_search.
+    """
     refs = DRIVER.search_names(query)
     return [{"name": r.name, "path": r.path} for r in refs]
 
@@ -32,7 +36,11 @@ class SearchContextArgs(BaseModel):
 
 @tool(SearchContextArgs, cls="atomic")
 def silica_search_context(query: str) -> list:
-    """Search the content of the vault with context (snippets + line numbers). Useful for finding mentions of a concept."""
+    """Search note BODIES for exact text; returns snippets with line numbers.
+
+    Use to find literal mentions of a term. When the exact wording is unknown,
+    use silica_semantic_search instead; to match note titles use silica_search.
+    """
     hits = DRIVER.search_context(query)
     return [
         {"name": h.ref.name, "path": h.ref.path, "line": h.line, "snippet": h.snippet}

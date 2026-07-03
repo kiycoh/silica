@@ -41,11 +41,11 @@ class GraphExportArgs(BaseModel):
 
 @tool(GraphExportArgs, cls="composed")
 def silica_graph_export(output_path: str = "graph.html", folder: str = "", title: str = "Vault Graph") -> dict[str, Any]:
-    """Generates a self-contained vis.js knowledge graph HTML file from the vault's wikilink structure.
+    """Generates a self-contained interactive HTML graph of the vault's wikilink structure.
 
-    Runs Louvain community detection to cluster notes by topic.
-    Works with both cli and fs backends. Ghost nodes mark unresolved wikilinks.
-    The output file can be opened directly in any browser — no server needed.
+    Runs Louvain community detection to cluster notes by topic; ghost nodes mark
+    unresolved wikilinks. The output opens directly in any browser.
+    Visualization only — for an actionable structural audit use silica_vault_report.
     """
     from silica.kernel.graph_export import export_graph
 
@@ -68,11 +68,15 @@ class AutolinkArgs(BaseModel):
 
 @tool(AutolinkArgs, cls="composed")
 def silica_autolink(note_paths: list[str] | None = None, note_path: str = "", use_candidates: bool = True) -> dict[str, Any]:
-    """Scan notes for mentions of existing vault titles and wrap them as wikilinks.
+    """Scan the given notes for mentions of existing vault titles and wrap them as wikilinks.
 
     Skips frontmatter, code blocks, math, headings, and already-linked text.
     Only links titles that exist in the vault graph (graph-safe by construction).
     Returns the total number of links added.
+
+    For the reverse direction (inject links TO newly created notes into older
+    neighbours) use silica_backlink; for a vault-wide maintenance pass that also
+    finds the candidates itself, use silica_curate.
     """
     from silica.kernel.autolink import build_title_index
 
@@ -178,8 +182,8 @@ def silica_backlink(new_titles: list[str], neighbourhood: list[str]) -> dict[str
     """Inject wikilinks to newly-created notes into pre-existing neighbouring notes.
 
     For each note in `neighbourhood`, wraps mentions of any title in `new_titles`
-    with a wikilink — the reverse direction of AUTOLINK.  Skips frontmatter, code,
-    math, and already-linked spans.  Returns {path: [titles_added]}.
+    with a wikilink — the reverse of silica_autolink. Skips frontmatter, code,
+    math, and already-linked spans. Returns {path: [titles_added]}.
     """
     from silica.kernel.autolink import backlink_pass, build_title_index
 
@@ -200,11 +204,14 @@ class SemanticSearchArgs(BaseModel):
 
 @tool(SemanticSearchArgs, cls="composed")
 def silica_semantic_search(query: str, k: int = 5) -> dict[str, Any]:
-    """Find vault notes semantically similar to a query using the embedding index.
+    """Find vault notes by MEANING: embeds a short query and ranks notes by similarity.
 
-    Embeddings PROPOSE candidates; the graph DISPOSES (verify links with the driver).
-    Returns at most k results ordered by cosine similarity, highest first.
-    Requires the embedding index to be built first with silica_embed_refresh.
+    Use for "what do I have about X" when the exact wording is unknown. For
+    literal text matches use silica_search_context; to rank against a longer
+    text you already have (a snippet, a note body) use silica_similar.
+    Returns at most k results, highest similarity first. Requires the embedding
+    index (silica_embed_refresh). Results are candidates — verify with
+    silica_read_note before acting on them.
     """
     from silica.agent.providers import get_embedder
     from silica.config import CONFIG
@@ -230,11 +237,11 @@ class SimilarArgs(BaseModel):
 
 @tool(SimilarArgs, cls="composed")
 def silica_similar(text: str, k: int = 5) -> dict[str, Any]:
-    """Find vault notes semantically similar to an arbitrary text snippet.
+    """Find vault notes semantically similar to a given text snippet.
 
-    Equivalent to silica_semantic_search but signals the intent of finding
-    notes *similar to* a specific text rather than searching by intent.
-    Requires the embedding index to be built first with silica_embed_refresh.
+    Same index as silica_semantic_search, but takes a longer text (a note body,
+    a paragraph) instead of a short query — use it for "which notes resemble
+    this content". Requires the embedding index (silica_embed_refresh).
     """
     from silica.agent.providers import get_embedder
     from silica.config import CONFIG
@@ -260,11 +267,11 @@ class EmbedRefreshArgs(BaseModel):
 
 @tool(EmbedRefreshArgs, cls="composed")
 def silica_embed_refresh(folder: str = "", force: bool = False) -> dict[str, Any]:
-    """Build or refresh the vault embedding index at ~/.silica/index/embeddings.json.
+    """Build or refresh the vault embedding index.
 
-    Incrementally skips notes already in the index (unless force=True).
-    Call this after bulk writes to keep the index fresh.
-    The driver reads each note to get its content; works with both cli and fs backends.
+    Powers silica_semantic_search, silica_similar, and silica_dedup — run it
+    first if those report an empty index. Incremental: skips notes already
+    indexed (unless force=True). Call after bulk writes to keep it fresh.
     """
     from silica.agent.providers import get_embedder
     from silica.config import CONFIG
@@ -325,13 +332,14 @@ class CooccurrenceRefreshArgs(BaseModel):
 
 @tool(CooccurrenceRefreshArgs, cls="composed")
 def silica_cooccurrence_refresh(folder: str = "", force: bool = False) -> dict[str, Any]:
-    """Build or refresh the vault co-occurrence index at ~/.silica/index/cooccurrence.json.
+    """Build or refresh the vault co-occurrence index.
 
     The embedder-free twin of silica_embed_refresh: a deterministic concept
-    co-occurrence graph derived purely from note text — no LM Studio, no network.
-    Incrementally skips notes already indexed (unless force=True). Run this once
-    to seed an existing vault; the post-write hook then keeps it fresh.
-    Powers the relatedness facade's co-occurrence leg and the graph delta report.
+    co-occurrence graph derived purely from note text — works even when the
+    embedder is unavailable. Powers cluster naming and the co-occurrence
+    signals in silica_vault_report. Incremental: skips notes already indexed
+    (unless force=True). Run once to seed an existing vault; writes keep it
+    fresh automatically afterwards.
     """
     from silica.config import CONFIG
     from silica.kernel.cooccurrence import build_index
@@ -405,12 +413,13 @@ def silica_vault_report(
     with_cooccurrence: bool = False,
     seed_ledger: bool = True,
 ) -> dict[str, Any]:
-    """Deterministic structural audit of the vault.
+    """Deterministic structural audit of the vault — the entry point for /graph and vault health checks.
 
     Computes god-nodes, surprising cross-cluster connections, orphans, dangling
-    links, and clusters. Writes GRAPH_REPORT.md and (if seed_ledger=True)
-    persists a run whose ProgressLedger is pre-seeded with remediation tasks
-    the agent can advance via silica_ledger_next.
+    links, and clusters. Writes GRAPH_REPORT.md and (if seed_ledger=True) seeds
+    a remediation run to advance task-by-task via silica_ledger_next.
+    For a visual graph instead, use silica_graph_export; to go straight to
+    executable maintenance work, use silica_curate.
 
     Tier semantics:
       auto     — reversible, graph-safe ops the agent executes without confirmation

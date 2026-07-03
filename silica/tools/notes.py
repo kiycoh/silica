@@ -29,18 +29,12 @@ def silica_patch_note(
     source_basename: str,
     hub: str | None = None,
 ) -> dict[str, Any]:
-    """Append a distilled snippet to a single existing note — fast path for
-    interactive edits, no temp-file + bulk_write round-trip.
+    """Append a snippet under a heading in a single EXISTING note — the fast path
+    for interactive edits.
 
-    Reuses the shared single-op executor (silica.kernel.bulk.execute_one), so
-    it stays in lockstep with the batch write path and inherits any future
-    write-layer changes (e.g. atomic file writes).
-
-    Undo: every successful patch is recorded on the per-note checkpoint stack,
-    so it can be reverted later via the REPL ``/undo`` command. This is a
-    lightweight user-facing edit history — it is NOT the FSM's transactional
-    snapshot/rollback (which guards a whole pipeline run). Crash-safety of the
-    write itself relies on atomic writes at the DRIVER level.
+    To create a new note use silica_write_note; for ingesting whole documents
+    into many notes use silica_run_injector. Every successful patch is
+    checkpointed and can be reverted with /undo.
     """
     from silica.kernel.bulk import execute_one
     from silica.kernel.checkpoints import get_checkpoint_store
@@ -87,14 +81,12 @@ class WriteNoteArgs(BaseModel):
 
 @tool(WriteNoteArgs, cls="composed")
 def silica_write_note(path: str, content: str) -> dict[str, Any]:
-    """Create a new note in the vault with arbitrary content — fast path for
-    single-note creation, no temp-file + bulk_write round-trip.
+    """Create a new note in the vault — the fast path for single-note creation.
 
-    Fails if the note already exists. Use silica_patch_note to append to an
-    existing note, or the FSM pipeline (silica_run_injector) for multi-note
-    atomic batches with SNAPSHOT/ROLLBACK guarantees.
-
-    Undo: a checkpoint is pushed so the creation can be reverted via /undo.
+    Fails if the note already exists: use silica_patch_note to append to an
+    existing note, or silica_run_injector for multi-note ingestion with
+    quality gates and rollback. The creation is checkpointed and can be
+    reverted with /undo.
     """
     from silica.kernel.checkpoints import get_checkpoint_store
 

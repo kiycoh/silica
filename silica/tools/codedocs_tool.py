@@ -18,10 +18,10 @@ class DocumentArgs(BaseModel):
 
 @tool(DocumentArgs, cls="composed")
 def silica_document(path: str) -> dict:
-    """Extract a shallow AST skeleton from a source file and stage it as a
-    documentation stub in Inbox/. Sets documents:/code_ref for staleness
-    tracking. Source-derived text is sanitized and fenced (untrusted).
-    Writes to Inbox/ only — RBAC inbox-write, never the vault."""
+    """Extract a shallow AST skeleton from a source code file and stage it as a
+    documentation stub in Inbox/ (never directly in the vault). Sets
+    documents:/code_ref frontmatter for staleness tracking; source-derived text
+    is sanitized and fenced. Ingest the stub afterwards with silica_run_injector."""
     from silica.driver import DRIVER
     from silica.sources.code import CODE
 

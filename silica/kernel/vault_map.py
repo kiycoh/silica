@@ -37,10 +37,8 @@ def build_vault_map(
         if len(store) == 0:
             return None
 
-        lines: list[str] = [
-            "## Vault map  (auto-generated orientation; "
-            "may not reflect this session's writes)"
-        ]
+        lines: list[str] = ["## Vault map  (corpus snapshot at session start)"]
+
 
         # A single vault pass: refs feeds both the folders block and the
         # contested scan (one list_files call, not two).

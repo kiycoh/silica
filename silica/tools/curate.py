@@ -227,13 +227,13 @@ class CurateArgs(BaseModel):
 
 @tool(CurateArgs, cls="composed")
 def silica_curate(apply: bool = False, folder: str = "", cancel_token: Any = None) -> dict[str, Any]:
-    """Curate the vault: project structural findings into maintenance work.
+    """Curate the vault: turn structural findings into executed maintenance work.
 
-    Composes a plan from the L1 vault report (strong autolinks, orphans,
-    near-duplicate pairs, oversized/lean notes). Default is a dry-run: it returns
-    the plan and enqueues/writes nothing. With apply=True it fires the mechanical
-    autolink and drains orphan/dedup/refine WorkItems through the existing
-    leashed-sub-agent seam (commit_ops + bounds + undo), then journals one line.
+    Composes a plan from the vault report (strong autolinks, orphans to link,
+    near-duplicate pairs, oversized/lean notes). Default is a dry-run: returns
+    the plan, writes nothing. With apply=True it executes the plan (autolinks,
+    orphan linking, dedup merges, refinements) with undo journaling.
+    For the raw audit report without acting on it, use silica_vault_report.
     """
     report = compute_report(
         folder=folder,

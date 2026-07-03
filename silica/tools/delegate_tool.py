@@ -32,9 +32,8 @@ class DelegateArgs(BaseModel):
 def silica_delegate(profile: str, tasks: list[dict], max_workers: int = 7) -> dict:
     """Fan a list of worker tasks out to parallel workers; return aggregated results.
 
-    Each task is {goal, inputs}. Dispatch goes through the CAPABILITIES seam
-    (kind = profile), so an unknown profile yields status='skipped' per task.
-    Returns {"results": [...], "summary": {status: count}}.
+    Each task is {goal, inputs}. An unknown profile yields status='skipped' per
+    task. Returns {"results": [...], "summary": {status: count}}.
     """
     if not tasks:
         return {"results": [], "summary": {}}
