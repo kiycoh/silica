@@ -160,7 +160,7 @@ def build_txn(ops_data: list[Op] | list[dict]) -> Txn:
 class SnapshotArgs(BaseModel):
     ops_json_path: str = Field(description="Path to validated operations JSON to snapshot before writing")
 
-@tool(SnapshotArgs, cls="wrapped")
+@tool(SnapshotArgs, cls="wrapped", internal=True)
 def silica_snapshot(ops_json_path: str) -> dict[str, Any]:
     """Snapshot the current state of notes before they are modified.
 
@@ -200,7 +200,7 @@ class RestoreArgs(BaseModel):
     txn_id: str = Field(description="Transaction ID to restore (for audit log only)")
     inverses: list[dict] = Field(description="InverseOp list from silica_snapshot result")
 
-@tool(RestoreArgs, cls="wrapped")
+@tool(RestoreArgs, cls="wrapped", internal=True)
 def silica_restore(txn_id: str, inverses: list[dict]) -> dict[str, Any]:
     """Apply InverseOp list to rollback a transaction.
 
@@ -277,7 +277,7 @@ class CleanupArgs(BaseModel):
     inbox_file: str = Field(description="Vault-relative path of the inbox file to archive")
     done_dir: str = Field(default="done", description="Destination folder for processed inbox files")
 
-@tool(CleanupArgs, cls="wrapped")
+@tool(CleanupArgs, cls="wrapped", internal=True)
 def silica_cleanup(inbox_file: str, done_dir: str = "done") -> dict[str, Any]:
     """Move the inbox file to done/ after successful pipeline completion.
 

@@ -25,7 +25,7 @@ logger = logging.getLogger(__name__)
 class Tool:
     """Metadata and executor for a single registered tool."""
 
-    __slots__ = ("fn", "name", "description", "params_model", "cls", "collapse", "summarize", "sensitive")
+    __slots__ = ("fn", "name", "description", "params_model", "cls", "collapse", "summarize", "sensitive", "internal")
 
     def __init__(
         self,
@@ -37,6 +37,7 @@ class Tool:
         collapse: str = "lazy",
         summarize: Callable[[dict], str] | None = None,
         sensitive: bool = False,
+        internal: bool = False,
     ):
         self.fn = fn
         self.name = name
@@ -49,6 +50,11 @@ class Tool:
         # on this so a sensitive tool can never leak into the main agent by
         # mere registration. New sensitive tools are covered automatically.
         self.sensitive = sensitive
+        # Pipeline internals the FSM drives programmatically (recon, bulk_write,
+        # snapshot, ...): registered for dispatch but hidden from the main
+        # agent's default toolset — same filter seam as `sensitive`. Still
+        # reachable when named in AgentConstraints.tools.
+        self.internal = internal
 
     def json_schema(self) -> dict:
         """Return the OpenAI-compatible function schema for this tool."""
@@ -101,6 +107,7 @@ def tool(
     collapse: str = "lazy",
     summarize: Callable[[dict], str] | None = None,
     sensitive: bool = False,
+    internal: bool = False,
 ):
     """Decorator that registers a function as a Silica tool.
 
@@ -120,6 +127,7 @@ def tool(
         TOOLS[tool_name] = Tool(
             fn, tool_name, tool_desc.strip(), params_model, cls,
             collapse=collapse, summarize=summarize, sensitive=sensitive,
+            internal=internal,
         )
         logger.debug("Registered tool: %s (class=%s, collapse=%s)", tool_name, cls, collapse)
         return fn

@@ -73,6 +73,47 @@ def test_default_toolset_excludes_sensitive():
         TOOLS.pop("_secret_t", None)
 
 
+def test_default_toolset_excludes_internal():
+    """Invariant: default_toolset ∩ {internal} == ∅ (same seam as sensitive)."""
+    TOOLS["_plain_t"] = Tool(lambda: "ok", "_plain_t", "plain", _EmptyArgs, "atomic")
+    TOOLS["_internal_t"] = Tool(
+        lambda: "no", "_internal_t", "internal", _EmptyArgs, "composed", internal=True
+    )
+    captured = {}
+
+    def fake_call_llm(model, messages, tools=None):
+        captured["tools"] = tools
+        return _resp(text="ok")
+
+    try:
+        with patch("silica.agent.loop.call_llm", fake_call_llm):
+            run_agent(messages=[{"role": "user", "content": "hi"}], model="m")
+        names = {t["function"]["name"] for t in (captured["tools"] or [])}
+        assert "_plain_t" in names
+        assert "_internal_t" not in names
+    finally:
+        TOOLS.pop("_plain_t", None)
+        TOOLS.pop("_internal_t", None)
+
+
+def test_pipeline_stage_tools_are_internal():
+    """The FSM-driven injector stages must never surface in the chat toolset;
+    the agent-facing entry points must."""
+    import silica.tools.composed  # noqa: F401 — registers pipeline + wrapped tools
+    import silica.tools.wrapped  # noqa: F401
+
+    internal = {
+        "silica_recon", "silica_payload", "silica_sanitize", "silica_validate_ops",
+        "silica_bulk_write", "silica_lint", "silica_snapshot", "silica_restore",
+        "silica_cleanup",
+    }
+    for name in internal:
+        assert TOOLS[name].internal is True, name
+    for name in ("silica_run_injector", "silica_deferred_retry",
+                 "silica_write_note", "silica_patch_note"):
+        assert TOOLS[name].internal is False, name
+
+
 def test_sensitive_tool_reachable_when_named():
     """A sensitive tool IS exposed when a caller names it in constraints."""
     TOOLS["_secret_t"] = Tool(

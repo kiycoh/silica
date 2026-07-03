@@ -1,9 +1,10 @@
 """Pipeline tools — the mechanical injector stages as system tools.
 
 Recon → payload → sanitize → validate → bulk-write → lint, plus the
-deferred-ops retry path. These are the per-stage building blocks the
-InjectorFSM (and the LLM, ad hoc) drive; the full run lives in
-silica.tools.runners.
+deferred-ops retry path. The per-stage tools are registered internal=True:
+the InjectorFSM drives them programmatically and they are hidden from the
+main agent's default toolset (the full run lives in silica.tools.runners,
+exposed as silica_run_injector). Only the deferred retry is agent-facing.
 """
 from __future__ import annotations
 
@@ -44,7 +45,7 @@ class ReconArgs(BaseModel):
     inbox_file: str = Field(description="Path to the inbox file to analyze")
     limit: int = Field(default=0, description="Limit for concept extraction")
 
-@tool(ReconArgs, cls="composed")
+@tool(ReconArgs, cls="composed", internal=True)
 def silica_recon(inbox_file: str, limit: int = 0) -> dict[str, Any]:
     """Mechanical extraction of concepts from an inbox file and searching for collisions in the vault."""
     from silica.kernel.recon import is_title_match, rank_hits, collision_priority
@@ -125,7 +126,7 @@ class PayloadArgs(BaseModel):
     max_concepts: int = Field(default=7, description="Maximum concepts per batch")
     max_bytes: int = Field(default=80 * 1024, description="Maximum bytes (JSON size) per chunk")
 
-@tool(PayloadArgs, cls="composed")
+@tool(PayloadArgs, cls="composed", internal=True)
 def silica_payload(recon_report_path: str, max_concepts: int = 7, max_bytes: int = 80 * 1024) -> dict[str, Any]:
     """Assembles payloads for the Distiller by pre-extracting snippets from the vault."""
     import orjson
@@ -152,7 +153,7 @@ def silica_payload(recon_report_path: str, max_concepts: int = 7, max_bytes: int
 class SanitizeArgs(BaseModel):
     distiller_output_path: str = Field(description="Path to the raw distiller output JSON file")
 
-@tool(SanitizeArgs, cls="composed")
+@tool(SanitizeArgs, cls="composed", internal=True)
 def silica_sanitize(distiller_output_path: str) -> dict[str, Any]:
     """Validates and sanitizes the JSON returned by Distiller workers."""
     from silica.kernel.sanitize import parse_json, normalize_ops
@@ -200,7 +201,7 @@ class ValidateOpsArgs(BaseModel):
     hub: str = Field(default="", description="Hub note name")
     future_ref_whitelist: list[str] = Field(default_factory=list, description="Optional whitelist of future reference note names")
 
-@tool(ValidateOpsArgs, cls="composed")
+@tool(ValidateOpsArgs, cls="composed", internal=True)
 def silica_validate_ops(
     ops_json_path: str,
     payload_paths: list[str] | None = None,
@@ -275,7 +276,7 @@ def silica_validate_ops(
 class BulkWriteArgs(BaseModel):
     ops_json_path: str = Field(description="Path to the validated operations JSON file")
 
-@tool(BulkWriteArgs, cls="composed")
+@tool(BulkWriteArgs, cls="composed", internal=True)
 def silica_bulk_write(ops_json_path: str) -> dict[str, Any]:
     """Applies write/patch/overwrite/delete operations in batch in the vault."""
     from silica.kernel.bulk import execute_operations
@@ -294,7 +295,7 @@ class LintArgs(BaseModel):
     op_type: str = Field(default="", description="Operation type (write/patch/overwrite) for conditional checks")
     hub: str = Field(default="", description="Hub note name for wikilink validation")
 
-@tool(LintArgs, cls="composed")
+@tool(LintArgs, cls="composed", internal=True)
 def silica_lint(note_name: str, op_type: str = "", hub: str = "") -> dict[str, Any]:
     """Post-write gate: executes the OFM linter to find structural regressions."""
     from silica.kernel.linter import validate_note

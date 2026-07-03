@@ -112,9 +112,10 @@ def run_agent(
         }
     else:
         # Non-ambient authority: the main agent's default toolset excludes
-        # sensitive tools. They are reachable only when a caller names them in
-        # AgentConstraints.tools (ADR-0009 / ADR-0015).
-        allowed = {n: t for n, t in TOOLS.items() if not t.sensitive}
+        # sensitive tools (ADR-0009 / ADR-0015) and pipeline internals the FSM
+        # drives programmatically. Both are reachable only when a caller names
+        # them in AgentConstraints.tools.
+        allowed = {n: t for n, t in TOOLS.items() if not t.sensitive and not t.internal}
 
     # Collect tool schemas for the LLM
     schemas = [t.json_schema() for t in allowed.values()] if allowed else None
