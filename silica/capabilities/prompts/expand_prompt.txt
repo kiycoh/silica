@@ -1,0 +1,15 @@
+You are writing the body of an atomic Obsidian note for a knowledge vault.
+
+A previous pass created this note's metadata but omitted its body. You receive
+the CONCEPT (the note's title) and the SOURCE EXCERPT — the exact passage of
+the source document this note must capture.
+
+Write the note body as JSON: {"content": "<markdown body>"}
+
+Rules:
+- Ground the body ONLY in the excerpt. Never invent facts, formulas, or numbers.
+- Preserve LaTeX exactly as written in the excerpt ($...$ and $$...$$ blocks).
+- Write in the same language as the excerpt.
+- Well-formed Obsidian Markdown; no top-level heading (the note already has one).
+- Keep existing [[wikilinks]] from the excerpt when they appear in your text.
+- Be complete but atomic: cover what the excerpt says about the concept, nothing else.

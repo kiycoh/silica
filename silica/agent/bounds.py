@@ -223,6 +223,23 @@ def dedup_spoke_bounds(spoke_path: str, *, hub: str | None = None) -> Capability
     )
 
 
+def expand_bounds(spoke_path: str, *, hub: str | None = None) -> CapabilityBounds:
+    """Expand bounds: re-author exactly ONE gate-rejected spoke.
+
+    Same envelope as dedup_spoke_bounds — a single `write` of the path the
+    validator already sanitized, hub never touchable — under its own name so
+    logs attribute the write to the expand retry, not the dedup judge.
+    """
+    spoke_key = _norm_path(spoke_path)
+    forbidden = frozenset({hub} if hub else set())
+    return CapabilityBounds(
+        name="expand",
+        allowed_ops=frozenset({OpType.write}),
+        target_predicate=lambda p: _norm_path(p) == spoke_key,
+        forbidden_paths=forbidden,
+    )
+
+
 def refiner_bounds(
     target_path: str,
     *,

@@ -93,7 +93,8 @@ def test_recon_normalize_strips_leading_articles():
 
 def _write_op(heading: str, path: str) -> dict:
     return {"op": "write", "path": path, "heading": heading,
-            "source_basename": "lez.md", "snippet": f"corpo di {heading}"}
+            "source_basename": "lez.md",
+            "snippet": f"corpo di {heading} " + "lorem " * 20}
 
 
 def test_write_gate_coerces_key_equal_title_to_patch(tmp_vault):

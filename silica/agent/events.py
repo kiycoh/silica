@@ -61,7 +61,7 @@ RenderEvent = ToolProgressEvent | ReasoningEvent | ThinkingStartEvent | Thinking
 @dataclass(slots=True)
 class WorkFeedbackEvent:
     item_id: str    # WorkItem.id
-    kind: str       # "dedup" | "refine" | "orphan" | "enrich"
+    kind: str       # "dedup" | "expand" | "refine" | "orphan" | "enrich"
     phase: str      # "reading" | "calling_llm" | "committing"
     detail: str = ""
 

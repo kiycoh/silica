@@ -10,7 +10,10 @@ from unittest.mock import patch, MagicMock
 import pytest
 
 from silica.driver.base import NoteContent, NoteRef
-from silica.kernel.validate import validate_operations
+from silica.kernel.validate import MIN_WRITE_SNIPPET_CHARS, validate_operations
+
+# Write ops must clear the precision gate; the padding keeps fixtures short.
+_PAD = " lorem" * (MIN_WRITE_SNIPPET_CHARS // 6 + 1)
 
 
 def _note(name: str, path: str) -> NoteRef:
@@ -50,7 +53,7 @@ def test_write_op_forward_reference_neutralized():
             "path": "Concepts/Neural Network.md",
             "heading": "Neural Network",
             "source_basename": "inbox.md",
-            "snippet": "See [[Vanishing Gradient]] and [[Backpropagation]].",
+            "snippet": "See [[Vanishing Gradient]] and [[Backpropagation]]." + _PAD,
         }
     ]
     read_mock = _ReadSideEffect(known=set())  # nothing exists
@@ -137,7 +140,7 @@ def test_patch_op_link_resolved_by_same_batch_write():
             "path": "Concepts/New Concept.md",
             "heading": "New Concept",
             "source_basename": "inbox.md",
-            "snippet": "A new concept.",
+            "snippet": "A new concept." + _PAD,
         },
         {
             "op": "patch",
@@ -248,7 +251,7 @@ def test_write_op_whitelist_link_accepted():
             "path": "Concepts/Neural Network.md",
             "heading": "Neural Network",
             "source_basename": "inbox.md",
-            "snippet": "See [[Vanishing Gradient]] and [[Backpropagation]].",
+            "snippet": "See [[Vanishing Gradient]] and [[Backpropagation]]." + _PAD,
         }
     ]
     read_mock = _ReadSideEffect(known=set())

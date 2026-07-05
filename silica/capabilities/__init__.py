@@ -27,6 +27,7 @@ from typing import Any, Callable
 
 from silica.kernel.workqueue import WorkItem
 from silica.capabilities.dedup import run_dedup
+from silica.capabilities.expand import run_expand
 from silica.capabilities.refine import run_refine
 from silica.capabilities.enrich import run_enrich
 from silica.capabilities.orphan import run_orphan
@@ -65,6 +66,7 @@ def run_router(item: WorkItem, config: Any) -> dict[str, Any]:
 
 CAPABILITIES: dict[str, Capability] = {
     "dedup": run_dedup,
+    "expand": run_expand,
     "refine": run_refine,
     "enrich": run_enrich,
     "orphan": run_orphan,

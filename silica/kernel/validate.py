@@ -8,6 +8,14 @@ from silica.kernel.ast import extract_links
 
 logger = logging.getLogger(__name__)
 
+# Precision gate: a write op whose snippet is shorter than this is deferred
+# instead of written — execute_write would otherwise fill the note with a
+# "(da espandere)" placeholder (real incident: run 5d0a3350, 2026-07-04, the
+# distiller returned whole chunks with snippet="" despite full inbox excerpts).
+# Rejection routes through the existing defer + steer path, so the distiller
+# gets re-prompted with the reason.
+MIN_WRITE_SNIPPET_CHARS = 100
+
 
 class Rejection(BaseModel):
     op: Op
@@ -311,6 +319,17 @@ def validate_operations(
                     reason=(
                         f"near_title candidate='{cand_title}' path='{cand_path}' "
                         f"ratio={ratio:.2f} — deferred for dedup review"
+                    ),
+                ))
+                continue
+
+            body_len = len((op.snippet or "").strip())
+            if body_len < MIN_WRITE_SNIPPET_CHARS:
+                rejected_ops.append(Rejection(
+                    op=op,
+                    reason=(
+                        f"snippet too short ({body_len} < {MIN_WRITE_SNIPPET_CHARS} chars) "
+                        f"— would write a placeholder note, deferred for retry"
                     ),
                 ))
                 continue

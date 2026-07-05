@@ -64,6 +64,57 @@ def _enqueue_near_title_dedups(fsm: "InjectorFSM", rejected_raw: list) -> None:
             logger.debug("VALIDATE: failed to enqueue near_title dedup item: %s", _qe)
 
 
+def _enqueue_short_snippet_expands(fsm: "InjectorFSM", rejected_raw: list) -> None:
+    """«snippet too short» rejections become live expand WorkItems.
+
+    The op is already parked in the deferred bundle by _defer_ops; the expand
+    worker re-prompts the LLM with the concept's inbox excerpt (max 2 attempts)
+    and commits through the same gate — retry stays the exception. Called only
+    for PARTIAL rejections: an all-rejected chunk re-delegates via the steer
+    arc, and racing both would author the same notes twice. Best-effort: no
+    queue (ad-hoc validate) → no-op.
+    """
+    wq = getattr(fsm, "work_queue", None)
+    if wq is None:
+        return
+    from silica.kernel.workqueue import WorkItem
+
+    excerpts: dict[str, str] = {}
+    try:
+        chunk = fsm._chunks[fsm._current_chunk_idx]
+        for batch in chunk.get("batches", []):
+            for c in batch.get("concepts", []):
+                if isinstance(c, dict) and c.get("name"):
+                    excerpts[c["name"]] = c.get("inbox_excerpt", "") or ""
+    except Exception as _ce:
+        logger.debug("EXPAND: excerpt lookup failed (items will skip): %s", _ce)
+
+    for r in rejected_raw:
+        if not isinstance(r, dict):
+            continue
+        reason = r.get("reason", "") or ""
+        if not reason.startswith("snippet too short"):
+            continue
+        op = r.get("op", {}) or {}
+        try:
+            wq.enqueue(WorkItem(
+                kind="expand",
+                target_path=op.get("path", ""),
+                context={
+                    "op": op,
+                    "excerpt": excerpts.get(op.get("heading", ""), ""),
+                    "reason": reason,
+                    "inbox_file": fsm.inbox_file,
+                    "hub": fsm.hub,
+                    "content_hash": fsm._current_content_hash,
+                    "target_dir": fsm.target_dir,
+                },
+                reason=reason,
+            ))
+        except Exception as _qe:
+            logger.debug("VALIDATE: failed to enqueue expand item: %s", _qe)
+
+
 def _inject_graph_ctx(chunk: dict, vault_ctx: dict) -> dict:
     """Return a shallow-enriched copy of chunk with graph_context added to concepts.
 
@@ -298,6 +349,10 @@ def handle_validate(fsm: "InjectorFSM") -> None:
                 fsm._current_content_hash[:8],
             )
         _enqueue_near_title_dedups(fsm, rejected_raw)
+        if res.get("validated_count", 0) > 0:
+            # Partial rejection only: with 0 validated the steer arc below
+            # re-delegates the whole chunk — expand would race it.
+            _enqueue_short_snippet_expands(fsm, rejected_raw)
 
     # Accumulate cleared parent references across chunks.
     # These are prospective links (parent notes not yet in vault) that the
