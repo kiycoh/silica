@@ -21,7 +21,7 @@ class PatchNoteArgs(BaseModel):
     source_basename: str = Field(description="Provenance: source filename this snippet derives from")
     hub: str | None = Field(default=None, description="Optional [[Hub]] to link in frontmatter if missing")
 
-@tool(PatchNoteArgs, cls="composed")
+@tool(PatchNoteArgs, cls="composed", collapse="eager")
 def silica_patch_note(
     name: str,
     heading: str,
@@ -79,7 +79,7 @@ class WriteNoteArgs(BaseModel):
     path: str = Field(description="Vault-relative path for the new note (e.g. 'Computer Science/Computer Vision.md')")
     content: str = Field(description="Full markdown content including YAML frontmatter")
 
-@tool(WriteNoteArgs, cls="composed")
+@tool(WriteNoteArgs, cls="composed", collapse="eager")
 def silica_write_note(path: str, content: str) -> dict[str, Any]:
     """Create a new note in the vault — the fast path for single-note creation.
 

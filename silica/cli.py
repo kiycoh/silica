@@ -41,6 +41,34 @@ def _update_context_tokens(messages: list[dict]) -> None:
         CONFIG.context_tokens = sum(len(m.get("content") or "") for m in messages) // 4
 
 
+# ponytail: fixed knobs, promote to Config only if someone actually needs to tune them
+_COMPACT_FRACTION = 0.6   # collapse old reads once history crosses 60% of the window
+_COMPACT_FLOOR_TURNS = 3  # the last N assistant turns are never collapsed
+
+
+def _compact_context(messages: list[dict], collapsed: set[int]) -> set[int]:
+    """Collapse old read-tool results once the context meter crosses the budget.
+
+    Runs after _update_context_tokens (which feeds prompt_tokens); when
+    anything collapsed, recounts so the toolbar meter reflects the slimmer
+    history. Loss is recoverable: each stub names the call to re-issue.
+    """
+    from silica.agent.compaction import compact_read_history
+    from silica.tools import TOOLS
+
+    updated = compact_read_history(
+        messages,
+        collapsed,
+        prompt_tokens=CONFIG.context_tokens,
+        budget=int(_COMPACT_FRACTION * CONFIG.max_context_tokens),
+        floor_turns=_COMPACT_FLOOR_TURNS,
+        tools=TOOLS,
+    )
+    if updated != collapsed:
+        _update_context_tokens(messages)
+    return updated
+
+
 def _inject_vault_map(messages: list[dict]) -> None:
     """Appends the vault map as a system message (best-effort).
 
@@ -130,6 +158,9 @@ def _setup_logging(debug: bool = False) -> None:
     logging.getLogger("LiteLLM").setLevel(logging.ERROR)
     logging.getLogger("openai").setLevel(logging.WARNING)
     logging.getLogger("markdown_it").setLevel(logging.WARNING)
+    # asyncio DEBUG is one "Using selector" line per event loop — litellm's sync
+    # streaming path creates a fresh loop PER CHUNK, so --verbose drowns in them.
+    logging.getLogger("asyncio").setLevel(logging.WARNING)
 
 
 class VaultTarget(NamedTuple):
@@ -1037,6 +1068,7 @@ def main():
 
     session = build_session()
     messages = _fresh_messages()
+    collapsed: set[int] = set()  # message indices already elided by compaction
 
     from silica.ui.renderer import make_progress_callback
     callback = make_progress_callback()
@@ -1072,6 +1104,7 @@ def main():
                 CONSOLE.clear()
                 print_home()
                 messages[:] = _fresh_messages()
+                collapsed = set()  # indices reset with the history
                 continue
 
             should_continue = _handle_slash_command(user_input, messages)
@@ -1101,8 +1134,10 @@ def main():
                 CONSOLE.print("[role.assistant]⏺ silica[/]")
                 CONSOLE.print(FlatMarkdown(answer))
                 CONSOLE.print()
-            messages.append({"role": "assistant", "content": answer or ""})
+            # run_agent already appended the final assistant message to the
+            # history — re-appending `answer` here would store it twice.
             _update_context_tokens(messages)
+            collapsed = _compact_context(messages, collapsed)
         except KeyboardInterrupt:
             callback.close()
             CONSOLE.print("\n  [dim](interrupted)[/]")

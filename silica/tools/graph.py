@@ -66,7 +66,7 @@ class AutolinkArgs(BaseModel):
     note_path: str = Field(default="", description="Vault-relative path of the note to autolink (legacy single-file)")
     use_candidates: bool = Field(default=True, description="Use embedding candidates to focus autolinking (requires index)")
 
-@tool(AutolinkArgs, cls="composed")
+@tool(AutolinkArgs, cls="composed", collapse="eager")
 def silica_autolink(note_paths: list[str] | None = None, note_path: str = "", use_candidates: bool = True) -> dict[str, Any]:
     """Scan the given notes for mentions of existing vault titles and wrap them as wikilinks.
 
@@ -177,7 +177,7 @@ class BacklinkArgs(BaseModel):
     new_titles: list[str] = Field(description="Titles of notes just created in this run")
     neighbourhood: list[str] = Field(description="Vault-relative paths of candidate notes to scan")
 
-@tool(BacklinkArgs, cls="composed")
+@tool(BacklinkArgs, cls="composed", collapse="eager")
 def silica_backlink(new_titles: list[str], neighbourhood: list[str]) -> dict[str, Any]:
     """Inject wikilinks to newly-created notes into pre-existing neighbouring notes.
 
@@ -265,7 +265,7 @@ class EmbedRefreshArgs(BaseModel):
     folder: str = Field(default="", description="Vault-relative folder to restrict indexing (empty = entire vault)")
     force: bool = Field(default=False, description="Re-embed all notes, even if already indexed")
 
-@tool(EmbedRefreshArgs, cls="composed")
+@tool(EmbedRefreshArgs, cls="composed", collapse="eager")
 def silica_embed_refresh(folder: str = "", force: bool = False) -> dict[str, Any]:
     """Build or refresh the vault embedding index.
 
@@ -330,7 +330,7 @@ class CooccurrenceRefreshArgs(BaseModel):
     folder: str = Field(default="", description="Vault-relative folder to restrict indexing (empty = entire vault)")
     force: bool = Field(default=False, description="Re-process all notes, even if already indexed")
 
-@tool(CooccurrenceRefreshArgs, cls="composed")
+@tool(CooccurrenceRefreshArgs, cls="composed", collapse="eager")
 def silica_cooccurrence_refresh(folder: str = "", force: bool = False) -> dict[str, Any]:
     """Build or refresh the vault co-occurrence index.
 

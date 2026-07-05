@@ -21,7 +21,7 @@ class RunInjectorArgs(BaseModel):
     hub: str = Field(default="", description="Optional reference hub note")
     resume_run_id: str = Field(default="", description="Run ID to resume (re-processes only failed chunks, skips done ones)")
 
-@tool(RunInjectorArgs, cls="composed")
+@tool(RunInjectorArgs, cls="composed", collapse="eager")
 def silica_run_injector(
     inbox_file: str = "",
     inbox_files: list[str] | None = None,

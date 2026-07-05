@@ -61,6 +61,8 @@ def test_verbose_config_and_logging():
         assert logging.getLogger("litellm").level == logging.WARNING
         assert logging.getLogger("LiteLLM").level == logging.ERROR
         assert logging.getLogger("openai").level == logging.WARNING
+        # asyncio DEBUG suppressed: litellm streaming spawns one loop per chunk
+        assert logging.getLogger("asyncio").level == logging.WARNING
 
         # Silica's own root logger is at DEBUG
         assert logging.getLogger("silica").level <= logging.DEBUG or True  # inherits root

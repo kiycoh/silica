@@ -276,7 +276,7 @@ def silica_validate_ops(
 class BulkWriteArgs(BaseModel):
     ops_json_path: str = Field(description="Path to the validated operations JSON file")
 
-@tool(BulkWriteArgs, cls="composed", internal=True)
+@tool(BulkWriteArgs, cls="composed", collapse="eager", internal=True)
 def silica_bulk_write(ops_json_path: str) -> dict[str, Any]:
     """Applies write/patch/overwrite/delete operations in batch in the vault."""
     from silica.kernel.bulk import execute_operations
@@ -313,7 +313,7 @@ def silica_lint(note_name: str, op_type: str = "", hub: str = "") -> dict[str, A
 class DeferredRetryArgs(BaseModel):
     content_hash: str = Field(description="Content hash of the deferred bundle to retry (from silica_deferred_list)")
 
-@tool(DeferredRetryArgs, cls="composed")
+@tool(DeferredRetryArgs, cls="composed", collapse="eager")
 def silica_deferred_retry(content_hash: str) -> dict[str, Any]:
     """Retry writing a deferred op bundle: re-validates against the current vault,
     snapshots, writes the ops that now pass, and updates the bundle.

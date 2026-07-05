@@ -55,29 +55,6 @@ def test_eager_stub_passes_through_non_dict_payloads():
     assert eager_stub(tool, "plain string body") == "plain string body"
 
 
-from unittest.mock import patch
-
-from silica.agent.compaction import context_budget
-
-
-def test_context_budget_uses_model_window():
-    with patch("silica.agent.compaction.litellm.get_max_tokens", return_value=200_000):
-        assert context_budget("some-model", 0.75, 128_000) == 150_000
-
-
-def test_context_budget_falls_back_when_model_unknown():
-    def _raise(_model):
-        raise Exception("unknown model")
-
-    with patch("silica.agent.compaction.litellm.get_max_tokens", side_effect=_raise):
-        assert context_budget("mystery", 0.5, 128_000) == 64_000
-
-
-def test_context_budget_falls_back_when_window_is_none():
-    with patch("silica.agent.compaction.litellm.get_max_tokens", return_value=None):
-        assert context_budget("mystery", 0.75, 100_000) == 75_000
-
-
 def _msgs():
     big = "x" * 300
     return [

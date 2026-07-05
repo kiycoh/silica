@@ -38,6 +38,7 @@ from silica.agent.events import (
     LLMStreamEvent,
 )
 from silica.agent.llm import call_llm
+from silica.agent.compaction import eager_stub
 from silica.agent.concurrency import worker_slot
 from silica.agent.constraints import AgentConstraints
 from silica.tools import TOOLS, Tool
@@ -249,6 +250,12 @@ def run_agent(
                     )
                     failed = True
                     result = f'{{"error": "{type(e).__name__}: {str(e)}"}}'
+
+            # Eager projection: a write/gate tool's fat JSON never enters the
+            # history — the TUI already got the full result via the event above.
+            # Errors stay verbatim so the model can react to them.
+            if not failed and tc.name in allowed and allowed[tc.name].collapse == "eager":
+                result = eager_stub(allowed[tc.name], result)
 
             messages.append(
                 {

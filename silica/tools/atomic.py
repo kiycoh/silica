@@ -179,7 +179,7 @@ def silica_deferred_list() -> list:
 class DeferredFlushArgs(BaseModel):
     content_hash: str = Field(description="Content hash of the deferred bundle to permanently discard")
 
-@tool(DeferredFlushArgs, cls="atomic")
+@tool(DeferredFlushArgs, cls="atomic", collapse="eager")
 def silica_deferred_flush(content_hash: str) -> dict:
     """Discard a deferred op bundle — marks those rejected ops as permanently skipped."""
     from silica.kernel.deferred import get_deferred_store

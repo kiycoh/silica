@@ -12,12 +12,7 @@ Nothing here touches the network, the disk, or any global state.
 from __future__ import annotations
 
 import json
-import logging
 from typing import Any
-
-import litellm
-
-logger = logging.getLogger(__name__)
 
 MIN_COLLAPSE_CHARS = 200  # don't collapse a body smaller than its own stub
 
@@ -67,24 +62,6 @@ def eager_stub(tool: Any, result_str: str) -> str:
         except Exception:
             return generic_projection(parsed)
     return generic_projection(parsed)
-
-
-def context_budget(model: str, fraction: float, abs_fallback: int) -> int:
-    """Token threshold above which read compaction triggers.
-
-    `fraction` of the model's context window (via litellm). Unknown models —
-    where litellm raises or returns a falsy value — fall back to `abs_fallback`
-    so compaction is never silently disabled exactly where it's most needed.
-    """
-    window: int | None
-    try:
-        window = litellm.get_max_tokens(model)
-    except Exception as exc:
-        logger.debug("get_max_tokens(%s) failed (%s) — using fallback", model, exc)
-        window = None
-    if not window:
-        window = abs_fallback
-    return int(fraction * window)
 
 
 def compact_read_history(
