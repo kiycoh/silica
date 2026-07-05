@@ -23,7 +23,7 @@ def _link_name(name: str) -> str:
 
 
 def template_spoke(heading: str, snippet: str, hub: str, title: str | None = None, tags: list[str] | None = None, related: list[str] | None = None, parent: str | None = None) -> str:
-    today = datetime.date.today().strftime("%Y, %m, %d")
+    today = datetime.date.today().isoformat()
     body = snippet.strip() or "(da espandere)"
     h1 = title or heading  # title wins: filename and H1 stay in sync
 
@@ -97,7 +97,7 @@ def patch_snippet(heading: str, snippet: str, source_basename: str, hub: str | N
                     else:
                         existing_content = existing_content[:end_idx] + f'\nrelated:\n  - "[[{hub}]]"' + existing_content[end_idx:]
             else:
-                today = datetime.date.today().strftime("%Y, %m, %d")
+                today = datetime.date.today().isoformat()
                 frontmatter = f"""---
 parent note: "[[{hub}]]"
 related:

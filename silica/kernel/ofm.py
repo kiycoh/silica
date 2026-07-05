@@ -49,7 +49,7 @@ CALLOUT_TYPES = frozenset({
 })
 
 # Matches the YYYY, MM, DD date prefix (allows optional time suffix)
-DATE_PREFIX_RE = re.compile(r'^\s*\d{4},\s*\d{1,2},\s*\d{1,2}')
+DATE_PREFIX_RE = re.compile(r'^\s*\d{4}[-,]\s*\d{1,2}[-,]\s*\d{1,2}')
 # Matches callout opening lines (case-insensitive type)
 CALLOUT_RE = re.compile(r'^>\s*\[!([A-Za-z]+)\][+-]?', re.MULTILINE)
 
