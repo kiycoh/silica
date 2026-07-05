@@ -170,12 +170,23 @@ def resolve_vault_switch(arg: str) -> VaultTarget:
     return VaultTarget(None, False, f"Not a directory: {arg}")
 
 
-def resolve_repo_mode_vault(cwd, vault_env: str, docs_exists_ok: bool):
+def default_user_vault(home=None):
+    """Stable per-user vault used when no explicit SILICA_VAULT and no repo
+    mode applies. Sits alongside ~/.silica/{ledger,undo_journal,checkpoints}.db.
+    """
+    from pathlib import Path
+
+    return (home or Path.home()) / ".silica" / "vault"
+
+
+def resolve_repo_mode_vault(cwd, vault_env: str, docs_exists_ok: bool, self_repo=None):
     """Pure resolver for repo-mode vault selection (testable, no I/O prompts).
 
     Returns the vault path string to adopt, or None to leave config unchanged.
     - Explicit SILICA_VAULT (vault_env truthy) always wins → None.
     - Not inside a git repo → None.
+    - Inside Silica's own source repo (root == self_repo) → None: that's dev
+      mode, not a vault. Caller falls back to the home default.
     - .silica/ exists → return it.
     - .silica/ missing → return it only if docs_exists_ok (caller already
       confirmed creation); otherwise None.
@@ -188,6 +199,8 @@ def resolve_repo_mode_vault(cwd, vault_env: str, docs_exists_ok: bool):
     root = gitstate.find_repo_root(cwd)
     if root is None:
         return None
+    if self_repo is not None and root == Path(self_repo):
+        return None
     vault_dir = Path(root) / ".silica"
     if vault_dir.is_dir():
         return str(vault_dir)
@@ -197,25 +210,46 @@ def resolve_repo_mode_vault(cwd, vault_env: str, docs_exists_ok: bool):
 
 
 def _activate_repo_mode() -> None:
-    """Side-effecting wrapper: prompts to create .silica/ if missing, then
-    sets CONFIG.vault_path. Called once at CLI startup."""
+    """Side-effecting startup vault selection. Explicit SILICA_VAULT wins; else
+    a *user* project repo → its .silica/ (prompted if absent); else — including
+    inside Silica's own source repo (dev mode) — a stable ~/.silica/vault."""
     from pathlib import Path
     from silica.kernel import gitstate
+    import silica
 
     if CONFIG.vault_path.strip():
-        return  # explicit vault wins
-    root = gitstate.find_repo_root(Path.cwd())
-    if root is None:
+        # Explicit SILICA_VAULT wins — but still codebase-aware, like /vault:
+        # a repo root becomes <repo>/.silica (created on demand); a .silica dir
+        # or plain (non-repo) directory is adopted verbatim; a not-yet-existing
+        # path stays as-is for the backend to create.
+        t = resolve_vault_switch(CONFIG.vault_path)
+        if t.vault:
+            if t.created:
+                Path(t.vault).mkdir(parents=True, exist_ok=True)
+            CONFIG.vault_path = t.vault
         return
-    vault_dir = Path(root) / ".silica"
-    if not vault_dir.is_dir():
+    cwd = Path.cwd()
+    self_repo = gitstate.find_repo_root(Path(silica.__file__).resolve())
+    existing = resolve_repo_mode_vault(cwd, "", docs_exists_ok=False, self_repo=self_repo)
+    if existing:  # user repo already carries a .silica/
+        CONFIG.vault_path = existing
+        CONSOLE.print(f"  Repo mode: vault = [bold]{existing}[/]")
+        return
+    root = gitstate.find_repo_root(cwd)
+    if root is not None and root != self_repo:  # user repo, .silica/ missing → ask
         CONSOLE.print(f"  Git repo detected at [bold]{root}[/] but no [bold].silica/[/] folder.")
         answer = input("  Create .silica/ and manage it as the Silica vault? [y/N] ").strip().lower()
-        if answer not in ("y", "yes"):
+        if answer in ("y", "yes"):
+            vault_dir = Path(root) / ".silica"
+            vault_dir.mkdir(parents=True, exist_ok=True)
+            CONFIG.vault_path = str(vault_dir)
+            CONSOLE.print(f"  Repo mode: vault = [bold]{vault_dir}[/]")
             return
-        vault_dir.mkdir(parents=True, exist_ok=True)
-    CONFIG.vault_path = str(vault_dir)
-    CONSOLE.print(f"  Repo mode: vault = [bold]{vault_dir}[/]")
+    # No user repo, Silica's own repo, or declined → stable home vault.
+    home_vault = default_user_vault()
+    home_vault.mkdir(parents=True, exist_ok=True)
+    CONFIG.vault_path = str(home_vault)
+    CONSOLE.print(f"  Vault: [bold]{home_vault}[/]")
 
 
 def _handle_direct_shortcut(raw_input: str, messages: list[dict]) -> bool:
