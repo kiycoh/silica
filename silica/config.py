@@ -215,6 +215,19 @@ class SilicaConfig:
         default_factory=lambda: os.getenv("SILICA_DOMAIN") or None
     )
 
+    # Mindmap (/map): radial map rooted on one note. Node cap is "breathing room"
+    # (readable map, not a hairball); latent_k = neighbours asked of the
+    # relatedness facade; hops = wikilink BFS depth from the root.
+    mindmap_max_nodes: int = field(
+        default_factory=lambda: int(os.getenv("SILICA_MINDMAP_MAX_NODES", "35"))
+    )
+    mindmap_latent_k: int = field(
+        default_factory=lambda: int(os.getenv("SILICA_MINDMAP_LATENT_K", "10"))
+    )
+    mindmap_hops: int = field(
+        default_factory=lambda: int(os.getenv("SILICA_MINDMAP_HOPS", "2"))
+    )
+
     # Git commit safety net for docs/ writes. "off" (default) → never commit;
     # "auto" → after each write batch, commit the touched docs/ paths with a
     # structured message. Additive to the undo journal (ADR-0002), never a

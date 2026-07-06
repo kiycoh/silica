@@ -106,6 +106,7 @@ Run the ingestion pipeline from inside the REPL:
 | `/embed` | `[folder] [--force]` | Build/update the embedding index |
 | `/cooccur` | `[folder] [--force]` | Build/update the co-occurrence index (no embedder needed) |
 | `/graph` | `[out.html] [folder]` | Export the knowledge graph |
+| `/map` | `<nota> [--force]` | Radial mind-map rooted on a note → `maps/<stem>.canvas` |
 | `/find` | `<query> [--k=N]` | Semantic search |
 | `/undo` | `[note-path]` | Undo the last patch on a note |
 | `/review` | `[--flush=HASH]` | Inspect the async review queue (deferred ops) |

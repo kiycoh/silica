@@ -61,6 +61,58 @@ def silica_graph_export(output_path: str = "graph.html", folder: str = "", title
     return export_graph(output_path=output_path, folder=folder, title=title)
 
 
+class MindmapArgs(BaseModel):
+    note_path: str = Field(description="Vault-relative path of the note to root the map on")
+    force: bool = Field(default=False, description="Overwrite an existing maps/<stem>.canvas (defaults to no-clobber)")
+
+@tool(MindmapArgs, cls="composed")
+def silica_mindmap(note_path: str, force: bool = False) -> dict[str, Any]:
+    """Builds a radial mind-map rooted on one note and writes it as an Obsidian .canvas.
+
+    Deterministic, no LLM: BFS over the wikilink graph plus the latent (embeddings
+    + co-occurrence) relatedness leg, laid out as radial wedges by community. The
+    .canvas lands in maps/<stem>.canvas and is manipulable in Obsidian. No-clobber:
+    an existing map is not overwritten unless force=True (so your rearrangements
+    survive). For the flat whole-vault network instead, use silica_graph_export.
+    """
+    from pathlib import Path
+
+    from silica.config import CONFIG
+    from silica.kernel.mindmap import (
+        build_mapview,
+        gather_materials,
+        mapview_to_canvas,
+        resolve_note_path,
+    )
+
+    # Accept a path OR a title (the GUI input and casual CLI use give titles).
+    root = resolve_note_path(note_path)
+    if root is None:
+        return {"error": f"'{note_path}' not found in the vault graph."}
+
+    stem = Path(root).stem
+    vault = CONFIG.vault_path or "."
+    out = Path(vault) / "maps" / f"{stem}.canvas"
+
+    # ponytail: no-clobber v1 = exists + not force → refuse. Diffing the generated
+    # map against a user-rearranged one is v2; here we simply never clobber.
+    if out.exists() and not force:
+        return {"skipped": str(out), "reason": "exists", "hint": "re-run with force=True to regenerate"}
+
+    materials = gather_materials(root, latent_k=CONFIG.mindmap_latent_k)
+    mv = build_mapview(
+        root, materials, max_nodes=CONFIG.mindmap_max_nodes, hops=CONFIG.mindmap_hops
+    )
+    if len(mv.nodes) <= 1:
+        return {"error": f"'{root}' has no neighbours to map (isolated in the graph)."}
+
+    import orjson
+    out.parent.mkdir(parents=True, exist_ok=True)
+    out.write_bytes(orjson.dumps(mapview_to_canvas(mv), option=orjson.OPT_INDENT_2))
+    logger.info("silica_mindmap: wrote %s — %d nodes, %d edges", out, len(mv.nodes), len(mv.edges))
+    return {"path": str(out), "nodes": len(mv.nodes), "edges": len(mv.edges)}
+
+
 class AutolinkArgs(BaseModel):
     note_paths: list[str] | None = Field(default=None, description="List of vault-relative paths to autolink")
     note_path: str = Field(default="", description="Vault-relative path of the note to autolink (legacy single-file)")

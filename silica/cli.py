@@ -295,6 +295,7 @@ def _handle_direct_shortcut(raw_input: str, messages: list[dict]) -> bool:
         /embed [folder] [--force]
         /cooccur [folder] [--force]
         /graph [output.html] [folder]
+        /map <nota> [--force]
         /find <query> [--k=N]
         /undo [note-path]
     """
@@ -426,6 +427,32 @@ def _handle_direct_shortcut(raw_input: str, messages: list[dict]) -> bool:
         try:
             parsed = json.loads(result)
             CONSOLE.print(f"  Graph written to: [bold]{parsed.get('output_path', output_path)}[/]")
+        except Exception:
+            CONSOLE.print(result)
+        return True
+
+    if cmd == "/map":
+        force = "--force" in parts[1:]
+        positional = [p for p in parts[1:] if not p.startswith("-")]
+        note = " ".join(positional).strip()
+        if not note:
+            CONSOLE.print("  Usage: /map <nota> [--force]")
+            return True
+        result = TOOLS["silica_mindmap"].run(note_path=note, force=force)
+        try:
+            parsed = json.loads(result)
+            if parsed.get("skipped"):
+                CONSOLE.print(
+                    f"  [yellow]Mappa già presente[/] ({parsed['skipped']}) — "
+                    "non sovrascritta. Usa [bold]/map <nota> --force[/] per rigenerare."
+                )
+            elif "error" in parsed:
+                CONSOLE.print(f"  [red]{parsed['error']}[/]")
+            else:
+                CONSOLE.print(
+                    f"  Mappa scritta: [bold]{parsed.get('path', '?')}[/] "
+                    f"({parsed.get('nodes', '?')} nodi, {parsed.get('edges', '?')} archi)"
+                )
         except Exception:
             CONSOLE.print(result)
         return True

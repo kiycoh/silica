@@ -98,6 +98,12 @@ COMMANDS: tuple[Command, ...] = (
         summary="export knowledge graph",
     ),
     Command(
+        name="/map",
+        group="direct",
+        usage="<nota> [--force]",
+        summary="radial mind-map rooted on a note → maps/<stem>.canvas",
+    ),
+    Command(
         name="/find",
         group="direct",
         usage="<query> [--k=N]",
