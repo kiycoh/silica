@@ -18,6 +18,7 @@ import json
 import logging
 import os
 import re
+import shlex
 import subprocess
 import tempfile
 import time
@@ -262,7 +263,7 @@ class ObsidianCLIBackend(GraphIndexMixin):
         cmd.extend(args)
 
         timeout = _cli_timeout()
-        logger.debug("CLI exec: %s  (timeout=%.1fs)", " ".join(cmd), timeout)
+        logger.debug("CLI exec: %s  (timeout=%.1fs)", shlex.join(cmd), timeout)
         try:
             result = subprocess.run(
                 cmd,
@@ -283,7 +284,7 @@ class ObsidianCLIBackend(GraphIndexMixin):
         except FileNotFoundError as e:
             raise RuntimeError("Obsidian CLI executable not found: obsidian") from e
         except subprocess.TimeoutExpired:
-            raise RuntimeError(f"Obsidian CLI timeout: {' '.join(cmd)}")
+            raise RuntimeError(f"Obsidian CLI timeout: {shlex.join(cmd)}")
         except subprocess.CalledProcessError as e:
             raise RuntimeError(
                 f"Obsidian CLI error (exit {e.returncode}): {e.stderr.strip()}"

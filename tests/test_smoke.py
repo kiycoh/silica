@@ -315,6 +315,33 @@ def test_new_tools_registration():
     assert "silica_inbox_ls" in TOOLS
 
 
+def test_cli_backend_logging_with_shlex(caplog):
+    """Verify that ObsidianCLIBackend._run_cli logs the command with shlex.join (proper quoting)."""
+    import logging
+    from silica.driver.cli_backend import ObsidianCLIBackend
+    from unittest.mock import patch, MagicMock
+
+    cli = ObsidianCLIBackend(vault_name="test vault")
+    
+    mock_resp = MagicMock()
+    mock_resp.stdout = "some output"
+    mock_resp.stderr = ""
+    mock_resp.returncode = 0
+    
+    logger = logging.getLogger("silica.driver.cli_backend")
+    
+    with patch("subprocess.run", return_value=mock_resp):
+        with caplog.at_level(logging.DEBUG, logger="silica.driver.cli_backend"):
+            cli._run_cli("properties", "path=Reti Internet/User Datagram Protocol (UDP).md")
+            
+            log_records = [rec.message for rec in caplog.records if "CLI exec:" in rec.message]
+            assert log_records
+            assert "obsidian" in log_records[0]
+            assert "'vault=test vault'" in log_records[0]
+            assert "'path=Reti Internet/User Datagram Protocol (UDP).md'" in log_records[0]
+
+
+
 
 
 
