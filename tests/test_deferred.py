@@ -43,6 +43,19 @@ def test_deferred_put_overwrites(store):
     assert bundle["rejected_ops"][0]["path"] == "Dir/B.md"
 
 
+def test_deferred_put_dedups_same_op(store):
+    """Merging existing + new re-rejections of the same (path, heading) must
+    collapse to one, keeping the latest content — not grow every run."""
+    store.put("h", "inbox/a.md", "Dir", None,
+              [{"op": "write", "path": "Dir/A.md", "heading": "A", "reason": "v1"}])
+    existing = store.get("h")["rejected_ops"]
+    store.put("h", "inbox/a.md", "Dir", None,
+              existing + [{"op": "write", "path": "Dir/A.md", "heading": "A", "reason": "v2"}])
+    ops = store.get("h")["rejected_ops"]
+    assert len(ops) == 1
+    assert ops[0]["reason"] == "v2"
+
+
 def test_deferred_list_all(store):
     store.put("hash1", "inbox/a.md", "Dir", None, [{"op": "write", "path": "Dir/A.md"}])
     store.put("hash2", "inbox/b.md", "Dir2", "Hub2", [{"op": "write"}, {"op": "patch"}])

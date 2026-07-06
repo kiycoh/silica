@@ -37,6 +37,25 @@ def _store_dir() -> Path:
     return paths.index_dir() / "deferred"
 
 
+def _dedup_ops(ops: list[dict]) -> list[dict]:
+    """Collapse ops sharing (path, heading) to their latest, first-seen order.
+
+    _defer merges `existing + new` across runs; without this a file that stays
+    in the inbox and re-rejects the same op duplicates it every run. dict keeps
+    each key's first position and last value → stable order, newest content.
+    """
+    last: dict[tuple, int] = {}
+    for i, o in enumerate(ops):
+        key = (o.get("path"), o.get("heading"))
+        if key != (None, None):  # unidentifiable ops can't be deduped — keep all
+            last[key] = i
+    return [
+        o for i, o in enumerate(ops)
+        if (o.get("path"), o.get("heading")) == (None, None)
+        or last[(o.get("path"), o.get("heading"))] == i
+    ]
+
+
 class DeferredStore:
     def __init__(self, path: Path | str | None = None):
         self._dir = Path(path) if path else _store_dir()
@@ -61,7 +80,7 @@ class DeferredStore:
             "target_dir": target_dir,
             "hub": hub,
             "timestamp": time.time(),
-            "rejected_ops": rejected_ops,
+            "rejected_ops": _dedup_ops(rejected_ops),
             "rejection_reasons": rejection_reasons or {},
         }
         self._bundle_path(content_hash).write_bytes(
