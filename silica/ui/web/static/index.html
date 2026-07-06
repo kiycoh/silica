@@ -1,0 +1,55 @@
+<!doctype html>
+<html lang="en">
+<head>
+  <meta charset="utf-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1" />
+  <title>silica</title>
+  <link rel="stylesheet" href="/static/app.css" />
+</head>
+<body>
+  <div id="drop-hint">drop to ingest → Inbox/</div>
+
+  <header>
+    <div class="brand">silica</div>
+    <div class="vault" id="vault">—</div>
+    <div class="spacer"></div>
+    <nav class="tabs">
+      <button class="tab active" data-tab="chat">chat</button>
+      <button class="tab" data-tab="graph">graph</button>
+      <button class="tab" data-tab="map">map</button>
+    </nav>
+    <button id="new-chat" class="ghost">new chat</button>
+    <button id="stop" class="ghost" hidden>stop</button>
+  </header>
+
+  <main>
+    <section id="view-chat" class="view active">
+      <div id="log"></div>
+      <div class="commands" id="commands">
+        <button data-cmd="/report">/report</button>
+        <button data-cmd="/organize">/organize</button>
+        <button data-cmd="/cooccur">/cooccur</button>
+        <button data-cmd="/embed">/embed</button>
+      </div>
+      <form id="composer">
+        <textarea id="input" rows="1" placeholder="message silica…  (⏎ send, ⇧⏎ newline)"></textarea>
+        <button type="submit" id="send">send</button>
+      </form>
+    </section>
+
+    <section id="view-graph" class="view">
+      <iframe id="graph-frame" title="vault graph"></iframe>
+    </section>
+
+    <section id="view-map" class="view">
+      <form id="map-bar">
+        <input id="map-note" type="text" placeholder="note to map (e.g. concepts/mind-maps)…" autocomplete="off" />
+        <button type="submit">map</button>
+      </form>
+      <iframe id="map-frame" title="radial map"></iframe>
+    </section>
+  </main>
+
+  <script src="/static/app.js"></script>
+</body>
+</html>

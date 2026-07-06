@@ -1076,6 +1076,20 @@ def _dispatch_subcommand(args: list[str]) -> int | None:
     return None
 
 
+def _gui_port() -> int:
+    """Parse `--port N` / `--port=N` from argv (default 8765)."""
+    for i, a in enumerate(sys.argv):
+        raw = a.split("=", 1)[1] if a.startswith("--port=") else (
+            sys.argv[i + 1] if a == "--port" and i + 1 < len(sys.argv) else None
+        )
+        if raw is not None:
+            try:
+                return int(raw)
+            except ValueError:
+                pass
+    return 8765
+
+
 def main():
     """Entry point for the `silica` CLI command."""
     _args = [a for a in sys.argv[1:] if a not in ("--verbose", "-v")]
@@ -1088,6 +1102,17 @@ def main():
     _resolve_context_budget()
     debug_mode = "--verbose" in sys.argv or "-v" in sys.argv or CONFIG.debug_logging
     _setup_logging(debug=debug_mode)
+
+    # --gui: serve the localhost web GUI instead of the REPL (config/model/logging
+    # already applied above). Blocks on uvicorn until Ctrl-C. Needs the [gui] extra.
+    if "--gui" in sys.argv:
+        try:
+            from silica.ui.web import serve
+        except ImportError:
+            CONSOLE.print("  [red]La GUI richiede l'extra:[/] pip install 'silica[gui]'")
+            sys.exit(1)
+        serve(port=_gui_port())
+        return
 
     print_home()
     if not _model_configured():

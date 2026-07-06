@@ -36,6 +36,8 @@ dependencies = [
 [project.optional-dependencies]
 # Opt-in PDF support (requires pymupdf4llm):
 pdf = ["pymupdf4llm>=1.27.2.3"]
+# Opt-in localhost web GUI (`silica --gui`); python-multipart backs the drop-zone upload:
+gui = ["fastapi", "uvicorn", "python-multipart"]
 dev = ["pytest>=8.0", "mypy>=1.10", "import-linter>=2.0"]
 
 [project.scripts]
@@ -45,7 +47,7 @@ silica = "silica.cli:main"
 include = ["silica", "silica.*"]
 
 [tool.setuptools.package-data]
-silica = ["overlays/*.yaml"]
+silica = ["overlays/*.yaml", "ui/web/static/*"]
 
 [tool.pytest.ini_options]
 testpaths = ["tests"]
