@@ -107,10 +107,21 @@ class SilicaConfig:
         default_factory=lambda: os.getenv("SILICA_VAULT_NAME", "")
     )
 
-    # Driver backend: "fs" (default, filesystem-native, headless) or "cli" (Obsidian
-    # desktop via CDP — adds version-history rollback and live metadata-cache reads).
+    # Driver backend: "fs" (default, filesystem-native, headless), "cli" (Obsidian
+    # desktop via CDP — adds version-history rollback and live metadata-cache reads),
+    # or "ws" (the Obsidian bridge plugin over a loopback WebSocket, PROTOCOL.md).
     backend: str = field(
         default_factory=lambda: os.getenv("SILICA_BACKEND", "fs")
+    )
+
+    # Obsidian WebSocket bridge (backend="ws"): port `silica connect` binds (0 →
+    # OS picks a free one) and the shared token (empty → minted on first connect,
+    # written to <vault>/.obsidian/silica-bridge.json). See obsidian-silica/PROTOCOL.md.
+    ws_port: int = field(
+        default_factory=lambda: int(os.getenv("SILICA_WS_PORT", "0"))
+    )
+    ws_token: str = field(
+        default_factory=lambda: os.getenv("SILICA_WS_TOKEN", "")
     )
 
     # Inbox folder inside the vault — used to archive and blacklist staging files.
