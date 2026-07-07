@@ -43,6 +43,45 @@ def _vendored_lib_js() -> str:
     return res.read_text(encoding="utf-8")
 
 
+def render_tree(nodes: list[dict]) -> str:
+    """Build a collapsible <details> file tree from real note paths.
+
+    Pure: nodes -> HTML. Folders become nested <details>/<summary> (native
+    collapse, no JS); notes become <div class="tree-note" data-id=ID>NAME</div>.
+    Ghost nodes (type == "ghost" or empty path) are unresolved links, not files,
+    so they are skipped. Folders sort before notes at each level; both groups
+    sort case-insensitively.
+    """
+    root: dict = {}
+    for n in nodes:
+        if n.get("type") == "ghost":
+            continue
+        path = n.get("path") or ""
+        if not path:
+            continue
+        *folders, leaf = path.split("/")
+        cur = root
+        for f in folders:
+            cur = cur.setdefault(f, {})
+        cur.setdefault("__notes__", []).append((leaf, n.get("id", path)))
+
+    def emit(tree: dict, depth: int) -> str:
+        out = []
+        for name in sorted((k for k in tree if k != "__notes__"), key=str.lower):
+            attr = " open" if depth == 0 else ""
+            out.append(f"<details{attr}><summary>{html.escape(name)}</summary>")
+            out.append(emit(tree[name], depth + 1))
+            out.append("</details>")
+        for leaf, nid in sorted(tree.get("__notes__", []), key=lambda x: x[0].lower()):
+            out.append(
+                f'<div class="tree-note" data-id="{html.escape(nid, quote=True)}">'
+                f"{html.escape(leaf)}</div>"
+            )
+        return "".join(out)
+
+    return f'<div id="file-tree">{emit(root, 0)}</div>'
+
+
 def render_html(
     nodes: list[dict],
     edges: list[dict],
