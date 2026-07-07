@@ -145,6 +145,65 @@ def _embedder_free_near_dups(
     return out
 
 
+def _collapse_near_dup_concepts(chunk: dict, *, is_near_dup) -> dict:
+    """Drop near-duplicate SIBLING concepts within a chunk, keeping one per group.
+
+    COLLISION routes each concept only against the committed vault, so two twins
+    distilled from the same chunk (same source passage) are both absent from the
+    index and both get written — the intra-chunk blind spot (#4). A union-find over
+    the chunk's own concepts keeps the richest member of each near-dup group (longest
+    excerpt) and drops the rest.
+
+    `is_near_dup(text_a, text_b) -> bool` is injected so the caller supplies the
+    signal it has cheapest: the main path passes embedding cosine (vectors already
+    computed for vault routing), a cold path could pass MinHash. Pure: no FSM, no I/O.
+    Drop-only (no excerpt merge) so the surviving concept's embed text is unchanged
+    and its vault-routing vector stays valid. O(n²) over a chunk's concepts.
+    ponytail: drops the twin's delta; it is assumed subsumed by the longer sibling.
+    """
+    from silica.kernel.embed import _note_text
+
+    batches = chunk.get("batches", [])
+    entries: list[list] = []  # [batch_idx, concept, excerpt_len, text]
+    for bi, batch in enumerate(batches):
+        for c in batch.get("concepts", []):
+            name = c.get("name", "") if isinstance(c, dict) else str(c)
+            excerpt = c.get("excerpt", "") if isinstance(c, dict) else ""
+            entries.append([bi, c, len(excerpt), _note_text(name, excerpt)])
+
+    n = len(entries)
+    if n < 2:
+        return chunk
+
+    parent = list(range(n))
+    def find(i: int) -> int:
+        while parent[i] != i:
+            parent[i] = parent[parent[i]]
+            i = parent[i]
+        return i
+    for i in range(n):
+        for j in range(i + 1, n):
+            if is_near_dup(entries[i][3], entries[j][3]):
+                parent[find(i)] = find(j)
+
+    groups: dict[int, list[int]] = {}
+    for i in range(n):
+        groups.setdefault(find(i), []).append(i)
+    if all(len(g) == 1 for g in groups.values()):
+        return chunk
+
+    keep: set[int] = set()
+    for members in groups.values():
+        keep.add(max(members, key=lambda k: entries[k][2]))  # richest excerpt survives
+
+    new_batches: list[dict] = []
+    for bi, batch in enumerate(batches):
+        kept = [entries[i][1] for i in range(n) if entries[i][0] == bi and i in keep]
+        if kept:
+            new_batches.append({"inbox_file": batch.get("inbox_file", ""), "concepts": kept})
+    return {"schema_version": chunk.get("schema_version", 1), "batches": new_batches}
+
+
 def _run_embedder_free_dedup_leg(fsm: "InjectorFSM", idx: int, chunk: dict) -> None:
     """STABLE dedup leg: MinHash near-dup pass for when the embedder is unavailable.
 
@@ -309,6 +368,28 @@ def handle_collision(fsm: "InjectorFSM") -> None:
                     vec_by_text[_t] = _ev[0]
                 except Exception as _embed_err:
                     logger.debug("COLLISION: embed failed for '%s': %s", _t, _embed_err)
+
+    # Fix #4: collapse intra-chunk sibling near-dups before routing. COLLISION only
+    # compares against committed notes, so twins distilled from the SAME chunk would
+    # both be written. Reuse the embeddings just computed (cosine ≥ τ_high) — no extra
+    # calls. Drop-only, so survivors keep the vectors already in vec_by_text.
+    # (Cold/empty-store path has no vectors here; a MinHash predicate could feed
+    # _collapse_near_dup_concepts there — left as a known small gap.)
+    import numpy as _np
+
+    def _emb_near_dup(ta: str, tb: str) -> bool:
+        va, vb = vec_by_text.get(ta), vec_by_text.get(tb)
+        if va is None or vb is None:
+            return False
+        va, vb = _np.asarray(va, dtype=float), _np.asarray(vb, dtype=float)
+        denom = (va @ va) ** 0.5 * (vb @ vb) ** 0.5
+        return bool(denom) and float(va @ vb) / denom >= τ_high
+
+    _before = sum(len(b.get("concepts", [])) for b in chunk.get("batches", []))
+    chunk = fsm._chunks[idx] = _collapse_near_dup_concepts(chunk, is_near_dup=_emb_near_dup)
+    _after = sum(len(b.get("concepts", [])) for b in chunk.get("batches", []))
+    if _after < _before:
+        logger.info("COLLISION: collapsed %d intra-chunk sibling near-dup concept(s)", _before - _after)
 
     for batch in chunk.get("batches", []):
         inbox_file = batch.get("inbox_file", fsm.inbox_file)
