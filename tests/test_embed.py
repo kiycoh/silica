@@ -206,18 +206,19 @@ def test_build_index_embeds_new_notes(tmp_path):
 def test_build_index_skips_existing(tmp_path):
     embedder = _make_embedder()
     idx = tmp_path / "idx.json"
-    store = EmbedStore(idx)
-    store.upsert("Concepts/A", "A", [1.0, 0.0])
-    store.save()
+    # Seed A through build_index so it carries a real content signature (an
+    # unchanged note is one whose stored hash still matches its text).
+    build_index(embedder, [("Concepts/A", "A", "body a")], store=EmbedStore(idx))
+    embedder.embed.reset_mock()
 
     notes = [
-        ("Concepts/A", "A", "body a"),  # already indexed
+        ("Concepts/A", "A", "body a"),  # already indexed, unchanged
         ("Concepts/B", "B", "body b"),  # new
     ]
     store2 = build_index(embedder, notes, store=EmbedStore(idx))
     assert store2.has("Concepts/A")
     assert store2.has("Concepts/B")
-    # Only B should have been sent to the embedder
+    # Only B should have been sent to the embedder — A is unchanged.
     embedded_texts = [
         t for call in embedder.embed.call_args_list for t in call.args[0]
     ]
@@ -234,6 +235,34 @@ def test_build_index_force_reembeds_all(tmp_path):
     notes = [("Concepts/A", "A", "body a")]
     build_index(embedder, notes, store=EmbedStore(idx), force=True)
     assert embedder.embed.call_count == 1
+
+
+# ---------------------------------------------------------------------------
+# build_index — content-change detection (incremental refresh re-embeds edits)
+# ---------------------------------------------------------------------------
+
+def test_build_index_reembeds_changed_body(tmp_path):
+    """A note whose embedded text changed must be re-embedded incrementally."""
+    embedder = _make_embedder()
+    idx = tmp_path / "idx.json"
+    build_index(embedder, [("Concepts/A", "A", "body v1")], store=EmbedStore(idx))
+    n = embedder.embed.call_count
+
+    build_index(embedder, [("Concepts/A", "A", "body v2 — edited")], store=EmbedStore(idx))
+    assert embedder.embed.call_count == n + 1  # changed → re-embedded, not skipped
+
+
+def test_build_index_skips_unchanged_body_across_reload(tmp_path):
+    """An unchanged note must be skipped even by a fresh store loaded from disk
+    — the content signature has to survive serialize/deserialize."""
+    embedder = _make_embedder()
+    idx = tmp_path / "idx.json"
+    build_index(embedder, [("Concepts/A", "A", "same body")], store=EmbedStore(idx))
+    n = embedder.embed.call_count
+
+    # Fresh EmbedStore(idx) reloads from disk; identical text → no re-embed.
+    build_index(embedder, [("Concepts/A", "A", "same body")], store=EmbedStore(idx))
+    assert embedder.embed.call_count == n
 
 
 # ---------------------------------------------------------------------------
@@ -320,6 +349,18 @@ def test_refresh_note_updates_vec(tmp_path):
     store2 = EmbedStore(idx)
     # The vector should have been updated (not the old one)
     assert store2.get_vec("Concepts/A") != [0.0, 1.0]
+
+
+def test_refresh_note_then_build_index_skips_it(tmp_path):
+    """A note freshened via refresh_note carries a signature, so a later
+    incremental build_index with the same body does not re-embed it."""
+    embedder = _make_embedder()
+    idx = tmp_path / "idx.json"
+    refresh_note(embedder, "Concepts/A", "A", "the body", store=EmbedStore(idx))
+    n = embedder.embed.call_count
+
+    build_index(embedder, [("Concepts/A", "A", "the body")], store=EmbedStore(idx))
+    assert embedder.embed.call_count == n  # unchanged since refresh → skipped
 
 
 # ---------------------------------------------------------------------------

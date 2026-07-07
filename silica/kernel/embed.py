@@ -131,6 +131,9 @@ def _serialize_notes(notes: dict[str, dict[str, Any]]) -> bytes:
             tva = np.asarray(tv, dtype=np.float32).ravel()
             tvecs.append(tva)
             m["tlen"] = int(tva.size)
+        ch = entry.get("content_hash")
+        if ch:
+            m["chash"] = ch
         meta["notes"][path] = m
 
     flat = np.concatenate(vecs) if vecs else np.zeros(0, dtype=np.float32)
@@ -167,6 +170,9 @@ def _deserialize_notes(raw: bytes) -> dict[str, dict[str, Any]]:
             tlen = int(tlen)
             entry["title_vec"] = tflat[toff:toff + tlen].tolist()
             toff += tlen
+        ch = m.get("chash")
+        if ch:
+            entry["content_hash"] = ch
         notes[path] = entry
     return notes
 
@@ -246,12 +252,17 @@ class EmbedStore:
     # ------------------------------------------------------------------
 
     def upsert(self, path: str, name: str, vec: list[float],
-                *, title_vec: list[float] | None = None) -> None:
+                *, title_vec: list[float] | None = None,
+                content_hash: str | None = None) -> None:
         """Insert or replace a note's embedding.
 
         `title_vec` is the secondary title-only vector used for the dedup
         title-similarity gate. Omitting it preserves any existing title_vec
         stored for that path (backward-compatible with old index entries).
+
+        `content_hash` is the signature of the embedded text (see
+        `_embed_signature`); build_index uses it to skip unchanged notes and
+        re-embed edited ones. Omitting it preserves any existing hash.
         """
         existing = self._notes.get(path, {})
         entry: dict[str, Any] = {"vec": vec, "name": name, "ts": time.time()}
@@ -259,6 +270,9 @@ class EmbedStore:
         resolved_tv = title_vec if title_vec is not None else existing.get("title_vec")
         if resolved_tv is not None:
             entry["title_vec"] = resolved_tv
+        resolved_ch = content_hash if content_hash is not None else existing.get("content_hash")
+        if resolved_ch is not None:
+            entry["content_hash"] = resolved_ch
         self._notes[path] = entry
         self._invalidate_matrix()
 
@@ -282,6 +296,15 @@ class EmbedStore:
         """
         entry = self._notes.get(path)
         return entry.get("title_vec") if entry else None
+
+    def get_content_hash(self, path: str) -> str | None:
+        """Return the embedded-text signature, or None for un-hashed entries.
+
+        None for notes indexed before content-change detection existed; such
+        entries are treated as stale (re-embedded once to backfill the hash).
+        """
+        entry = self._notes.get(path)
+        return entry.get("content_hash") if entry else None
 
     def has(self, path: str) -> bool:
         return path in self._notes
@@ -417,6 +440,19 @@ def _note_title_text(title: str, *, folder: str = "") -> str:
     return f"{prefix}{title}"
 
 
+def _embed_signature(name: str, body: str, *, folder: str = "") -> str:
+    """Stable hash of the exact text that determines a note's embedding.
+
+    Signed over the truncated/image-stripped `_note_text` plus `_note_title_text`
+    — not the raw body — so edits past the truncation point or inside stripped
+    media syntax don't trigger a needless re-embed. build_index compares this
+    against the stored hash to detect content changes on incremental refresh.
+    """
+    import hashlib
+    basis = _note_text(name, body, folder=folder) + "\x00" + _note_title_text(name, folder=folder)
+    return hashlib.sha1(basis.encode("utf-8", "ignore")).hexdigest()
+
+
 def build_index(
     embedder: Any,
     notes: list[tuple[str, str, str]],
@@ -450,11 +486,16 @@ def build_index(
     if store is None:
         store = get_store()
 
-    to_embed = [
-        (path, name, body)
-        for path, name, body in notes
-        if force or not store.has(path)
-    ]
+    def _stale(path: str, name: str, body: str) -> bool:
+        # Re-embed when new, forced, or the embedded text changed since last
+        # indexing (hand-edits, bridge writes, organize). A present note with no
+        # stored hash (pre-feature index) is treated as stale → backfilled once.
+        if force or not store.has(path):
+            return True
+        folder = path.rsplit("/", 1)[0] if "/" in path else ""
+        return store.get_content_hash(path) != _embed_signature(name, body, folder=folder)
+
+    to_embed = [(path, name, body) for path, name, body in notes if _stale(path, name, body)]
 
     for i in range(0, len(to_embed), batch_size):
         batch = to_embed[i : i + batch_size]
@@ -469,8 +510,9 @@ def build_index(
             raise RuntimeError(f"Embedding call failed on batch {i//batch_size}: {exc}") from exc
         full_vecs  = vecs[0::2]  # even positions
         title_vecs = vecs[1::2]  # odd positions
-        for (path, name, _), fv, tv in zip(batch, full_vecs, title_vecs):
-            store.upsert(path, name, fv, title_vec=tv)
+        for (path, name, body), fv, tv, f in zip(batch, full_vecs, title_vecs, folders):
+            store.upsert(path, name, fv, title_vec=tv,
+                         content_hash=_embed_signature(name, body, folder=f))
 
     if save:
         store.save()
@@ -500,7 +542,8 @@ def refresh_note(
     full_text  = _note_text(name, body, folder=_folder)
     title_text = _note_title_text(name, folder=_folder)
     vecs = embedder.embed([full_text, title_text])
-    store.upsert(path, name, vecs[0], title_vec=vecs[1])
+    store.upsert(path, name, vecs[0], title_vec=vecs[1],
+                 content_hash=_embed_signature(name, body, folder=_folder))
     if save:
         store.save()
     return store
