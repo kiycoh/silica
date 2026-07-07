@@ -12,11 +12,13 @@ import logging
 import threading
 import time
 import uuid
+from collections.abc import AsyncIterator
 from pathlib import Path
 
 from fastapi import FastAPI, File, HTTPException, UploadFile
 from fastapi.responses import FileResponse, HTMLResponse, JSONResponse, StreamingResponse
 from fastapi.staticfiles import StaticFiles
+from starlette.background import BackgroundTask
 
 from silica.agent.loop import run_agent
 from silica.config import CONFIG
@@ -30,6 +32,7 @@ STATIC_DIR = Path(__file__).parent / "static"
 # --- module-level session state (spec: single session) -----------------------
 messages: list[dict] = []
 current_cancel: threading.Event | None = None  # cancel token of the in-flight turn
+current_task: asyncio.Task | None = None  # in-flight worker; owns the busy-gate release
 _collapsed: set[int] = set()  # message indices elided by compaction, across turns
 _busy = False  # one turn at a time; a second /chat is refused with 409
 current_session_id: str | None = None  # file backing the live conversation, if saved
@@ -45,14 +48,16 @@ _WEB_EXPANSIONS = {
 
 
 def _reset_session() -> None:
-    from silica.cli import _fresh_messages
+    from silica.cli import _fresh_messages, _update_context_tokens
 
-    global current_cancel, _busy, current_session_id
+    global current_cancel, current_task, _busy, current_session_id
     messages[:] = _fresh_messages()
     _collapsed.clear()
     current_cancel = None
+    current_task = None
     _busy = False
     current_session_id = None  # next turn opens a new file
+    _update_context_tokens(messages)
 
 
 def _session_title(msgs: list[dict]) -> str:
@@ -217,60 +222,119 @@ def _sse(data: dict) -> str:
     return f"data: {json.dumps(data)}\n\n"
 
 
-def _turn_response(text: str) -> StreamingResponse:
-    """One agent turn as an SSE stream. Shared by /chat and /ingest."""
+def _begin_turn() -> bool:
+    """Claim the single-turn slot. Sync with no `await` between the test and the
+    set, so two racing POSTs can't both pass. Returns False if one's in flight."""
+    global _busy
+    if _busy:
+        return False
+    _busy = True
+    return True
+
+
+def _end_turn() -> None:
+    """Release the turn slot. Idempotent (a completed turn and its worker's
+    done-callback may both call it)."""
+    global _busy, current_cancel, current_task
+    _busy = False
+    current_cancel = None
+    current_task = None
+
+
+def _sweep_if_orphaned() -> None:
+    """Free a gate claimed for a turn whose `run_turn` never ran — the client
+    dropped between POST and the SSE body's first `__anext__`, so nothing else
+    releases it. Runs after the response closes; a no-op once a worker exists."""
+    if _busy and (current_task is None or current_task.done()):
+        _end_turn()
+
+
+async def run_turn(text: str) -> AsyncIterator[dict]:
+    """One agent turn as a stream of transport-neutral wire dicts.
+
+    Yields `event_to_json(...)` dicts as the agent streams, then exactly one
+    terminal dict: `{"type": "done", ...}` or `{"type": "error", ...}`. Owns the
+    whole turn lifecycle (session append, sync→async queue bridge, cancel token,
+    context compaction, save). Both `--gui` (SSE) and `connect` (WS) consume this
+    — the framing is the transport's job, not this core's.
+
+    Gate lifecycle: the slot is freed on normal end/error at once; on abandonment
+    (the consumer stops iterating — a dropped SSE/WS client) the worker keeps
+    running, so we signal cancel and defer the release to the worker's exit, so
+    no second turn overlaps a zombie still mutating `messages`.
+    """
     from silica.cli import _compact_context, _update_context_tokens
 
-    global _busy
-    _busy = True
+    global _busy, current_cancel, current_task, _collapsed
+    if not _busy:  # direct callers (tests, future WS) that didn't pre-claim
+        _busy = True
+    q: asyncio.Queue = asyncio.Queue()
+    loop = asyncio.get_running_loop()
+    current_cancel = threading.Event()  # module-level so /stop can see it
+    task: asyncio.Task | None = None
+
+    def cb(ev):  # runs in the agent/LLM worker thread
+        data = event_to_json(ev)
+        if data is not None:
+            loop.call_soon_threadsafe(q.put_nowait, data)
+
+    try:
+        agent_msg = _agent_message_for(text)
+        if agent_msg is None:
+            yield {"type": "error", "error": f"'{text}' not available in this session"}
+            return
+
+        msg = {"role": "user", "content": agent_msg}
+        if text.startswith("/"):
+            msg["origin"] = "cli"
+        messages.append(msg)
+
+        sentinel = object()
+        task = asyncio.create_task(
+            asyncio.to_thread(run_agent, messages, CONFIG.model, cb, cancel_token=current_cancel)
+        )
+        current_task = task
+        task.add_done_callback(lambda t: q.put_nowait(sentinel))
+
+        while True:
+            item = await q.get()
+            if item is sentinel:
+                break
+            yield item
+
+        answer = await task  # re-raises if run_agent failed
+        _update_context_tokens(messages)
+        _collapsed = _compact_context(messages, _collapsed)
+        yield {
+            "type": "done",
+            "answer": answer,
+            "html": _linkify(answer, note_resolver()),
+            "context_tokens": CONFIG.context_tokens,
+            "max_context_tokens": CONFIG.max_context_tokens,
+        }
+    except Exception as exc:  # never leave the UI stuck on the spinner
+        logger.exception("web turn failed")
+        yield {"type": "error", "error": str(exc)}
+    finally:
+        _save_session()  # persist even on error so the user's turn isn't lost
+        if task is not None and not task.done():
+            current_cancel.set()  # abandonment: stop the zombie...
+            task.add_done_callback(lambda t: _end_turn())  # ...free the gate when it exits
+        else:
+            _end_turn()  # normal / error / early-return: free now
+
+
+def _turn_response(text: str) -> StreamingResponse:
+    """One agent turn as an SSE stream. Caller must claim the slot via
+    `_begin_turn()` first; `_sweep_if_orphaned` frees it if the body never runs."""
 
     async def gen():
-        global _busy, current_cancel, _collapsed
-        q: asyncio.Queue = asyncio.Queue()
-        loop = asyncio.get_running_loop()
-        current_cancel = threading.Event()  # module-level so /stop can see it
+        async for item in run_turn(text):
+            yield _sse(item)
 
-        def cb(ev):  # runs in the agent/LLM worker thread
-            data = event_to_json(ev)
-            if data is not None:
-                loop.call_soon_threadsafe(q.put_nowait, data)
-
-        try:
-            agent_msg = _agent_message_for(text)
-            if agent_msg is None:
-                yield _sse({"type": "error", "error": f"'{text}' not available in the GUI v1"})
-                return
-
-            msg = {"role": "user", "content": agent_msg}
-            if text.startswith("/"):
-                msg["origin"] = "cli"
-            messages.append(msg)
-
-            sentinel = object()
-            task = asyncio.create_task(
-                asyncio.to_thread(run_agent, messages, CONFIG.model, cb, cancel_token=current_cancel)
-            )
-            task.add_done_callback(lambda t: q.put_nowait(sentinel))
-
-            while True:
-                item = await q.get()
-                if item is sentinel:
-                    break
-                yield _sse(item)
-
-            answer = await task  # re-raises if run_agent failed
-            _update_context_tokens(messages)
-            _collapsed = _compact_context(messages, _collapsed)
-            yield _sse({"type": "done", "answer": answer, "html": _linkify(answer, note_resolver())})
-        except Exception as exc:  # never leave the UI stuck on the spinner
-            logger.exception("web turn failed")
-            yield _sse({"type": "error", "error": str(exc)})
-        finally:
-            _save_session()  # persist even on error so the user's turn isn't lost
-            _busy = False
-            current_cancel = None
-
-    return StreamingResponse(gen(), media_type="text/event-stream")
+    return StreamingResponse(
+        gen(), media_type="text/event-stream", background=BackgroundTask(_sweep_if_orphaned)
+    )
 
 
 app = FastAPI()
@@ -278,19 +342,23 @@ app = FastAPI()
 
 @app.post("/chat")
 async def chat(payload: dict):
-    if _busy:
+    if not _begin_turn():
         raise HTTPException(status_code=409, detail="a turn is already in progress")
     return _turn_response(payload.get("text", ""))
 
 
 @app.post("/ingest")
 async def ingest(file: UploadFile = File(...)):
-    if _busy:
+    if not _begin_turn():
         raise HTTPException(status_code=409, detail="a turn is already in progress")
-    inbox = Path(CONFIG.vault_path or ".") / "Inbox"
-    inbox.mkdir(parents=True, exist_ok=True)
-    dest = inbox / Path(file.filename or "dropped").name
-    dest.write_bytes(await file.read())
+    try:
+        inbox = Path(CONFIG.vault_path or ".") / "Inbox"
+        inbox.mkdir(parents=True, exist_ok=True)
+        dest = inbox / Path(file.filename or "dropped").name
+        dest.write_bytes(await file.read())
+    except Exception:
+        _end_turn()  # release the slot the upload never got to use
+        raise
     # ponytail: a dropped bare .md needs a --target; v1 surfaces that error in
     # chat and the user re-runs. PDFs/code (the happy path) stage on their own.
     return _turn_response(f'/ingest "{dest}"')
@@ -348,6 +416,33 @@ def mindmap(note: str = ""):
         return HTMLResponse(f"<p style='font-family:monospace'>map unavailable: {exc}</p>")
 
 
+@app.get("/find")
+def find(q: str = "", k: int = 5):
+    """Direct semantic-search panel: calls the tool straight, same pattern as /graph and /map."""
+    from silica.tools import TOOLS
+
+    q = q.strip()
+    if not q:
+        return HTMLResponse("<p style='font-family:monospace;color:#8a93a3'>usage: /find &lt;query&gt; [--k=N]</p>")
+    try:
+        parsed = json.loads(TOOLS["silica_semantic_search"].run(query=q, k=k))
+    except Exception as exc:
+        return HTMLResponse(f"<p style='font-family:monospace'>find unavailable: {exc}</p>")
+    if "error" in parsed:
+        return HTMLResponse(f"<p style='font-family:monospace;color:#8a93a3'>{_html.escape(parsed['error'])}</p>")
+    results = parsed.get("results", [])
+    if not results:
+        return HTMLResponse(f"<p style='font-family:monospace;color:#8a93a3'>no results for '{_html.escape(q)}'.</p>")
+    rows = []
+    for r in results:
+        p = r.get("path") or r.get("name") or "?"
+        rows.append(
+            f'<div class="find-result">{_anchor(p, _clean_name(p))}'
+            f'<span class="find-score">{r.get("score", 0.0):.3f}</span></div>'
+        )
+    return HTMLResponse("".join(rows))
+
+
 @app.get("/note")
 def note(path: str = ""):
     """Read-only rendered note for the drawer. Graceful on miss (never 500).
@@ -377,8 +472,12 @@ def get_messages():
         for m in messages
         if m.get("role") in ("user", "assistant") and m.get("content")
     ]
-    # Vault label rides a header so the body stays a plain list (client re-render).
-    return JSONResponse(data, headers={"X-Silica-Vault": CONFIG.vault_path or ""})
+    # Vault label + context usage ride headers so the body stays a plain list.
+    return JSONResponse(data, headers={
+        "X-Silica-Vault": CONFIG.vault_path or "",
+        "X-Silica-Context-Tokens": str(CONFIG.context_tokens),
+        "X-Silica-Max-Context-Tokens": str(CONFIG.max_context_tokens),
+    })
 
 
 @app.get("/sessions")

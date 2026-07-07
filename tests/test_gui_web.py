@@ -5,6 +5,7 @@ messages). No browser e2e in v1. Skipped whole if fastapi isn't installed.
 """
 from __future__ import annotations
 
+import asyncio
 import json
 from pathlib import Path
 
@@ -95,6 +96,104 @@ def test_chat_streams_events_and_appends_the_user_message(client, monkeypatch):
     assert types[-1] == "done"
     assert events[-1]["answer"] == "Hello"
     assert any(m["role"] == "user" and m["content"] == "hi there" for m in server.messages)
+
+
+def test_run_turn_yields_raw_dicts_not_sse_frames(client, monkeypatch):
+    """The transport-neutral core: raw wire dicts, no `data: ` framing, ending
+    in one `done` dict. This is what both `--gui` (SSE) and `connect` (WS) wrap."""
+    tc, server = client
+
+    def fake_run_agent(messages, model, tool_progress_callback=None, cancel_token=None, **kw):
+        tool_progress_callback(LLMStreamEvent("text", "Hi", 0))
+        messages.append({"role": "assistant", "content": "Hi"})
+        return "Hi"
+
+    monkeypatch.setattr(server, "run_agent", fake_run_agent)
+
+    async def collect():
+        return [item async for item in server.run_turn("hello")]
+
+    items = asyncio.run(collect())
+    assert all(isinstance(i, dict) for i in items)  # dicts, not SSE strings
+    assert any(i["type"] == "delta" and i["text"] == "Hi" for i in items[:-1])
+    assert items[-1]["type"] == "done"
+    assert items[-1]["answer"] == "Hi"
+    assert any(m["role"] == "user" and m["content"] == "hello" for m in server.messages)
+    assert server._busy is False  # gate freed on normal completion
+
+
+def test_run_turn_error_path_yields_one_error_and_frees_the_gate(client, monkeypatch):
+    """A worker crash ends the stream with exactly one `error` dict, and the
+    busy-gate is freed (never leave the UI stuck, never wedge the next turn)."""
+    tc, server = client
+
+    def boom(messages, model, tool_progress_callback=None, cancel_token=None, **kw):
+        raise RuntimeError("kaboom")
+
+    monkeypatch.setattr(server, "run_agent", boom)
+
+    async def collect():
+        return [item async for item in server.run_turn("hi")]
+
+    items = asyncio.run(collect())
+    assert sum(1 for i in items if i["type"] == "error") == 1
+    assert items[-1]["type"] == "error"
+    assert "kaboom" in items[-1]["error"]
+    assert server._busy is False
+
+
+def test_run_turn_abandonment_holds_gate_until_worker_exits(client, monkeypatch):
+    """Consumer stops iterating mid-stream (dropped SSE/WS client): the worker
+    is a zombie until it observes the cancel. The gate MUST stay closed until it
+    actually exits, or a second turn mutates `messages` concurrently."""
+    import threading
+    import time
+
+    tc, server = client
+    started = threading.Event()
+
+    def slow(messages, model, tool_progress_callback=None, cancel_token=None, **kw):
+        tool_progress_callback(LLMStreamEvent("text", "partial", 0))
+        started.set()
+        deadline = time.monotonic() + 3.0  # bounded so a broken fix FAILS, never hangs
+        while (cancel_token is None or not cancel_token.is_set()) and time.monotonic() < deadline:
+            time.sleep(0.005)  # spin until cancelled — the abandonment signal
+        messages.append({"role": "assistant", "content": "partial"})
+        return "partial"
+
+    monkeypatch.setattr(server, "run_agent", slow)
+
+    async def scenario():
+        gen = server.run_turn("hi")
+        first = await gen.__anext__()  # one delta, then abandon
+        assert first["type"] == "delta"
+        await asyncio.to_thread(started.wait, 1.0)
+        await gen.aclose()  # GeneratorExit into run_turn
+
+        # zombie still alive → gate closed, cancel signalled
+        assert server._busy is True
+        assert server.current_cancel is not None and server.current_cancel.is_set()
+
+        # once the worker sees the cancel and exits, its done-callback frees the gate
+        for _ in range(400):
+            if not server._busy:
+                break
+            await asyncio.sleep(0.005)
+        assert server._busy is False
+
+    asyncio.run(scenario())
+
+
+def test_sweep_frees_the_gate_when_no_worker_ever_started(client):
+    """Never-iterated generator (client drops between POST and first __anext__):
+    run_turn never runs, so the SSE background sweep frees the eagerly-claimed
+    gate. Guards against a permanently 409-locked server."""
+    tc, server = client
+    assert server._begin_turn() is True
+    assert server._busy is True
+    server.current_task = None  # no worker was created
+    server._sweep_if_orphaned()
+    assert server._busy is False
 
 
 def test_ingest_saves_to_inbox_and_triggers_the_ingest_command(client, monkeypatch):
@@ -303,6 +402,62 @@ def test_note_endpoint_rejects_path_outside_vault(client, tmp_vault):
     r = tc.get("/note", params={"path": "../../etc/passwd"})
     assert r.status_code == 200
     assert "note-link" not in r.json()["html"]  # nothing read, graceful message
+
+
+# ---------------------------------------------------------------------------
+# GET /find — direct semantic-search panel, bypasses the agent.
+# ---------------------------------------------------------------------------
+
+def test_find_endpoint_requires_a_query(client):
+    tc, _server = client
+    r = tc.get("/find", params={"q": ""})
+    assert r.status_code == 200
+    assert "usage: /find" in r.text
+
+
+def test_find_endpoint_reports_empty_index_gracefully(client, tmp_path, monkeypatch):
+    tc, _server = client
+    monkeypatch.setattr("silica.kernel.embed._index_path", lambda: tmp_path / "empty.json")
+    r = tc.get("/find", params={"q": "gears"})
+    assert r.status_code == 200
+    # Both legs empty (embed + co-occurrence) → the facade reports no index.
+    assert "No index available" in r.text
+
+
+def test_find_endpoint_renders_results_as_note_links(client, tmp_path, monkeypatch):
+    from unittest.mock import MagicMock, patch
+    from silica.kernel.embed import EmbedStore
+
+    tc, _server = client
+    idx = tmp_path / "embeddings.json"
+    monkeypatch.setattr("silica.kernel.embed._index_path", lambda: idx)
+    store = EmbedStore(idx)
+    store.upsert("Concepts/A", "A", [1.0, 0.0])
+    store.save()
+
+    mock_embedder = MagicMock()
+    mock_embedder.embed.return_value = [[1.0, 0.0]]
+    with patch("silica.agent.providers.get_embedder", return_value=mock_embedder):
+        r = tc.get("/find", params={"q": "gears", "k": 1})
+
+    assert r.status_code == 200
+    assert 'data-path="Concepts/A"' in r.text
+    assert "find-score" in r.text
+
+
+# ---------------------------------------------------------------------------
+# GET /messages — context-token usage rides response headers.
+# ---------------------------------------------------------------------------
+
+def test_messages_endpoint_reports_context_token_headers(client, monkeypatch):
+    tc, server = client
+    from silica.config import CONFIG
+
+    monkeypatch.setattr(CONFIG, "context_tokens", 42)
+    monkeypatch.setattr(CONFIG, "max_context_tokens", 1000)
+    r = tc.get("/messages")
+    assert r.headers["X-Silica-Context-Tokens"] == "42"
+    assert r.headers["X-Silica-Max-Context-Tokens"] == "1000"
 
 
 def test_chat_done_html_linkifies_a_cited_note(client, tmp_vault, monkeypatch):

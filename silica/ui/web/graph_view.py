@@ -379,6 +379,7 @@ function filterCommunity(cid) {{
     : document.querySelector(`[data-community="${{cid}}"]`);
   if (el) el.classList.add("active");
   applyFilters();
+  if (cid !== -2) Graph.zoomToFit(400, 50, n => n.group === cid); // isolate: fit camera to the filtered set
 }}
 
 // --- Communities legend: sort by size, toggling ascending <-> descending ----
@@ -478,7 +479,7 @@ function onSearchKey(e) {{
 // default to 0 and the camera simply recentres — harmless.
 function focusNode(node) {{
   const r = Math.hypot(node.x || 0, node.y || 0, node.z || 0) || 1;
-  const k = 1 + 90 / r;
+  const k = 1 + 90 * 3 / r;
   Graph.cameraPosition(
     {{ x: (node.x || 0) * k, y: (node.y || 0) * k, z: (node.z || 0) * k }},
     node, 900

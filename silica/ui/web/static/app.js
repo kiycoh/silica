@@ -22,6 +22,15 @@ function escapeHtml(s) {
   return d.innerHTML;
 }
 
+function fmtTokens(n) {
+  n = Number(n) || 0;
+  return n >= 1000 ? (n / 1000).toFixed(1) + "k" : String(n);
+}
+function setCtxTokens(used, max) {
+  max = Number(max) || 0;
+  $("#ctx-tokens").textContent = max ? `${fmtTokens(used)}/${fmtTokens(max)} tok` : "";
+}
+
 async function runTurn(fetchPromise) {
   if (streaming) return;
   streaming = true;
@@ -101,6 +110,7 @@ async function runTurn(fetchPromise) {
     } else if (ev.type === "done") {
       thinking.open = false;
       text.innerHTML = ev.html || escapeHtml(ev.answer || "");
+      setCtxTokens(ev.context_tokens, ev.max_context_tokens);
     } else if (ev.type === "error") {
       text.className = "tool error";
       text.textContent = "error: " + ev.error;
@@ -112,11 +122,35 @@ async function runTurn(fetchPromise) {
 function send(text) {
   if (!text.trim() || streaming) return;
   bubble("user").textContent = text;
+  const find = text.trim().match(/^\/find\s*(.*)$/);
+  if (find) { runFind(find[1]); return; }
   runTurn(fetch("/chat", {
     method: "POST",
     headers: { "Content-Type": "application/json" },
     body: JSON.stringify({ text }),
   }));
+}
+
+// /find bypasses the agent entirely — same "direct tool, no LLM" pattern as
+// the /graph and /map tabs, just rendered inline as a result bubble.
+async function runFind(rest) {
+  const body = bubble("silica");
+  let k = 5;
+  const tokens = [];
+  for (const part of rest.trim().split(/\s+/)) {
+    const m = part.match(/^--k=(\d+)$/);
+    if (m) k = parseInt(m[1], 10);
+    else if (part) tokens.push(part);
+  }
+  const query = tokens.join(" ");
+  if (!query) { body.textContent = "usage: /find <query> [--k=N]"; return; }
+  body.textContent = "searching…";
+  try {
+    const r = await fetch("/find?q=" + encodeURIComponent(query) + "&k=" + k);
+    body.innerHTML = await r.text();
+  } catch (e) {
+    body.textContent = "error: " + e;
+  }
 }
 
 // --- composer ---------------------------------------------------------------
@@ -141,7 +175,9 @@ input.addEventListener("keydown", (e) => {
 });
 $("#commands").addEventListener("click", (e) => {
   const cmd = e.target.dataset.cmd;
-  if (cmd) send(cmd);
+  if (!cmd) return;
+  if (cmd === "/find") { input.value = "/find "; input.focus(); return; } // needs a query, don't send bare
+  send(cmd);
 });
 stopBtn.addEventListener("click", () => fetch("/stop", { method: "POST" }));
 $("#new-chat").addEventListener("click", async () => {
@@ -159,6 +195,14 @@ $("#sidebar-toggle").addEventListener("click", () => {
   localStorage.setItem("sidebar-collapsed", collapsed ? "1" : "0");
 });
 
+function applySessionFilter() {
+  const q = $("#session-filter").value.trim().toLowerCase();
+  $("#sessions").querySelectorAll(".session").forEach((el) => {
+    el.hidden = !!q && !el.textContent.toLowerCase().includes(q);
+  });
+}
+$("#session-filter").addEventListener("input", applySessionFilter);
+
 async function loadSessions() {
   try {
     const r = await fetch("/sessions");
@@ -173,6 +217,7 @@ async function loadSessions() {
       el.addEventListener("click", () => openSession(s.id));
       box.appendChild(el);
     }
+    applySessionFilter();
   } catch (_) {}
 }
 
@@ -258,6 +303,8 @@ async function openNote(path) {
   if (!path) return;
   lastNotePath = path;
   focusGraphNode(path);
+  $("#note-mini-map").open = false; // reset: reload lazily if reopened for the new note
+  $("#note-mini-map-frame").src = "";
   try {
     const r = await fetch("/note?path=" + encodeURIComponent(path));
     const data = await r.json();
@@ -274,6 +321,23 @@ function closeNote() {
   lastNotePath = null;
   focusGraphNode(null);
 }
+
+// Mini-map: load only when expanded (native <details>), so a plain note read
+// never pays for a /map render.
+$("#note-mini-map").addEventListener("toggle", function () {
+  if (this.open && lastNotePath) {
+    $("#note-mini-map-frame").src = "/map?note=" + encodeURIComponent(lastNotePath);
+  }
+});
+
+// "map" button in the drawer header — jump to the full map tab, rooted here.
+$("#note-map").addEventListener("click", () => {
+  if (!lastNotePath) return;
+  document.querySelector('.tab[data-tab="map"]').click();
+  $("#map-note").value = lastNotePath;
+  $("#map-loading").hidden = false;
+  $("#map-frame").src = "/map?note=" + encodeURIComponent(lastNotePath) + "&t=" + Date.now();
+});
 
 // --- note panel resize (drag left edge, clamped) ----------------------------
 const NOTE_MIN_W = 280, NOTE_MAX_W = 800;
@@ -318,6 +382,7 @@ async function loadVault() {
   try {
     const r = await fetch("/messages");
     $("#vault").textContent = r.headers.get("X-Silica-Vault") || "";
+    setCtxTokens(r.headers.get("X-Silica-Context-Tokens"), r.headers.get("X-Silica-Max-Context-Tokens"));
     const msgs = await r.json();
     log.innerHTML = "";
     for (const m of msgs) {

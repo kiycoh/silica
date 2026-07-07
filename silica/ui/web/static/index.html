@@ -13,6 +13,7 @@
     <button id="sidebar-toggle" class="ghost" title="toggle history">☰</button>
     <div class="brand">silica</div>
     <div class="vault" id="vault">—</div>
+    <div class="ctx-tokens" id="ctx-tokens" title="context window usage"></div>
     <div class="spacer"></div>
     <nav class="tabs">
       <button class="tab active" data-tab="chat">chat</button>
@@ -26,6 +27,7 @@
   <main>
     <aside id="sidebar">
       <div class="sidebar-head">history</div>
+      <input id="session-filter" type="text" placeholder="filter…" autocomplete="off" />
       <div id="sessions"></div>
     </aside>
     <section id="view-chat" class="view active">
@@ -77,6 +79,7 @@
         <button data-cmd="/organize">/organize</button>
         <button data-cmd="/cooccur">/cooccur</button>
         <button data-cmd="/embed">/embed</button>
+        <button data-cmd="/find">/find</button>
       </div>
       <form id="composer">
         <textarea id="input" rows="1" placeholder="message silica…  (⏎ send, ⇧⏎ newline)"></textarea>
@@ -109,8 +112,13 @@
     <div id="note-resize" title="drag to resize"></div>
     <header>
       <span id="note-title"></span>
+      <button id="note-map" class="ghost" title="open in map view">map</button>
       <button id="note-close" class="ghost" title="close">✕</button>
     </header>
+    <details id="note-mini-map">
+      <summary>map preview</summary>
+      <iframe id="note-mini-map-frame" title="note map preview"></iframe>
+    </details>
     <div id="note-body"></div>
   </aside>
 
