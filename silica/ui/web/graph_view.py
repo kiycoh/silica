@@ -116,6 +116,8 @@ def render_html(
         {c.id: c.label for c in communities}, ensure_ascii=False
     ).replace("</", "<\\/")
 
+    tree_html = render_tree(nodes)
+
     return f"""<!DOCTYPE html>
 <html lang="en">
 <head>
@@ -186,6 +188,14 @@ def render_html(
     .result-name{{font-size:12px;color:var(--frost);white-space:nowrap;overflow:hidden;text-overflow:ellipsis}}
     .result-sub{{font-size:10px;color:var(--ash-dim);white-space:nowrap;overflow:hidden;text-overflow:ellipsis}}
     .result-sub em{{color:var(--cyan);font-style:normal}}
+    #file-tree{{display:flex;flex-direction:column;max-height:260px;overflow-y:auto;font-size:12px}}
+    #file-tree summary{{cursor:pointer;color:var(--ash);padding:2px 0;user-select:none;
+                        white-space:nowrap;overflow:hidden;text-overflow:ellipsis}}
+    #file-tree summary:hover{{color:var(--frost)}}
+    #file-tree details details,#file-tree .tree-note{{margin-left:12px}}
+    .tree-note{{color:var(--ash);cursor:pointer;padding:2px 6px;border-left:2px solid transparent;
+               white-space:nowrap;overflow:hidden;text-overflow:ellipsis}}
+    .tree-note:hover{{background:var(--slate-2);border-left-color:var(--cyan);color:var(--frost)}}
   </style>
 </head>
 <body>
@@ -203,6 +213,11 @@ def render_html(
   <input id="search" type="text" placeholder="Search notes, paths, #tags&#8230;"
          oninput="onSearch(this.value)" onkeydown="onSearchKey(event)" autocomplete="off">
   <div id="search-results"></div>
+
+  <div>
+    <div class="section-title" style="margin-bottom:6px">Files</div>
+    {tree_html}
+  </div>
 
   <div>
     <div class="section-title" style="margin-bottom:8px">Edge types</div>
@@ -263,6 +278,9 @@ RAW_EDGES.forEach(e => {{
   outDeg[e.from] = (outDeg[e.from] || 0) + 1;
   inDeg[e.to]   = (inDeg[e.to]   || 0) + 1;
 }});
+
+const NODE_BY_ID = {{}};
+RAW_NODES.forEach(n => {{ NODE_BY_ID[n.id] = n; }});
 
 let activeCommunity = -2;
 let showExtracted = true;
@@ -370,12 +388,19 @@ function renderResults(q) {{
   box.className = "open";
 }}
 
+// Shared selection path for tree clicks and search results: open the note view
+// and fly the camera. Task 3 adds neighbour dimming here.
+function chooseNode(node) {{
+  if (!node) return;
+  selectNode(node);
+  focusNode(node);
+}}
+
 function chooseResult(i) {{
   const n = results[i];
   if (!n) return;
   selIdx = i;
-  selectNode(n);
-  focusNode(n);
+  chooseNode(n);
 }}
 
 function moveSel(d) {{
@@ -440,6 +465,11 @@ Graph.onBackgroundClick(closeDrawer);
 function closeDrawer() {{
   document.getElementById("drawer").classList.remove("open");
 }}
+
+document.getElementById("file-tree").addEventListener("click", e => {{
+  const leaf = e.target.closest(".tree-note");
+  if (leaf) chooseNode(NODE_BY_ID[leaf.dataset.id]);
+}});
 
 applyFilters();
 </script>

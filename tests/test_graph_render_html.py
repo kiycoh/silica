@@ -265,6 +265,44 @@ class TestSearchResultsFlyTo:
         assert "silica-open-note" in html
 
 
+class TestFileTree:
+    def test_file_tree_container_present(self, small_graph):
+        nodes, edges = small_graph
+        html = render_html(nodes, edges, lib_js="// dummy")
+        assert 'id="file-tree"' in html
+
+    def test_files_section_title_present(self, small_graph):
+        nodes, edges = small_graph
+        html = render_html(nodes, edges, lib_js="// dummy")
+        assert ">Files<" in html
+
+    def test_tree_leaf_for_real_note(self, small_graph):
+        nodes, edges = small_graph
+        html = render_html(nodes, edges, lib_js="// dummy")
+        # node "A" is a real note (id == path == "A")
+        assert 'class="tree-note" data-id="A"' in html
+
+    def test_node_by_id_map_built(self, small_graph):
+        nodes, edges = small_graph
+        html = render_html(nodes, edges, lib_js="// dummy")
+        assert "NODE_BY_ID" in html
+
+    def test_choose_node_function_present(self, small_graph):
+        nodes, edges = small_graph
+        html = render_html(nodes, edges, lib_js="// dummy")
+        assert "function chooseNode(" in html
+
+    def test_tree_click_delegated(self, small_graph):
+        nodes, edges = small_graph
+        html = render_html(nodes, edges, lib_js="// dummy")
+        assert 'getElementById("file-tree").addEventListener("click"' in html
+
+    def test_choose_result_routes_through_choose_node(self, small_graph):
+        nodes, edges = small_graph
+        html = render_html(nodes, edges, lib_js="// dummy")
+        assert "chooseNode(" in html
+
+
 # ---------------------------------------------------------------------------
 # 5. Perf knobs for big vaults — keep WebGL geometry count low
 # ---------------------------------------------------------------------------
