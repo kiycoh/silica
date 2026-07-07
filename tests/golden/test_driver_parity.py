@@ -20,6 +20,7 @@ import pytest
 from silica.driver.base import ObsidianDriver
 from silica.driver.fs_backend import ObsidianFSBackend
 from silica.driver.cli_backend import ObsidianCLIBackend
+from silica.driver.ws_backend import ObsidianWSBackend
 from tests.fixtures.vault_factory import SPEC, _canonical
 
 
@@ -85,6 +86,14 @@ class TestDriverStructuralParity:
             "A method may be missing or have the wrong signature."
         )
 
+    def test_ws_backend_satisfies_protocol(self):
+        """ObsidianWSBackend instantiates cheaply (no dial) and satisfies ObsidianDriver."""
+        backend = ObsidianWSBackend(url="ws://127.0.0.1:1", token="")
+        assert isinstance(backend, ObsidianDriver), (
+            "ObsidianWSBackend does not satisfy the ObsidianDriver protocol. "
+            "A method may be missing or have the wrong signature."
+        )
+
     # ------------------------------------------------------------------
     # Test 2: forward drift — protocol methods present on each backend
     # ------------------------------------------------------------------
@@ -111,6 +120,18 @@ class TestDriverStructuralParity:
         ]
         assert not missing, (
             f"ObsidianCLIBackend is missing protocol methods: {missing}"
+        )
+
+    def test_ws_backend_implements_all_protocol_methods(self):
+        """Every protocol method exists as a callable on ObsidianWSBackend."""
+        backend = ObsidianWSBackend(url="ws://127.0.0.1:1", token="")
+        proto_methods = _protocol_method_names()
+        missing = [
+            m for m in sorted(proto_methods)
+            if not (hasattr(backend, m) and callable(getattr(backend, m)))
+        ]
+        assert not missing, (
+            f"ObsidianWSBackend is missing protocol methods: {missing}"
         )
 
     # ------------------------------------------------------------------
@@ -181,6 +202,26 @@ class TestDriverStructuralParity:
                 )
         assert not mismatches, (
             "ObsidianCLIBackend method signatures diverge from protocol:\n"
+            + "\n".join(f"  {m}" for m in mismatches)
+        )
+
+    def test_ws_backend_parameter_names_match_protocol(self):
+        """ObsidianWSBackend method parameter names match the protocol's."""
+        proto_methods = _protocol_method_names()
+        mismatches = []
+        for method_name in sorted(proto_methods):
+            proto_params = list(
+                inspect.signature(getattr(ObsidianDriver, method_name)).parameters.keys()
+            )
+            ws_params = list(
+                inspect.signature(getattr(ObsidianWSBackend, method_name)).parameters.keys()
+            )
+            if proto_params != ws_params:
+                mismatches.append(
+                    f"{method_name}: protocol={proto_params} ws={ws_params}"
+                )
+        assert not mismatches, (
+            "ObsidianWSBackend method signatures diverge from protocol:\n"
             + "\n".join(f"  {m}" for m in mismatches)
         )
 

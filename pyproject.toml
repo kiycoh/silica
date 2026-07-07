@@ -39,6 +39,9 @@ dependencies = [
 # Opt-in localhost web GUI (`silica --gui`); python-multipart backs the drop-zone upload:
 gui = ["fastapi", "uvicorn", "python-multipart"]
 dev = ["pytest>=8.0", "mypy>=1.10", "import-linter>=2.0"]
+connect = [
+    "websockets>=16.0",
+]
 
 [project.scripts]
 silica = "silica.cli:main"
