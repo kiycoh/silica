@@ -243,12 +243,16 @@ body.dragging #drop-hint { display: flex; }
 
 #note-panel {
   position: fixed; top: 0; right: 0; z-index: 50;
-  width: 420px; max-width: 90vw; height: 100%;
+  width: 420px; min-width: 280px; max-width: 90vw; height: 100%;
   display: flex; flex-direction: column;
   background: var(--slate); border-left: 1px solid var(--line-2);
   transform: translateX(100%); transition: transform .16s ease;
 }
 #note-panel.open { transform: translateX(0); }
+#note-resize {
+  position: absolute; top: 0; left: -3px; width: 6px; height: 100%;
+  cursor: ew-resize; z-index: 51;
+}
 #note-panel > header {
   display: flex; align-items: center; gap: 0.5rem;
   padding: 0.6rem 0.9rem; border-bottom: 1px solid var(--line); background: var(--slate-2);

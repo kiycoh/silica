@@ -50,6 +50,20 @@ def retry_transient(fn, exceptions: tuple, attempts: int = 3, base_delay: float 
             time.sleep(delay)
 
 
+def openrouter_routing() -> dict | None:
+    """OpenRouter `extra_body` provider-routing block from CONFIG, or None.
+
+    CONFIG.openrouter_provider is a comma-separated list of provider names
+    pinned as the routing `order`. `allow_fallbacks` is False: an explicit pin
+    means "these providers or fail" — silently bouncing to an unpinned (maybe
+    rate-limited) provider is exactly the surprise this knob exists to prevent.
+    Shared by both LLM paths — litellm (call_llm) and the openai SDK
+    (agent/providers.py) — so the pin applies everywhere openrouter is used.
+    """
+    order = [p.strip() for p in CONFIG.openrouter_provider.split(",") if p.strip()]
+    return {"provider": {"order": order, "allow_fallbacks": False}} if order else None
+
+
 @dataclass
 class ToolCall:
     """A single tool invocation requested by the model."""
@@ -111,6 +125,8 @@ def call_llm(
         kwargs["response_format"] = response_format
     if model.startswith("openrouter/") and (CONFIG.show_thinking or CONFIG.verbose):
         kwargs["include_reasoning"] = True
+    if model.startswith("openrouter/") and (rt := openrouter_routing()):
+        kwargs["extra_body"] = rt
 
     kwargs["timeout"] = 120.0
 

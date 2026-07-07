@@ -105,7 +105,7 @@ def render_html(
     n_communities = len(communities)
 
     legend_items = "".join(
-        f'<div class="legend-item" data-community="{c.id}" onclick="filterCommunity({c.id})">'
+        f'<div class="legend-item" data-community="{c.id}" data-size="{c.size}" onclick="filterCommunity({c.id})">'
         f'<span class="dot" style="background:{c.color}"></span>{html.escape(c.label)} '
         f'<span style="color:#5a6372;font-size:11px;margin-left:auto">{c.size}</span>'
         f'</div>\n'
@@ -155,6 +155,7 @@ def render_html(
                  padding:3px 0;user-select:none}}
     .filter-row input{{cursor:pointer;accent-color:var(--cyan)}}
     .dot-edge{{width:24px;height:3px;border-radius:2px;flex-shrink:0}}
+    #sort-communities:hover{{color:var(--cyan)}}
     #legend-box{{display:flex;flex-direction:column;gap:2px;max-height:200px;overflow-y:auto}}
     .legend-item{{display:flex;align-items:center;gap:6px;font-size:12px;color:var(--ash);cursor:pointer;
                   padding:3px 6px;border-radius:3px}}
@@ -236,7 +237,11 @@ def render_html(
   </div>
 
   <div>
-    <div class="section-title" style="margin-bottom:6px">Communities</div>
+    <div class="section-title" style="margin-bottom:6px;display:flex;align-items:center;justify-content:space-between">
+      Communities
+      <span id="sort-communities" style="color:#8a93a3;cursor:pointer;font-size:11px;letter-spacing:0;text-transform:none"
+            onclick="toggleCommunitySort()" title="sort by size">size &#8597;</span>
+    </div>
     <div id="legend-box">
 {legend_items}      <div class="legend-item active" id="legend-all" onclick="filterCommunity(-2)">
         <span class="dot" style="background:#4d5575"></span>Show all
@@ -244,7 +249,11 @@ def render_html(
     </div>
   </div>
 
-  <div class="btn" onclick="Graph.zoomToFit(400)">&#8862; Fit graph</div>
+  <div style="display:flex;gap:6px">
+    <div class="btn" style="flex:1" onclick="Graph.zoomToFit(400)">&#8862; Fit graph</div>
+    <div class="btn" title="rebuild from the vault (e.g. after editing notes outside silica)"
+         onclick="location.reload()">&#8635;</div>
+  </div>
 </div>
 
 <div id="graph-wrap"><div id="graph"></div></div>
@@ -372,6 +381,18 @@ function filterCommunity(cid) {{
   applyFilters();
 }}
 
+// --- Communities legend: sort by size, toggling ascending <-> descending ----
+let communitySortAsc = true;
+function toggleCommunitySort() {{
+  const box = document.getElementById("legend-box");
+  const allItem = document.getElementById("legend-all");
+  const items = Array.from(box.querySelectorAll(".legend-item[data-community]"));
+  items.sort((a, b) => (+a.dataset.size - +b.dataset.size) * (communitySortAsc ? 1 : -1));
+  items.forEach(el => box.insertBefore(el, allItem));
+  document.getElementById("sort-communities").textContent = communitySortAsc ? "size ↑" : "size ↓";
+  communitySortAsc = !communitySortAsc;
+}}
+
 // --- Search → ranked results → fly-to-focus -------------------------------
 // Search by what people actually remember: title first, then path, then
 // #tags, then the cluster they were browsing. Choosing a result flies the
@@ -492,8 +513,20 @@ function selectNode(node) {{
   document.getElementById("drawer").classList.add("open");
 }}
 
-Graph.onNodeClick(selectNode);
+// Direct clicks in the 3D view get the same dim-non-neighbours treatment as
+// tree/search picks, but skip focusNode's camera fly — the user is already
+// looking at this spot, recentring would just be jarring.
+Graph.onNodeClick(node => {{ selectNode(node); applyFocus(node.id); }});
 Graph.onBackgroundClick(() => {{ closeDrawer(); clearFocus(); }});
+
+// The embedding page (chat + note-panel) tells us which note is open
+// elsewhere — e.g. a link followed inside the note panel itself — so the
+// graph mirrors it. Dim only, no camera move (same reasoning as above).
+window.addEventListener("message", e => {{
+  if (e.data && e.data.type === "silica-focus-path") {{
+    applyFocus(NODE_BY_ID[e.data.path] ? e.data.path : null);
+  }}
+}});
 
 function closeDrawer() {{
   document.getElementById("drawer").classList.remove("open");

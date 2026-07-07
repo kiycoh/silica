@@ -259,6 +259,7 @@ def build_mapview(
                 y=0.0,
                 community=materials.community_of.get(nid, -1),
                 hop=hop,
+                subtitle=nid.rsplit("/", 1)[0] if "/" in nid else None,
             )
         )
     _layout(nodes, parent)
@@ -378,11 +379,27 @@ def mapview_to_gui(mv: MapView) -> dict:
 # Static SVG render (GUI surface; native, zero deps, positions precomputed)
 # ---------------------------------------------------------------------------
 
+def _clip_to_box(ox: float, oy: float, hw: float, hh: float, dx: float, dy: float) -> tuple[float, float]:
+    """Point where the ray from (ox,oy) toward (ox+dx,oy+dy) exits the axis-aligned
+    box of half-extents (hw,hh) centred at (ox,oy). Used to trim edge endpoints to
+    a card's border instead of its centre."""
+    tx = hw / abs(dx) if dx else math.inf
+    ty = hh / abs(dy) if dy else math.inf
+    t = min(tx, ty)
+    if not math.isfinite(t):
+        return ox, oy
+    return ox + t * dx, oy + t * dy
+
+
 def render_map_svg(mv: MapView, title: str = "Mindmap") -> str:
-    """Render a MapView as a self-contained static-SVG HTML page.
+    """Render a MapView as a self-contained, interactive SVG page.
 
     Consumes the precomputed positions (no force layout ⇒ cannot diverge from the
-    canvas). Latent edges are dashed natively (stroke-dasharray); wikilink solid.
+    canvas). Cards carry a community wash + accent bar; wikilink edges are solid
+    curves with an arrowhead on true parent→child hops (same-ring wikilinks and
+    all latent edges stay arrowless — they aren't "downstream" relationships).
+    Pan/zoom/click-to-focus are plain SVG + vanilla JS (no new dependency),
+    mirroring the dim-on-focus idiom already shipped for /graph.
     """
     import html
 
@@ -395,43 +412,222 @@ def render_map_svg(mv: MapView, title: str = "Mindmap") -> str:
     vb_w = (max(xs) - min(xs)) + 2 * pad
     vb_h = (max(ys) - min(ys)) + 2 * pad
 
+    # Every node at a given hop sits on the exact same radius (see _layout), so
+    # any representative node gives the ring's true radius — a real structural
+    # readout, not a decorative circle.
+    ring_r = {n.hop: math.hypot(n.x, n.y) for n in mv.nodes if n.hop in (1, 2)}
+    guide_svg = "".join(
+        f'<circle class="ring-guide" cx="0" cy="0" r="{r:.1f}"/>'
+        for r in sorted(set(ring_r.values()))
+    )
+    halo_r = min(70.0, ring_r.get(1, 110.0) * 0.55)
+
     edge_svg = []
     for e in mv.edges:
         s, d = by_id[e.src], by_id[e.dst]
-        dash = ' stroke-dasharray="7 7"' if e.kind == "latent" else ""
-        color = _CANVAS_LATENT_COLOR if e.kind == "latent" else _CANVAS_WIKI_COLOR
-        op = "0.5" if e.kind == "latent" else "0.7"
+        latent = e.kind == "latent"
+        # Bow the line into a deterministic quadratic curve (perpendicular
+        # offset from the midpoint) — an organic arc instead of a straight
+        # ruler line, with no randomness so the render stays reproducible.
+        parent, child = (s, d) if s.hop <= d.hop else (d, s)
+        x1, y1, x2, y2 = parent.x, parent.y, child.x, child.y
+        mx, my = (x1 + x2) / 2, (y1 + y2) / 2
+        dx, dy = x2 - x1, y2 - y1
+        length = math.hypot(dx, dy) or 1.0
+        bow = min(36.0, length * 0.16)
+        cx, cy = mx - dy / length * bow, my + dx / length * bow
+        # Trim both ends to the card's border along the curve's own tangent
+        # (the direction toward the control point) so the line touches the
+        # badge edge and never its interior.
+        sx, sy = _clip_to_box(x1, y1, BOX_W / 2, BOX_H / 2, cx - x1, cy - y1)
+        ex, ey = _clip_to_box(x2, y2, BOX_W / 2, BOX_H / 2, cx - x2, cy - y2)
+        is_tree = parent.hop != child.hop
+        cls = "edge latent" if latent else ("edge wiki" if is_tree else "edge wiki lateral")
+        marker = ' marker-end="url(#arrow)"' if is_tree and not latent else ""
         edge_svg.append(
-            f'<line x1="{s.x:.1f}" y1="{s.y:.1f}" x2="{d.x:.1f}" y2="{d.y:.1f}" '
-            f'stroke="{color}" stroke-width="2" stroke-opacity="{op}"{dash}/>'
+            f'<path class="{cls}" data-src="{html.escape(e.src, quote=True)}" '
+            f'data-dst="{html.escape(e.dst, quote=True)}" '
+            f'd="M {sx:.1f} {sy:.1f} Q {cx:.1f} {cy:.1f} {ex:.1f} {ey:.1f}"{marker}/>'
         )
 
     node_svg = []
     for n in mv.nodes:
-        fill = node_color(n.community)
-        rx = n.x - BOX_W / 2
-        ry = n.y - BOX_H / 2
-        stroke_w = 3 if n.hop == 0 else 1
-        label = html.escape(n.title if len(n.title) <= 30 else n.title[:29] + "…")
+        color = node_color(n.community)
+        rx, ry = n.x - BOX_W / 2, n.y - BOX_H / 2
+        root_cls = " root" if n.hop == 0 else ""
+        title_esc = html.escape(n.title)
+        sub_html = f'<div class="card-sub">{html.escape(n.subtitle)}</div>' if n.subtitle else ""
         node_svg.append(
-            f'<g><rect x="{rx:.1f}" y="{ry:.1f}" width="{BOX_W}" height="{BOX_H}" rx="6" '
-            f'fill="{fill}" stroke="#0b0d12" stroke-width="{stroke_w}"/>'
-            f'<text x="{n.x:.1f}" y="{n.y:.1f}" text-anchor="middle" '
-            f'dominant-baseline="central" font-size="20" fill="#0b0d12" '
-            f'font-family="ui-monospace,monospace">{label}</text></g>'
+            f'<g class="card{root_cls}" data-id="{html.escape(n.id, quote=True)}" '
+            f'transform="translate({rx:.1f},{ry:.1f})">'
+            f'<rect class="frame" width="{BOX_W}" height="{BOX_H}" rx="10" '
+            f'fill="{color}" stroke="{color}"/>'
+            f'<rect class="accent" width="4" height="{BOX_H}" rx="2" fill="{color}"/>'
+            f'<foreignObject x="16" y="0" width="{BOX_W - 28}" height="{BOX_H}">'
+            f'<div xmlns="http://www.w3.org/1999/xhtml" class="card-body">'
+            f'<div class="card-title">{title_esc}</div>{sub_html}</div>'
+            f'</foreignObject></g>'
         )
 
     return f"""<!DOCTYPE html>
 <html lang="en"><head><meta charset="utf-8">
 <meta name="viewport" content="width=device-width, initial-scale=1">
 <title>{html.escape(title)}</title>
-<style>html,body{{margin:0;height:100%;background:#0B0D12}}
-svg{{width:100%;height:100vh;display:block}}</style></head>
-<body><svg viewBox="{min_x:.0f} {min_y:.0f} {vb_w:.0f} {vb_h:.0f}"
-xmlns="http://www.w3.org/2000/svg">
-{chr(10).join(edge_svg)}
-{chr(10).join(node_svg)}
-</svg></body></html>"""
+<style>
+  :root{{
+    --void:#0B0D12;--slate-2:#151A23;--line:#1E2530;--line-2:#2B3442;
+    --frost:#E7EBF1;--ash:#8A93A3;--ash-dim:#5A6372;--cyan:#22D3EE;
+    --mono:ui-monospace,"Cascadia Code","SF Mono",Menlo,Consolas,"DejaVu Sans Mono",monospace;
+  }}
+  *{{box-sizing:border-box}}
+  html,body{{margin:0;height:100%;background:var(--void);overflow:hidden;
+             -webkit-user-select:none;user-select:none}}
+  svg{{width:100%;height:100vh;display:block;cursor:grab;touch-action:none}}
+  svg.panning{{cursor:grabbing}}
+  .ring-guide{{fill:none;stroke:var(--line-2);stroke-width:1;stroke-dasharray:2 6;opacity:.6}}
+  .root-halo{{animation:halo 2.8s ease-in-out infinite}}
+  @media (prefers-reduced-motion:reduce){{.root-halo{{animation:none}}}}
+  @keyframes halo{{0%,100%{{opacity:.5;transform:scale(1)}}50%{{opacity:.18;transform:scale(1.12)}}}}
+  .edge{{fill:none;stroke:var(--cyan);stroke-width:1.6;stroke-opacity:.55;
+         transition:opacity .15s ease,stroke-opacity .15s ease}}
+  .edge.lateral{{stroke-width:1.1;stroke-opacity:.28}}
+  .edge.latent{{stroke:var(--ash-dim);stroke-dasharray:6 6;stroke-opacity:.55}}
+  .edge.dim{{opacity:.1}}
+  .card{{cursor:pointer;transition:opacity .15s ease}}
+  .card.dim{{opacity:.3}}
+  .card .frame{{fill-opacity:.12;stroke-opacity:.6;stroke-width:1;
+                filter:drop-shadow(0 2px 6px rgba(0,0,0,.55))}}
+  .card:hover .frame{{fill-opacity:.2;stroke-opacity:1}}
+  .card.root .frame{{stroke:var(--cyan);stroke-opacity:1;stroke-width:2.5}}
+  .card-body{{font-family:var(--mono);height:100%;display:flex;flex-direction:column;
+              justify-content:center;gap:3px;pointer-events:none;overflow:hidden}}
+  .card-title{{font-size:12.5px;font-weight:600;line-height:1.25;color:var(--frost);
+               display:-webkit-box;-webkit-line-clamp:2;-webkit-box-orient:vertical;overflow:hidden}}
+  .card-sub{{font-size:10px;color:var(--ash-dim);letter-spacing:.03em;
+             white-space:nowrap;overflow:hidden;text-overflow:ellipsis}}
+  #hud{{position:fixed;top:14px;right:14px;display:flex;flex-direction:column;
+        align-items:flex-end;gap:8px;font-family:var(--mono);z-index:2}}
+  #fit-btn{{padding:7px 10px;background:var(--slate-2);border:1px solid var(--line-2);
+            color:var(--ash);font-family:var(--mono);font-size:12px;cursor:pointer;border-radius:3px}}
+  #fit-btn:hover{{border-color:var(--cyan);color:var(--cyan)}}
+  #legend{{display:flex;flex-direction:column;gap:5px;background:var(--slate-2);
+           border:1px solid var(--line);border-radius:3px;padding:8px 10px;
+           font-size:11px;color:var(--ash)}}
+  .legend-row{{display:flex;align-items:center;gap:7px}}
+  .swatch{{width:20px;height:0;border-top:2px solid var(--cyan)}}
+  .swatch.dashed{{border-top-style:dashed;border-color:var(--ash-dim)}}
+</style>
+</head>
+<body>
+<svg id="stage" viewBox="{min_x:.0f} {min_y:.0f} {vb_w:.0f} {vb_h:.0f}" xmlns="http://www.w3.org/2000/svg">
+  <defs>
+    <marker id="arrow" viewBox="0 0 10 10" refX="10" refY="5" markerWidth="6" markerHeight="6" orient="auto-start-reverse">
+      <path d="M0,0 L10,5 L0,10 z" fill="var(--cyan)" fill-opacity=".8"/>
+    </marker>
+    <radialGradient id="halo-grad" cx="50%" cy="50%" r="50%">
+      <stop offset="0%" stop-color="#22D3EE" stop-opacity=".4"/>
+      <stop offset="100%" stop-color="#22D3EE" stop-opacity="0"/>
+    </radialGradient>
+  </defs>
+  <g id="scene">
+    {guide_svg}
+    <circle class="root-halo" cx="0" cy="0" r="{halo_r:.0f}" fill="url(#halo-grad)"/>
+    <g id="edges">{"".join(edge_svg)}</g>
+    <g id="nodes">{"".join(node_svg)}</g>
+  </g>
+</svg>
+<div id="hud">
+  <button id="fit-btn" type="button">⊹ Fit map</button>
+  <div id="legend">
+    <div class="legend-row"><span class="swatch"></span>wikilink</div>
+    <div class="legend-row"><span class="swatch dashed"></span>related (≈)</div>
+  </div>
+</div>
+<script>
+const stage = document.getElementById("stage");
+const scene = document.getElementById("scene");
+let tx = 0, ty = 0, scale = 1;
+function applyTransform() {{
+  scene.setAttribute("transform", "translate(" + tx + "," + ty + ") scale(" + scale + ")");
+}}
+function toBase(evt) {{
+  const pt = stage.createSVGPoint();
+  pt.x = evt.clientX; pt.y = evt.clientY;
+  return pt.matrixTransform(stage.getScreenCTM().inverse());
+}}
+
+// Pan: drag the background. Zoom: wheel, anchored on the cursor so the point
+// under it stays put (tx/ty live in the SVG's own root coordinate space, which
+// getScreenCTM() reports independently of the inner group's own transform).
+let dragging = false, lastX = 0, lastY = 0;
+stage.addEventListener("pointerdown", (e) => {{
+  if (e.target.closest(".card")) return;
+  dragging = true; lastX = e.clientX; lastY = e.clientY;
+  stage.classList.add("panning");
+  stage.setPointerCapture(e.pointerId);
+}});
+stage.addEventListener("pointermove", (e) => {{
+  if (!dragging) return;
+  const k = {vb_w:.1f} / stage.clientWidth;
+  tx += (e.clientX - lastX) * k; ty += (e.clientY - lastY) * k;
+  lastX = e.clientX; lastY = e.clientY;
+  applyTransform();
+}});
+function endDrag() {{ dragging = false; stage.classList.remove("panning"); }}
+stage.addEventListener("pointerup", endDrag);
+stage.addEventListener("pointerleave", endDrag);
+
+stage.addEventListener("wheel", (e) => {{
+  e.preventDefault();
+  const p = toBase(e);
+  const wx = (p.x - tx) / scale, wy = (p.y - ty) / scale;
+  scale = Math.min(4, Math.max(0.3, scale * (e.deltaY > 0 ? 0.9 : 1.1)));
+  tx = p.x - wx * scale; ty = p.y - wy * scale;
+  applyTransform();
+}}, {{ passive: false }});
+
+document.getElementById("fit-btn").addEventListener("click", () => {{
+  tx = 0; ty = 0; scale = 1; applyTransform();
+}});
+
+// --- click-to-focus: dim everything except the clicked card + its 1-hop
+// edges (same idiom as /graph); background click clears. Embedded in the app
+// iframe, a click also hands the note off to the parent's note panel.
+const neighbors = {{}};
+document.querySelectorAll(".edge").forEach((el) => {{
+  const a = el.dataset.src, b = el.dataset.dst;
+  (neighbors[a] = neighbors[a] || new Set()).add(b);
+  (neighbors[b] = neighbors[b] || new Set()).add(a);
+}});
+
+function focusNode(id) {{
+  document.querySelectorAll(".card").forEach((el) => {{
+    const nb = neighbors[id] || new Set();
+    el.classList.toggle("dim", id != null && el.dataset.id !== id && !nb.has(el.dataset.id));
+  }});
+  document.querySelectorAll(".edge").forEach((el) => {{
+    el.classList.toggle("dim", id != null && el.dataset.src !== id && el.dataset.dst !== id);
+  }});
+}}
+
+document.querySelectorAll(".card").forEach((el) => {{
+  el.addEventListener("click", () => {{
+    focusNode(el.dataset.id);
+    if (window.parent !== window) {{
+      window.parent.postMessage({{ type: "silica-open-note", path: el.dataset.id }}, "*");
+    }}
+  }});
+}});
+stage.addEventListener("click", (e) => {{ if (!e.target.closest(".card")) focusNode(null); }});
+
+const knownIds = new Set(Array.from(document.querySelectorAll(".card")).map((el) => el.dataset.id));
+window.addEventListener("message", (e) => {{
+  if (e.data && e.data.type === "silica-focus-path") {{
+    focusNode(knownIds.has(e.data.path) ? e.data.path : null);
+  }}
+}});
+</script>
+</body></html>"""
 
 
 # ---------------------------------------------------------------------------

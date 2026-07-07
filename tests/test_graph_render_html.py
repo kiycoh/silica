@@ -299,6 +299,22 @@ class TestFocusDim:
         html = render_html(nodes, edges, lib_js="// dummy")
         assert "Graph.zoomToFit(600)" in html
 
+    def test_direct_node_click_dims_without_camera_fly(self, small_graph):
+        """Clicking a node in the 3D view itself dims non-neighbours like tree/search
+        picks, but must NOT call focusNode — the user is already looking at the spot."""
+        nodes, edges = small_graph
+        html = render_html(nodes, edges, lib_js="// dummy")
+        assert "Graph.onNodeClick(node => {" in html
+        assert "selectNode(node); applyFocus(node.id);" in html
+
+    def test_parent_can_sync_focus_by_path(self, small_graph):
+        """The embedding page (note-panel navigation) can tell the graph which
+        note is open elsewhere so it mirrors the dim state, without moving the camera."""
+        nodes, edges = small_graph
+        html = render_html(nodes, edges, lib_js="// dummy")
+        assert "silica-focus-path" in html
+        assert "NODE_BY_ID[e.data.path]" in html
+
 
 class TestFileTree:
     def test_file_tree_container_present(self, small_graph):

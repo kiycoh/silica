@@ -112,6 +112,7 @@ def build_contribution(
     body: str,
     lang: str = "english",
     concepts: list[str] | None = None,
+    strip_fences: bool = False,
 ) -> dict[str, Any]:
     """Turn a note's text into its per-note co-occurrence contribution.
 
@@ -126,11 +127,17 @@ def build_contribution(
     LLM-validated concepts above rule-based body noise. `None`/`[]` leaves the
     contribution byte-identical to a body-only build (graceful degradation).
     """
-    from silica.kernel.text import clean_body
+    from silica.kernel.text import clean_body, is_drawing_note
 
-    # fences=False: identifiers in code blocks ARE the graph signal of code
-    # notes (C1 fork ⚑). Math and images never become nodes.
-    text = f"{name}\n\n{clean_body(body, fences=False)}"
+    # Excalidraw drawings carry no prose — skip entirely so their element-id /
+    # SVG soup never becomes nodes (empty contribution = the note indexes clean).
+    if is_drawing_note(body):
+        return {"nodes": {}, "edges": []}
+
+    # strip_fences: prose vaults treat code blocks as noise; code vaults keep
+    # their identifiers as graph signal (C1 fork ⚑). Keyed on the manifest
+    # `sources` by the caller. Math and images never become nodes.
+    text = f"{name}\n\n{clean_body(body, fences=strip_fences)}"
     if concepts:
         concept_sentences = ". ".join(c.strip() for c in concepts if c and c.strip())
         if concept_sentences:
@@ -428,6 +435,22 @@ class CooccurStore:
         ]
 
 
+def _strip_fences_for_active_vault() -> bool:
+    """True ⇒ drop ```code``` blocks before tokenizing (prose vault noise).
+
+    Keyed on the active vault's manifest `sources` (ADR-0014): a vault that
+    declares `code` keeps code-block identifiers as graph signal; a prose-only
+    vault treats them as noise. Degrades to False (legacy: keep fences) on any
+    failure, so a missing/broken manifest never changes today's behavior.
+    """
+    from silica.kernel import vault_manifest
+
+    try:
+        return "code" not in vault_manifest.get_active_manifest().sources
+    except Exception:
+        return False
+
+
 def build_index(
     notes: list[tuple[str, str, str]],
     *,
@@ -472,12 +495,15 @@ def build_index(
         use_lang = language.resolve(requested, "\n".join(b for _p, _n, b in notes[:50]))
     store.lang = use_lang  # freeze resolved language (no 'auto' persisted)
     cmap = concepts_by_path or {}
+    strip_fences = _strip_fences_for_active_vault()
     for path, name, body in notes:
         if not force and path in store.paths():
             continue
         store.upsert_note(
             path,
-            build_contribution(name, body, lang=use_lang, concepts=cmap.get(path)),
+            build_contribution(
+                name, body, lang=use_lang, concepts=cmap.get(path), strip_fences=strip_fences
+            ),
         )
     if save:
         store.save()
@@ -508,6 +534,9 @@ def refresh_note(
     else:
         use_lang = language.resolve(requested, body)
     store.lang = use_lang  # freeze resolved language (no 'auto' persisted)
-    store.upsert_note(path, build_contribution(name, body, lang=use_lang))
+    store.upsert_note(
+        path,
+        build_contribution(name, body, lang=use_lang, strip_fences=_strip_fences_for_active_vault()),
+    )
     store.save()
     return store

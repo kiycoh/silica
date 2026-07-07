@@ -121,6 +121,11 @@ def _run_wizard_inner(
                 lang_answer = _ask_language(input_fn)
                 content = "sources: [prose, code]\noverlay: codebase\n"
                 if lang_answer:
+                    # cooccurrence_lang (stemmer/stopwords) is separate from
+                    # conventions.language (distiller translation intent). Pin
+                    # both from the one answer so the co-occurrence store never
+                    # falls back to fragile auto-detection.
+                    content += f"cooccurrence_lang: {lang_answer.lower()}\n"
                     content += f"conventions:\n  language: {lang_answer}\n"
                 manifest.write_text(content, encoding="utf-8")
     if not use_repo_mode:
@@ -142,8 +147,12 @@ def _run_wizard_inner(
         if not manifest.exists():
             lang_answer = _ask_language(input_fn)
             if lang_answer:
+                # Pin cooccurrence_lang (stemmer) alongside conventions.language
+                # (distiller) — two separate axes, one answer. See repo-mode note.
                 manifest.write_text(
-                    f"conventions:\n  language: {lang_answer}\n", encoding="utf-8"
+                    f"cooccurrence_lang: {lang_answer.lower()}\n"
+                    f"conventions:\n  language: {lang_answer}\n",
+                    encoding="utf-8",
                 )
 
     # 2. Backend — fs is the default (filesystem-native, headless, no Obsidian required).

@@ -235,8 +235,8 @@ class TestRunWizard:
     def test_non_repo_mode_writes_forced_language_into_manifest(self, monkeypatch, tmp_path):
         """The design's language question is unscoped to repo mode: an explicit-path
         vault with no vault.yaml yet must also be asked, and an explicit answer writes
-        a minimal manifest containing ONLY the conventions block (no sources/overlay —
-        unlike repo mode, nothing else was due to be written for this vault)."""
+        a minimal manifest pinning both cooccurrence_lang (stemmer) and the conventions
+        language (distiller) — no sources/overlay, unlike repo mode."""
         import silica.onboarding.wizard as wizard
 
         vault = tmp_path / "vault"
@@ -261,7 +261,15 @@ class TestRunWizard:
         assert rc == 0
         manifest = vault / "vault.yaml"
         assert manifest.is_file()
-        assert manifest.read_text(encoding="utf-8") == "conventions:\n  language: Italian\n"
+        assert manifest.read_text(encoding="utf-8") == (
+            "cooccurrence_lang: italian\nconventions:\n  language: Italian\n"
+        )
+        # both axes resolve through load_manifest
+        from silica.kernel.vault_manifest import load_manifest
+
+        m = load_manifest(str(vault))
+        assert m.cooccurrence_lang == "italian"
+        assert m.conventions.language == "Italian"
 
     def test_non_repo_mode_enter_writes_no_manifest(self, monkeypatch, tmp_path):
         """Enter on the language question must write nothing at all — no

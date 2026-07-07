@@ -68,6 +68,7 @@ async function runTurn(fetchPromise) {
     stopBtn.hidden = true;
     text.classList.remove("streaming");
     loadSessions(); // turn saved server-side — refresh titles/order
+    graphStale = true; // a turn may have written notes — rebuild next graph view
   }
 
   function handle(ev) {
@@ -189,6 +190,10 @@ async function openSession(id) {
 }
 
 // --- tabs -------------------------------------------------------------------
+// Rebuilding the graph (Louvain + cooccurrence labels) is not free — only do it
+// when the vault might actually have changed (graphStale), not on every switch
+// back into the tab. A turn that writes notes sets graphStale = true.
+let graphStale = true;
 $(".tabs").addEventListener("click", (e) => {
   const tab = e.target.dataset.tab;
   if (!tab) return;
@@ -196,11 +201,18 @@ $(".tabs").addEventListener("click", (e) => {
   $("#view-chat").classList.toggle("active", tab === "chat");
   $("#view-graph").classList.toggle("active", tab === "graph");
   $("#view-map").classList.toggle("active", tab === "map");
-  if (tab === "graph") { $("#graph-loading").hidden = false; $("#graph-frame").src = "/graph?" + Date.now(); }
+  if (tab === "graph" && graphStale) {
+    $("#graph-loading").hidden = false;
+    $("#graph-frame").src = "/graph?" + Date.now();
+    graphStale = false;
+  }
   if (tab === "map") $("#map-note").focus();
 });
 // iframe finishes loading only once the server is done building the graph — drop the loader then
-$("#graph-frame").addEventListener("load", () => { $("#graph-loading").hidden = true; });
+$("#graph-frame").addEventListener("load", () => {
+  $("#graph-loading").hidden = true;
+  if (lastNotePath) focusGraphNode(lastNotePath); // re-sync dim state after a (re)load
+});
 
 // --- mindmap: root on a named note, render its precomputed positions ---------
 $("#map-bar").addEventListener("submit", (e) => {
@@ -227,10 +239,25 @@ window.addEventListener("drop", (e) => {
   runTurn(fetch("/ingest", { method: "POST", body: fd }));
 });
 
-// --- note panel (right overlay drawer; opens from .note-link and the graph) -
+// --- note panel (right overlay drawer; opens from .note-link, the graph, and the map) -
 const notePanel = $("#note-panel");
+let lastNotePath = null;
+
+// Mirror the open note onto the graph + map iframes: the matching node + its
+// 1-hop neighbours go full-opacity, everything else dims. No-op harmlessly if
+// a tab was never opened (contentWindow still exists, message just has no
+// listener yet).
+function focusGraphNode(path) {
+  for (const id of ["#graph-frame", "#map-frame"]) {
+    const frame = $(id);
+    if (frame.contentWindow) frame.contentWindow.postMessage({ type: "silica-focus-path", path }, "*");
+  }
+}
+
 async function openNote(path) {
   if (!path) return;
+  lastNotePath = path;
+  focusGraphNode(path);
   try {
     const r = await fetch("/note?path=" + encodeURIComponent(path));
     const data = await r.json();
@@ -244,10 +271,37 @@ async function openNote(path) {
 function closeNote() {
   notePanel.classList.remove("open");
   notePanel.setAttribute("aria-hidden", "true");
+  lastNotePath = null;
+  focusGraphNode(null);
 }
+
+// --- note panel resize (drag left edge, clamped) ----------------------------
+const NOTE_MIN_W = 280, NOTE_MAX_W = 800;
+const savedNoteWidth = parseInt(localStorage.getItem("note-width"), 10);
+if (savedNoteWidth) notePanel.style.width = Math.min(NOTE_MAX_W, Math.max(NOTE_MIN_W, savedNoteWidth)) + "px";
+let resizingNote = false; // guards the outside-click-closes handler below: a drag
+                           // that ends outside #note-panel fires a "click" there too
+$("#note-resize").addEventListener("mousedown", (e) => {
+  e.preventDefault();
+  resizingNote = true;
+  const startX = e.clientX, startWidth = notePanel.getBoundingClientRect().width;
+  const onMove = (e2) => {
+    const w = Math.min(NOTE_MAX_W, Math.max(NOTE_MIN_W, startWidth + (startX - e2.clientX)));
+    notePanel.style.width = w + "px";
+  };
+  const onUp = () => {
+    document.removeEventListener("mousemove", onMove);
+    document.removeEventListener("mouseup", onUp);
+    localStorage.setItem("note-width", parseInt(notePanel.style.width, 10));
+    setTimeout(() => { resizingNote = false; }, 0); // clear after this click event finishes
+  };
+  document.addEventListener("mousemove", onMove);
+  document.addEventListener("mouseup", onUp);
+});
 // One delegated handler: .note-link (chat OR in-panel → in-place nav) opens the
 // drawer; a click outside an open drawer closes it.
 document.addEventListener("click", (e) => {
+  if (resizingNote) return;
   const link = e.target.closest(".note-link");
   if (link) { e.preventDefault(); openNote(link.dataset.path); return; }
   if (notePanel.classList.contains("open") && !e.target.closest("#note-panel")) closeNote();

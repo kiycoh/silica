@@ -9,7 +9,7 @@ import openai
 import orjson
 from pydantic import BaseModel
 
-from silica.agent.llm import LLMResponse, ToolCall, retry_transient
+from silica.agent.llm import LLMResponse, ToolCall, openrouter_routing, retry_transient
 
 logger = logging.getLogger(__name__)
 
@@ -88,6 +88,7 @@ class OpenAICompatibleProvider:
         # producing tokens raises APITimeoutError after 45s — triggering the retry loop.
         _timeout = httpx.Timeout(connect=10.0, read=45.0, write=10.0, pool=5.0)
         self.client = openai.OpenAI(base_url=base_url, api_key=api_key, timeout=_timeout)
+        self.base_url = base_url
         self.model = model
 
     def call_llm(
@@ -106,6 +107,9 @@ class OpenAICompatibleProvider:
             kwargs["tool_choice"] = "auto"
             
         kwargs["max_tokens"] = max_tokens if max_tokens is not None else int(os.getenv("MAX_TOKENS", "256000"))
+
+        if "openrouter.ai" in self.base_url and (rt := openrouter_routing()):
+            kwargs["extra_body"] = rt
 
         def _execute_call() -> LLMResponse:
             if response_schema:

@@ -29,6 +29,17 @@ MATH_SPANS = re.compile(
 LATEX_CMD = re.compile(r"\\[a-zA-Z]+\*?")
 
 _FENCE_RE = re.compile(r"^(```|~~~).*?^\1[^\S\n]*$\n?", re.DOTALL | re.MULTILINE)
+# Inline code `x` rides the same `fences` flag: prose vaults treat `test.md`,
+# identifiers etc. as noise. URLs never carry co-occurrence signal (utm params,
+# `git clone` remotes) — stripped unconditionally, like images. `[^\s)>\]]+`
+# stops at the closing paren/bracket of a markdown link so `[text](url)` keeps
+# its text.
+_INLINE_CODE_RE = re.compile(r"`[^`\n]+`")
+_URL_RE = re.compile(r"(?:https?://|www\.)[^\s)>\]]+", re.I)
+# Obsidian/Excalidraw block-reference ids (^9eUffsl8) — drawing/anchor
+# metadata, never prose. Length ≥4 avoids clipping any legit `^` use (math
+# superscripts live inside $…$ and are already gone via strip_math).
+_BLOCK_ID_RE = re.compile(r"\^[A-Za-z0-9]{4,}")
 
 _SENTENCE_SPLIT = re.compile(r"[.!?;\n]+")
 _TOKEN_RE = re.compile(r"[a-zA-ZÀ-ÿ]+")
@@ -58,20 +69,36 @@ def strip_math(text: str) -> str:
     return LATEX_CMD.sub(" ", MATH_SPANS.sub(" ", text))
 
 
+def is_drawing_note(text: str) -> bool:
+    """True for Obsidian Excalidraw notes (front-matter `excalidraw-plugin`).
+
+    These hold compressed drawing data + element ids, never prose — concept
+    extraction skips them so their SVG/label soup never becomes graph nodes.
+    Keyed on the plugin marker, not the folder (drawings scatter across
+    `Excalidraw/` subdirs) nor a `#excalidraw` tag (a prose note may mention
+    the tool). YAML-broken front-matter falls back to a raw substring check.
+    """
+    data, raw_fm, _body = frontmatter.split(text)
+    if isinstance(data, dict) and "excalidraw-plugin" in data:
+        return True
+    return raw_fm is not None and "excalidraw-plugin:" in raw_fm
+
+
 def clean_body(text: str, *, fences: bool) -> str:
     """Note text → clean prose: frontmatter, math and images always stripped.
 
     ``fences`` is the caller's explicit choice (no default on purpose):
-    keyphrase strips code fences so YAKE never ranks identifiers; the
-    co-occurrence graph keeps them — identifiers ARE the graph signal of
-    code notes.
+    keyphrase and prose-vault co-occurrence strip code (fenced + inline) so
+    identifiers never become nodes; a code vault keeps them — identifiers ARE
+    the graph signal of code notes. URLs (incl. schemeless www.) and
+    Obsidian/Excalidraw block-ref ids are always stripped.
     """
     if not text:
         return ""
     _data, _fm, body = frontmatter.split(text)
-    body = strip_math(strip_images(body))
+    body = _BLOCK_ID_RE.sub(" ", _URL_RE.sub(" ", strip_math(strip_images(body))))
     if fences:
-        body = _FENCE_RE.sub(" ", body)
+        body = _INLINE_CODE_RE.sub(" ", _FENCE_RE.sub(" ", body))
     return body
 
 

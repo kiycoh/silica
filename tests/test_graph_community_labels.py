@@ -260,6 +260,20 @@ class TestRenderHtmlCommunities:
         html = render_html([], [], communities=communities, lib_js="// x")
         assert ">5<" in html
 
+    def test_legend_item_carries_data_size(self):
+        """Each legend item needs its size in the DOM so the sort button can read it."""
+        communities = [self._make_community(0, "Kernel · Ledger", size=5)]
+        html = render_html([], [], communities=communities, lib_js="// x")
+        assert 'data-size="5"' in html
+
+    def test_sort_communities_button_present(self):
+        """A button toggles the communities legend between size-ascending/descending."""
+        communities = [self._make_community(0, "A", size=1), self._make_community(1, "B", size=2)]
+        html = render_html([], [], communities=communities, lib_js="// x")
+        assert 'id="sort-communities"' in html
+        assert "function toggleCommunitySort(" in html
+        assert "onclick=\"toggleCommunitySort()\"" in html
+
     def test_comm_text_uses_comm_labels_not_cluster_id(self):
         """The onNodeClick drawer must use COMM_LABELS[node.group], not cluster N."""
         communities = [self._make_community(0, "Topic")]

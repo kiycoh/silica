@@ -131,6 +131,63 @@ def test_build_contribution_nodes_have_label_and_count():
     assert c["nodes"][st("alpha")]["label"] == "alpha"
 
 
+def test_build_contribution_strip_fences_flag():
+    """Prose vaults drop ```code``` identifiers as noise; code vaults keep them."""
+    body = "alpha beta\n```python\nzzident zzident\n```\ngamma delta"
+    st = __import__("snowballstemmer").stemmer("english").stemWord
+    kept = build_contribution("N", body, strip_fences=False)  # legacy default
+    dropped = build_contribution("N", body, strip_fences=True)
+    assert st("zzident") in kept["nodes"]
+    assert st("zzident") not in dropped["nodes"]
+    assert st("gamma") in dropped["nodes"]  # prose around the fence survives
+
+
+def test_build_contribution_strips_inline_code_and_urls():
+    st = __import__("snowballstemmer").stemmer("english").stemWord
+    body = "vedi `zzident` e https://example.com/x?q=zznoise poi gamma delta"
+    c = build_contribution("N", body, strip_fences=True)
+    assert st("zzident") not in c["nodes"]  # inline code (prose gate)
+    assert st("zznoise") not in c["nodes"]  # url query token
+    assert st("gamma") in c["nodes"]
+    # URLs are stripped unconditionally, even on a code vault (fences kept)
+    c2 = build_contribution("N", "alpha https://x.io/zzurl beta", strip_fences=False)
+    assert st("zzurl") not in c2["nodes"]
+    assert st("alpha") in c2["nodes"]
+
+
+def test_build_contribution_strips_schemeless_urls_and_block_ids():
+    st = __import__("snowballstemmer").stemmer("english").stemWord
+    body = "alpha www.zzsite.org/path beta ^zzblockid delta"
+    c = build_contribution("N", body, strip_fences=False)  # unconditional
+    assert st("zzsite") not in c["nodes"]     # schemeless www. url
+    assert st("zzblockid") not in c["nodes"]  # excalidraw/obsidian block ref
+    assert st("alpha") in c["nodes"] and st("delta") in c["nodes"]
+
+
+def test_build_contribution_excludes_excalidraw_drawings():
+    drawing = (
+        "---\ntags: excalidraw\nexcalidraw-plugin: parsed\n---\n"
+        "# Excalidraw Data\n## Text Elements\nSoulsLightGame ^g37aKW7i\n+create() ^D3qzgBfU\n"
+    )
+    c = build_contribution("Drawing 2026", drawing)
+    assert c["nodes"] == {} and c["edges"] == []
+    # a prose note that merely mentions excalidraw (no plugin marker) is kept
+    ok = build_contribution("N", "uso excalidraw come strumento di disegno utile")
+    assert ok["nodes"]
+
+
+def test_strip_fences_keyed_on_manifest_sources(monkeypatch):
+    from silica.kernel import cooccurrence, vault_manifest
+
+    def _manifest(sources):
+        return vault_manifest.VaultManifest(sources=sources)
+
+    monkeypatch.setattr(vault_manifest, "get_active_manifest", lambda: _manifest(("prose",)))
+    assert cooccurrence._strip_fences_for_active_vault() is True
+    monkeypatch.setattr(vault_manifest, "get_active_manifest", lambda: _manifest(("prose", "code")))
+    assert cooccurrence._strip_fences_for_active_vault() is False
+
+
 from silica.kernel.cooccurrence import CooccurStore
 
 

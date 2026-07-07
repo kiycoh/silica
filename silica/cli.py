@@ -327,6 +327,18 @@ def _handle_direct_shortcut(raw_input: str, messages: list[dict]) -> bool:
             reset_manifest_cache()  # manifest is vault-scoped too
             apply_manifest_to_config()
             CONSOLE.print(f"  Vault → [bold]{resolved}[/] (backend: {CONFIG.backend})")
+            # Surface the frozen-language drift here, not only in `/vault` info:
+            # a switch is exactly when a wrong-frozen store (english on an IT
+            # vault) would otherwise stay silent. Reuses the doctor's check.
+            from silica.onboarding.checks import detect_vault_language, frozen_store_language
+
+            detected = detect_vault_language(resolved)
+            store_lang = frozen_store_language(resolved) if detected else None
+            if detected and store_lang and store_lang != detected:
+                CONSOLE.print(
+                    f"  [yellow]⚠ Language: detected {detected}, co-occurrence store "
+                    f"frozen {store_lang} — run /cooccur --force to rebuild.[/]"
+                )
             CONSOLE.print(
                 "  [dim]Index namespace follows the vault — run /embed and /cooccur "
                 "if this vault has not been indexed yet.[/]"

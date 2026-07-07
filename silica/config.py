@@ -41,6 +41,13 @@ class SilicaConfig:
         default_factory=lambda: os.getenv("SILICA_PROVIDER", None)
     )
 
+    # OpenRouter upstream-provider routing (agent/llm.py). Comma-separated
+    # provider names (e.g. "DeepInfra,Together") pinned as the routing `order`
+    # for openrouter/* models; unset → OpenRouter's default auto-routing (as now).
+    openrouter_provider: str = field(
+        default_factory=lambda: os.getenv("OPENROUTER_PROVIDER", "")
+    )
+
     @property
     def provider(self) -> str:
         if self._provider is not None:

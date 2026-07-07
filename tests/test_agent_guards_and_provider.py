@@ -54,6 +54,33 @@ class TestAgentGuardsAndProvider(unittest.TestCase):
         self.assertEqual(kwargs.get("max_tokens"), 100)
         self.assertEqual(resp.finish_reason, "length")
 
+    @patch("litellm.completion")
+    def test_openrouter_provider_routing(self, mock_completion):
+        from silica.config import CONFIG
+        mock_choice = MagicMock()
+        mock_choice.finish_reason = "stop"
+        mock_choice.message.content = "ok"
+        mock_choice.message.tool_calls = None
+        mock_resp = MagicMock(choices=[mock_choice], usage={})
+        mock_completion.return_value = mock_resp
+
+        with patch.object(CONFIG, "openrouter_provider", "DeepInfra, Together"):
+            call_llm(model="openrouter/xiaomi/mimo-v2.5", messages=[])
+        self.assertEqual(
+            mock_completion.call_args[1].get("extra_body"),
+            {"provider": {"order": ["DeepInfra", "Together"], "allow_fallbacks": False}},
+        )
+
+        # Non-openrouter model: no routing injected even when set.
+        with patch.object(CONFIG, "openrouter_provider", "DeepInfra"):
+            call_llm(model="lmstudio/local", messages=[])
+        self.assertNotIn("extra_body", mock_completion.call_args[1])
+
+        # Unset → default behaviour, no extra_body.
+        with patch.object(CONFIG, "openrouter_provider", ""):
+            call_llm(model="openrouter/xiaomi/mimo-v2.5", messages=[])
+        self.assertNotIn("extra_body", mock_completion.call_args[1])
+
     @patch("openai.OpenAI")
     def test_max_tokens_and_finish_reason_in_provider(self, mock_openai_cls):
         mock_client = MagicMock()
@@ -84,6 +111,33 @@ class TestAgentGuardsAndProvider(unittest.TestCase):
         self.assertEqual(kwargs.get("max_tokens"), 4000)
         self.assertTrue(kwargs.get("stream"))
         self.assertEqual(resp.finish_reason, "length")
+
+    @patch("openai.OpenAI")
+    def test_distiller_path_honors_openrouter_provider(self, mock_openai_cls):
+        # The distiller uses the openai SDK directly; the provider pin must
+        # reach it too (not only the litellm call_llm path).
+        from silica.config import CONFIG
+        mock_client = MagicMock()
+        mock_openai_cls.return_value = mock_client
+        chunk = MagicMock()
+        chunk.choices = [MagicMock(finish_reason="stop", delta=MagicMock(content="ok", tool_calls=None))]
+        mock_client.chat.completions.create.return_value = [chunk]
+
+        with patch.object(CONFIG, "openrouter_provider", "DigitalOcean"):
+            prov = OpenAICompatibleProvider(
+                base_url="https://openrouter.ai/api/v1", api_key="k", model="xiaomi/mimo-v2.5")
+            prov.call_llm(messages=[])
+        self.assertEqual(
+            mock_client.chat.completions.create.call_args[1].get("extra_body"),
+            {"provider": {"order": ["DigitalOcean"], "allow_fallbacks": False}},
+        )
+
+        # Local (non-openrouter) base_url: never injected.
+        mock_client.chat.completions.create.reset_mock()
+        with patch.object(CONFIG, "openrouter_provider", "DigitalOcean"):
+            prov = OpenAICompatibleProvider(base_url="http://localhost:1234/v1", api_key="k", model="m")
+            prov.call_llm(messages=[])
+        self.assertNotIn("extra_body", mock_client.chat.completions.create.call_args[1])
 
     @patch("silica.agent.providers.get_provider")
     def test_run_distiller_accepts_complete_output_at_length_limit(self, mock_get_provider):
