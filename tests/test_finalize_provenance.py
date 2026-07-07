@@ -122,7 +122,7 @@ def test_wired_into_handle_cleanup_on_archive(monkeypatch, tmp_vault):
         _current_chunk_idx=0,
         _progress_note=lambda *a, **k: None,
         _write_ledger_for_file=lambda *a, **k: None,
-        _file_chunks=[{"chunks": [{}], "source_file": "Inbox/a.md"}],
+        _file_chunks={0: {"chunks": [{}], "source_file": "Inbox/a.md"}},
         progress=types.SimpleNamespace(tasks=[]),
         inbox_file="Inbox/a.md",
         context={},

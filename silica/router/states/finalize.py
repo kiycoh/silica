@@ -244,7 +244,7 @@ def handle_cleanup(fsm: "InjectorFSM") -> None:
     fsm._write_ledger_for_file(fi, "committed")
 
     # Archive the physical file only on the last chunk of its file group
-    file_group = fsm._file_chunks[fi] if fi < len(fsm._file_chunks) else {}
+    file_group = fsm._file_chunks.get(fi, {})
     n_chunks_in_file = len(file_group.get("chunks", []))
     is_last_chunk_of_file = (ci + 1 >= n_chunks_in_file)
 

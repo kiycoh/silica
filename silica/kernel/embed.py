@@ -63,19 +63,41 @@ def centroid(vectors: list[list[float]]) -> list[float]:
     return np.mean(np.asarray(vectors, dtype=np.float64), axis=0).tolist()
 
 
+# Theme vectors are requested twice per inbox file (RECON rerank + SALIENCE
+# gate) with an identical cleaned body — cache by content so the second call
+# is free. ponytail: crude clear-at-cap bound, fine for per-run lifetimes.
+_theme_cache: dict[tuple[str, str, int], list[float]] = {}
+_THEME_CACHE_MAX = 64
+
+
 def document_theme_vector(embedder: Any, body: str, *, segment_chars: int = _MAX_CHARS) -> list[float]:
     """Thematic centroid of a document: embed body segments then average.
 
     Robust on long notes. Returns [] if embedder fails or body is empty.
+    Cached per (model, body-hash, segment_chars) — see _theme_cache above.
     """
     if not body.strip():
         return []
+    import hashlib
+    key = (
+        getattr(embedder, "model", ""),
+        hashlib.sha1(body.encode("utf-8", "ignore")).hexdigest(),
+        segment_chars,
+    )
+    cached = _theme_cache.get(key)
+    if cached is not None:
+        return cached
     segs = [body[i:i + segment_chars] for i in range(0, len(body), segment_chars)] or [body]
     try:
         vecs = embedder.embed(segs)
     except Exception:
         return []
-    return centroid(vecs)
+    vec = centroid(vecs)
+    if vec:
+        if len(_theme_cache) >= _THEME_CACHE_MAX:
+            _theme_cache.clear()
+        _theme_cache[key] = vec
+    return vec
 
 
 # ---------------------------------------------------------------------------

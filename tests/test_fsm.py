@@ -1018,21 +1018,30 @@ def test_crossdedup_skips_single_file():
 
 
 def test_crossdedup_removes_cross_file_near_duplicate():
-    """A concept that appears in two files with cosine ≥ τ_high is removed from the second file."""
-    recon = [
-        {"file": "Inbox/a.md", "new_concepts": ["PIL"],           "collisions": []},
-        {"file": "Inbox/b.md", "new_concepts": ["Prodotto Interno Lordo"], "collisions": []},
-    ]
-    fsm = _make_fsm_at_crossdedup(recon)
-
-    # vec[0] ≈ vec[1] → high cosine
+    """Incremental CROSSDEDUP: a concept near-duplicate (cosine ≥ τ_high) of a
+    prior file's survivor is removed when the later file's pass runs."""
     similar_vec = [1.0, 0.0, 0.0]
     mock_embedder = MagicMock()
-    mock_embedder.embed.return_value = [similar_vec, similar_vec]
+    mock_embedder.embed.return_value = [similar_vec]  # one concept per file pass
 
     with patch("silica.agent.providers.get_embedder", return_value=mock_embedder), \
          patch("silica.router.orchestrator.CONFIG") as mock_cfg:
         mock_cfg.sim_threshold_high = 0.85
+
+        # File 0 pass: no priors → survivor cached
+        fsm = _make_fsm_at_crossdedup(
+            [{"file": "Inbox/a.md", "new_concepts": ["PIL"], "collisions": []}]
+        )
+        fsm.step()
+        assert fsm.state == InjectorState.PAYLOAD
+        assert fsm.context["recon"][0]["new_concepts"] == ["PIL"]    # survivor kept
+
+        # File 1 pass: same vector → duplicate removed
+        fsm._current_file_idx = 1
+        fsm.state = InjectorState.CROSSDEDUP
+        fsm.context["recon"].append(
+            {"file": "Inbox/b.md", "new_concepts": ["Prodotto Interno Lordo"], "collisions": []}
+        )
         fsm.step()
 
     assert fsm.state == InjectorState.PAYLOAD
@@ -1227,7 +1236,7 @@ def test_hub_inverse_appears_in_chunk_ctx_snapshot(tmp_path):
     }
     fsm._current_chunk_idx = 0
     fsm._chunk_flat_to_fi_ci = {0: (0, 0)}
-    fsm._file_chunks = [{"source_file": "Inbox/test.md", "chunks": [{}]}]
+    fsm._file_chunks = {0: {"source_file": "Inbox/test.md", "chunks": [{}]}}
 
     mock_hub_note = MagicMock()
     mock_hub_note.content = "# Hub\n\nExisting content\n"
@@ -1281,7 +1290,7 @@ def test_hub_update_writes_parent_at_its_real_vault_path(tmp_path):
     }
     fsm._current_chunk_idx = 0
     fsm._chunk_flat_to_fi_ci = {0: (0, 0)}
-    fsm._file_chunks = [{"source_file": "Inbox/test.md", "chunks": [{}]}]
+    fsm._file_chunks = {0: {"source_file": "Inbox/test.md", "chunks": [{}]}}
     fsm._txn = Txn(id="txn-001", created_paths=[], inverses=[])
 
     note = MagicMock()

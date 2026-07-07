@@ -605,6 +605,54 @@ def test_count_files_done():
     assert _count_files_done({}, upto_idx=5) == 0
 
 
+def _capture_file_progress(fn):
+    """Run fn() with the run-progress hook installed; return [(done, total), ...]."""
+    from silica.ui import renderer
+    seen: list[tuple[int, int]] = []
+    renderer._set_run_progress_hook(lambda d, t, label="": seen.append((d, t)))
+    try:
+        fn()
+    finally:
+        renderer._set_run_progress_hook(None)
+    return seen
+
+
+def test_committed_file_counts_toward_bar_done():
+    """Regression: an already-committed (dedup'd) file is in the denominator
+    (len(inbox_files)) but is skipped before PAYLOAD, so it never enters the
+    flat map. It must still count as done, or the bar stalls below 100%."""
+    from silica.router.orchestrator import InjectorFSM
+
+    with patch("silica.kernel.ledger.get_ledger"):
+        fsm = InjectorFSM(inbox_files=["Inbox/a.md", "Inbox/b.md"], target_dir="Concepts")
+    fsm._committed_file_indices = {0}          # file 0 already ingested → skipped
+    fsm._chunk_flat_to_fi_ci = {0: (1, 0)}     # only file 1 got payloaded
+    fsm._chunks = [{}]
+
+    seen = _capture_file_progress(lambda: fsm._emit_files_progress(len(fsm._chunks)))
+    done, total = seen[-1]
+    assert (done, total) == (2, 2), f"bar stalled at {done}/{total} — committed file not counted"
+
+
+def test_file_advance_surfaces_finished_file():
+    """Regression: finishing a file (advancing to the next) must emit progress,
+    else a run of 1-chunk files sits at 0/N until the very last chunk."""
+    from silica.router.orchestrator import InjectorFSM, InjectorState
+
+    with patch("silica.kernel.ledger.get_ledger"):
+        fsm = InjectorFSM(inbox_files=["Inbox/a.md", "Inbox/b.md"], target_dir="Concepts")
+    fsm._chunk_flat_to_fi_ci = {0: (0, 0)}     # file 0 payloaded, one chunk
+    fsm._chunks = [{}]
+    fsm._current_chunk_idx = 0
+    fsm.context["payload"] = {"chunks": fsm._chunks}
+
+    with patch.object(fsm, "_advance_file_or_done", return_value=True):
+        seen = _capture_file_progress(fsm._eval_loop_or_done)
+    assert seen, "no progress emitted when a file finished and the FSM advanced"
+    done, _total = seen[-1]
+    assert done >= 1, f"finished file 0 not reflected (done={done})"
+
+
 def test_injector_bar_total_is_file_count():
     from unittest.mock import patch, PropertyMock
     from rich.console import Console

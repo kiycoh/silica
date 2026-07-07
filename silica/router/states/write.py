@@ -177,7 +177,7 @@ def _attach_section_images(fsm: "InjectorFSM", ops: list) -> None:
     _fi, _ci = fsm._chunk_flat_to_fi_ci.get(fsm._current_chunk_idx, (0, 0))
     source_file = (
         fsm._file_chunks[_fi]["source_file"]
-        if fsm._file_chunks and _fi < len(fsm._file_chunks)
+        if _fi in fsm._file_chunks
         else fsm.inbox_file
     )
     if not source_file:
@@ -447,7 +447,7 @@ def handle_hub_update(fsm: "InjectorFSM") -> None:
     _fi, _ci = fsm._chunk_flat_to_fi_ci.get(fsm._current_chunk_idx, (0, 0))
     _source_file = (
         fsm._file_chunks[_fi]["source_file"]
-        if fsm._file_chunks and _fi < len(fsm._file_chunks)
+        if _fi in fsm._file_chunks
         else fsm.inbox_file
     )
     source_name = os.path.splitext(os.path.basename(_source_file))[0]

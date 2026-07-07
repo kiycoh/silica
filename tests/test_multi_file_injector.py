@@ -85,45 +85,54 @@ class TestT1MultiFileInit:
     @patch("silica.router.orchestrator.silica_payload")
     @patch("silica.kernel.ledger.get_ledger")
     def test_payload_produces_f0_and_f1_tasks(self, mock_ledger, mock_payload, mock_recon):
-        """After _handle_payload, progress has f0_* AND f1_* tasks."""
+        """Per-file pipeline: each file's PAYLOAD pass registers its own f{fi}_* tasks."""
         mock_ledger.return_value.is_committed.return_value = False
 
         mock_recon.side_effect = [
             _make_recon_result("Inbox/a.md"),
             _make_recon_result("Inbox/b.md"),
         ]
-        # Payload returns data with two file batches
-        mock_payload.return_value = {"chunks": [
-            {
+        # Payload is called once per file, with that file's recon only
+        mock_payload.side_effect = [
+            {"chunks": [{
                 "schema_version": 1,
                 "batches": [
                     {"inbox_file": "Inbox/a.md", "concepts": [{"name": "ConceptA"}]},
                 ],
-            },
-            {
+            }]},
+            {"chunks": [{
                 "schema_version": 1,
                 "batches": [
                     {"inbox_file": "Inbox/b.md", "concepts": [{"name": "ConceptB"}]},
                 ],
-            },
-        ]}
+            }]},
+        ]
 
         # No builtins.open patch here — _make_tmp needs real file I/O to ~/.silica/tmp
         # We bypass run() by setting state directly so no inbox file open is needed
         fsm = InjectorFSM(inbox_files=["Inbox/a.md", "Inbox/b.md"], target_dir="Concepts")
         fsm._file_canonicals = ["inbox/a", "inbox/b"]
         fsm._file_content_hashes = ["", ""]
+        # File 0 setup pass
         fsm.state = InjectorState.RECON
         fsm.step()  # RECON → CROSSDEDUP
         fsm.step()  # CROSSDEDUP → PAYLOAD
         fsm.step()  # PAYLOAD → SALIENCE
 
         task_ids = [t.id for t in fsm.progress.tasks]
-        # Should have f0_* tasks (file 0)
-        f0_tasks = [tid for tid in task_ids if tid.startswith("f0_")]
-        # Should have f1_* tasks (file 1) — from second chunk/file
+        assert [tid for tid in task_ids if tid.startswith("f0_")], f"No f0_* tasks in {task_ids}"
+        # File 1 not yet processed — its tasks appear only after its own PAYLOAD pass
+        assert not [tid for tid in task_ids if tid.startswith("f1_")]
+
+        # File advance (normally triggered by _eval_loop_or_done after f0's last chunk)
+        assert fsm._advance_file_or_done()
+        assert fsm.state == InjectorState.RECON
+        fsm.step()  # RECON → CROSSDEDUP
+        fsm.step()  # CROSSDEDUP → PAYLOAD
+        fsm.step()  # PAYLOAD → SALIENCE
+
+        task_ids = [t.id for t in fsm.progress.tasks]
         f1_tasks = [tid for tid in task_ids if tid.startswith("f1_")]
-        assert f0_tasks, f"No f0_* tasks found in {task_ids}"
         assert f1_tasks, f"No f1_* tasks found in {task_ids}"
 
     def test_silica_run_injector_single_fsm_for_multiple_files(self):
@@ -350,7 +359,7 @@ class TestT4PerFileCleanup:
                 with patch("silica.kernel.ledger.get_ledger"):
                     fsm = InjectorFSM("Inbox/test.md", "Concepts")
                     # Two chunks under one file group
-                    fsm._file_chunks = [{"source_file": "Inbox/test.md", "chunks": [{"a": 1}, {"b": 2}]}]
+                    fsm._file_chunks = {0: {"source_file": "Inbox/test.md", "chunks": [{"a": 1}, {"b": 2}]}}
                     fsm._chunks = [{"a": 1}, {"b": 2}]
                     fsm._chunk_flat_to_fi_ci = {0: (0, 0), 1: (0, 1)}
                     fsm._current_chunk_idx = 0  # ci=0, not last
@@ -365,7 +374,7 @@ class TestT4PerFileCleanup:
             with patch("silica.router.orchestrator.load_ops", return_value=[]):
                 with patch("silica.kernel.ledger.get_ledger"):
                     fsm = InjectorFSM("Inbox/test.md", "Concepts")
-                    fsm._file_chunks = [{"source_file": "Inbox/test.md", "chunks": [{"a": 1}, {"b": 2}]}]
+                    fsm._file_chunks = {0: {"source_file": "Inbox/test.md", "chunks": [{"a": 1}, {"b": 2}]}}
                     fsm._chunks = [{"a": 1}, {"b": 2}]
                     fsm._chunk_flat_to_fi_ci = {0: (0, 0), 1: (0, 1)}
                     fsm._current_chunk_idx = 1  # ci=1, last chunk
@@ -602,10 +611,10 @@ def test_current_source_file_returns_per_chunk_file():
     from silica.router.orchestrator import InjectorFSM
 
     fsm = InjectorFSM(inbox_files=["Inbox/a.md", "Inbox/b.md"], target_dir="Concepts")
-    fsm._file_chunks = [
-        {"source_file": "Inbox/a.md", "chunks": [{}]},
-        {"source_file": "Inbox/b.md", "chunks": [{}]},
-    ]
+    fsm._file_chunks = {
+        0: {"source_file": "Inbox/a.md", "chunks": [{}]},
+        1: {"source_file": "Inbox/b.md", "chunks": [{}]},
+    }
     fsm._chunk_flat_to_fi_ci = {0: (0, 0), 1: (1, 0)}
 
     fsm._current_chunk_idx = 0

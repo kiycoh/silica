@@ -292,9 +292,15 @@ class InjectorFSM(BaseFSM[InjectorState]):
         # Iterative chunk processing state fields
         self._chunks: list[dict] = []
         self._current_chunk_idx: int = 0
-        # Multi-file hierarchy (§3.6): per-file chunk groups + flat→(fi,ci) mapping
-        self._file_chunks: list[dict] = []  # [{"source_file": str, "chunks": [...]}, ...]
+        # Per-file pipeline: setup states (RECON→SALIENCE) run one file at a
+        # time; the FSM loops back to RECON for the next file after the current
+        # file's chunks are written. Keyed by global inbox-file index so
+        # committed-file skips never desync fi from inbox_files.
+        self._current_file_idx: int = 0
+        self._file_chunks: dict[int, dict] = {}  # fi → {"source_file": str, "chunks": [...]}
         self._chunk_flat_to_fi_ci: dict[int, tuple[int, int]] = {}  # flat_idx → (file_idx, chunk_idx)
+        # CROSSDEDUP incremental state: (concept_name, vec) of prior files' survivors
+        self._crossdedup_vecs: list[tuple[str, list[float]]] = []
 
         # S3.3: Load the recipe for dynamic configuration. The recipe is bundled
         # package data — if it's missing the install is broken; fail fast.
@@ -546,6 +552,10 @@ class InjectorFSM(BaseFSM[InjectorState]):
         # this run reads the index (no-op/sub-ms when the index is in sync).
         _reconcile_embed_index()
 
+        # Per-file pipeline: start at the first uncommitted file (committed
+        # files are skipped entirely — no recon/embedding spent on them).
+        self._current_file_idx = self._next_uncommitted_file_idx(0)
+
         self.state = InjectorState.RECON
         return self._run_loop()
 
@@ -605,10 +615,39 @@ class InjectorFSM(BaseFSM[InjectorState]):
         try:
             from silica.ui.renderer import emit_run_progress
             total = len(self.inbox_files)
+            # Committed (dedup'd) files are skipped before PAYLOAD, so they never
+            # enter the flat map — count them as done or the bar can't reach total.
             done = _count_files_done(self._chunk_flat_to_fi_ci, upto_idx)
+            done += len(getattr(self, "_committed_file_indices", set()))
             emit_run_progress(min(done, total), total, label=self._current_source_file)
         except Exception:
             pass
+
+    def _next_uncommitted_file_idx(self, start: int) -> int:
+        """Return the first file index >= start not already committed in the ledger."""
+        idx = start
+        committed = getattr(self, "_committed_file_indices", set())
+        while idx < len(self.inbox_files) and idx in committed:
+            logger.info("Skipping already-committed file %d: %s", idx, self.inbox_files[idx])
+            idx += 1
+        return idx
+
+    def _advance_file_or_done(self) -> bool:
+        """Per-file pipeline: move to the next uncommitted inbox file (→ RECON).
+
+        Returns True when a next file exists (state set to RECON), False when
+        none remain (caller concludes the run).
+        """
+        next_fi = self._next_uncommitted_file_idx(self._current_file_idx + 1)
+        if next_fi >= len(self.inbox_files):
+            return False
+        self._current_file_idx = next_fi
+        logger.info(
+            "Advancing to file %d/%d: %s",
+            next_fi + 1, len(self.inbox_files), self.inbox_files[next_fi],
+        )
+        self.state = InjectorState.RECON
+        return True
 
     def _eval_loop_or_done(self) -> None:
         """Check if there are more chunks to process or if the queue is empty."""
@@ -624,6 +663,8 @@ class InjectorFSM(BaseFSM[InjectorState]):
             logger.info(f"✔ Batch completed successfully. Advancing to batch {self._current_chunk_idx + 1}")
             # Restart per-chunk loop from COLLISION (Phase 5) if present, else DELEGATE
             self.state = InjectorState.COLLISION if self._has_collision_phase else InjectorState.DELEGATE
+        elif self._advance_file_or_done():
+            self._emit_files_progress(len(self._chunks))  # surface the finished file
         else:
             self._emit_files_progress(len(self._chunks))
             logger.info("🎉 All batched chunks have been successfully injected and verified!")
@@ -745,6 +786,9 @@ class InjectorFSM(BaseFSM[InjectorState]):
                 fi, ci, self._current_chunk_idx + 1, len(self._chunks),
             )
             self.state = InjectorState.COLLISION if self._has_collision_phase else InjectorState.DELEGATE
+        elif self._advance_file_or_done():
+            self._emit_files_progress(len(self._chunks))  # surface the finished file
+            logger.info("Chunk f%d_c%d failed (last chunk of file) — advancing to next file.", fi, ci)
         else:
             self._emit_files_progress(len(self._chunks))
             logger.info(
@@ -769,7 +813,7 @@ class InjectorFSM(BaseFSM[InjectorState]):
     def _current_source_file(self) -> str:
         """Vault-relative path of the inbox file for the current chunk."""
         fi, _ = self._chunk_flat_to_fi_ci.get(self._current_chunk_idx, (0, 0))
-        if self._file_chunks and fi < len(self._file_chunks):
+        if fi in self._file_chunks:
             return self._file_chunks[fi]["source_file"]
         return self.inbox_file
 

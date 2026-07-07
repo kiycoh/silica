@@ -21,68 +21,70 @@ logger = logging.getLogger(__name__)
 
 
 def handle_recon(fsm: "InjectorFSM") -> None:
+    """Concept recon for the CURRENT file only (per-file pipeline).
+
+    The FSM loops RECON→…→WRITE per file: file 0 reaches its first write
+    after one file's worth of embedding, not the whole inbox's. Cross-file
+    coherence is carried by the substrate refreshed after each write, not by
+    an up-front all-files pass.
+    """
+    fi = fsm._current_file_idx
+    inbox_file = fsm.inbox_files[fi]
     fsm._progress_note("recon", "recon", "running")
 
-    # Iterate all inbox files and aggregate recon reports into a list
-    recon_list: list[dict] = []
-    deferred_notices: list[dict] = []
-    for fi, inbox_file in enumerate(fsm.inbox_files):
-        res = orch.silica_recon(inbox_file)
-        if "error" in res:
-            fsm._progress_note("recon", "recon", "failed", error=res["error"])
-            raise RuntimeError(f"Recon failed for {inbox_file}: {res['error']}")
-        recon_list.append(res)
+    res = orch.silica_recon(inbox_file)
+    if "error" in res:
+        fsm._progress_note("recon", "recon", "failed", error=res["error"])
+        raise RuntimeError(f"Recon failed for {inbox_file}: {res['error']}")
+    # Accumulated across files — context["recon"] stays a list for uniformity
+    fsm.context.setdefault("recon", []).append(res)
 
-        # Surface any deferred ops from a previous run of this file
-        content_hash = fsm._file_content_hashes[fi] if fi < len(fsm._file_content_hashes) else ""
-        if content_hash:
-            from silica.kernel.deferred import get_deferred_store
-            bundle = get_deferred_store().get(content_hash)
-            if bundle:
-                rejected_count = len(bundle.get("rejected_ops", []))
-                logger.info(
-                    "RECON: %d deferred op(s) from a previous run of '%s' are waiting. "
-                    "Call silica_deferred_retry('%s') to attempt them.",
-                    rejected_count, inbox_file, content_hash[:8],
-                )
-                deferred_notices.append({
-                    "inbox_file": inbox_file,
-                    "content_hash": content_hash,
-                    "rejected_count": rejected_count,
-                })
-
-    # Always a list — even for single-file runs — so _handle_payload is uniform
-    fsm.context["recon"] = recon_list
-    if deferred_notices:
-        fsm.context["deferred"] = deferred_notices[0] if len(deferred_notices) == 1 else deferred_notices
+    # Surface any deferred ops from a previous run of this file
+    content_hash = fsm._file_content_hashes[fi] if fi < len(fsm._file_content_hashes) else ""
+    if content_hash:
+        from silica.kernel.deferred import get_deferred_store
+        bundle = get_deferred_store().get(content_hash)
+        if bundle:
+            rejected_count = len(bundle.get("rejected_ops", []))
+            logger.info(
+                "RECON: %d deferred op(s) from a previous run of '%s' are waiting. "
+                "Call silica_deferred_retry('%s') to attempt them.",
+                rejected_count, inbox_file, content_hash[:8],
+            )
+            notice = {
+                "inbox_file": inbox_file,
+                "content_hash": content_hash,
+                "rejected_count": rejected_count,
+            }
+            existing = fsm.context.get("deferred")
+            if existing is None:
+                fsm.context["deferred"] = notice
+            elif isinstance(existing, list):
+                existing.append(notice)
+            else:
+                fsm.context["deferred"] = [existing, notice]
 
     fsm._progress_note("recon", "recon", "done")
     fsm._transition_success()
 
 
 def handle_crossdedup(fsm: "InjectorFSM") -> None:
-    """Cross-file concept deduplication — Phase 1.5.
+    """Cross-file concept deduplication — Phase 1.5, incremental variant.
 
-    Embeds concept names extracted by RECON across all inbox files.
-    Near-duplicate concepts from different files (cosine ≥ τ_high) are
-    merged: the first-file occurrence is kept, the duplicate is removed.
-    Best-effort: silently skips when the embedder is unavailable or
-    fewer than two inbox files are present.
+    Embeds the CURRENT file's new_concepts (one small call) and compares them
+    against the cached vectors of prior files' survivors: a near-duplicate
+    (cosine ≥ τ_high) is removed, first-file occurrence wins — same semantics
+    as the old all-files pass, paid per file instead of up-front. Best-effort:
+    silently skips when the embedder is unavailable or the run is single-file.
     """
     recon_list: list[dict] = fsm.context.get("recon", [])
-
-    if len(recon_list) < 2:
+    if not recon_list or len(fsm.inbox_files) < 2:
         fsm._transition_success()
         return
 
-    # Collect (file_index, concept_name) for all new_concepts across files
-    all_concepts: list[tuple[int, str]] = [
-        (fi, name)
-        for fi, rec in enumerate(recon_list)
-        for name in rec.get("new_concepts", [])
-    ]
-
-    if len(all_concepts) < 2:
+    cur = recon_list[-1]  # appended by RECON for the current file
+    names = list(cur.get("new_concepts", []))
+    if not names:
         fsm._transition_success()
         return
 
@@ -95,52 +97,37 @@ def handle_crossdedup(fsm: "InjectorFSM") -> None:
         fsm._transition_success()
         return
 
-    texts = [name for _, name in all_concepts]
     try:
-        vecs = embedder.embed(texts)
+        vecs = embedder.embed(names)
     except Exception as _e:
         logger.warning("CROSSDEDUP: embed call failed (%s) — skipping", _e)
         fsm._transition_success()
         return
 
     τ_high = getattr(orch.CONFIG, "sim_threshold_high", 0.85)
+    fi = fsm._current_file_idx
+    removed = 0
+    for name, vec in zip(names, vecs):
+        dup = next(
+            ((pn, _cosine(vec, pv)) for pn, pv in fsm._crossdedup_vecs
+             if _cosine(vec, pv) >= τ_high),
+            None,
+        )
+        if dup is not None:
+            nc = cur.get("new_concepts", [])
+            if name in nc:
+                nc.remove(name)
+            removed += 1
+            logger.info(
+                "CROSSDEDUP: '%s' (file %d) merged into '%s' (score=%.3f)",
+                name, fi, dup[0], dup[1],
+            )
+        else:
+            fsm._crossdedup_vecs.append((name, vec))
 
-    # Greedy O(n²) clustering: mark cross-file near-duplicates for removal.
-    # The first occurrence (lowest file index) is always the winner.
-    losers: set[int] = set()
-    for i in range(len(all_concepts)):
-        if i in losers:
-            continue
-        fi, name_i = all_concepts[i]
-        for j in range(i + 1, len(all_concepts)):
-            if j in losers:
-                continue
-            fj, name_j = all_concepts[j]
-            if fi == fj:
-                continue
-            if _cosine(vecs[i], vecs[j]) >= τ_high:
-                losers.add(j)
-                logger.info(
-                    "CROSSDEDUP: '%s' (file %d) merged into '%s' (file %d, score=%.3f)",
-                    name_j, fj, name_i, fi, _cosine(vecs[i], vecs[j]),
-                )
-
-    if not losers:
-        fsm._transition_success()
-        return
-
-    for idx in losers:
-        fi, name = all_concepts[idx]
-        nc = recon_list[fi].get("new_concepts", [])
-        if name in nc:
-            nc.remove(name)
-
-    fsm.context["recon"] = recon_list
-    fsm.context["crossdedup_merged"] = len(losers)
-    logger.info(
-        "CROSSDEDUP: %d duplicate concept(s) removed across %d files",
-        len(losers), len(recon_list),
-    )
+    if removed:
+        fsm.context["crossdedup_merged"] = fsm.context.get("crossdedup_merged", 0) + removed
+        logger.info("CROSSDEDUP: %d duplicate concept(s) removed from file %d", removed, fi)
     fsm._transition_success()
 
 
@@ -240,9 +227,18 @@ def build_vault_graph_ctx(fsm: "InjectorFSM") -> dict[str, dict]:
 
 
 def handle_payload(fsm: "InjectorFSM") -> None:
+    """Payload assembly for the CURRENT file only (per-file pipeline).
+
+    Appends this file's chunks to the flat chunk list and registers its
+    progress tasks; earlier files' chunks are already written by the time
+    this runs again for the next file.
+    """
+    fi = fsm._current_file_idx
+    inbox_file = fsm.inbox_files[fi] if fi < len(fsm.inbox_files) else fsm.inbox_file
     fsm._progress_note("payload", "payload", "running")
-    # fsm.context["recon"] is now always a list of per-file recon dicts
-    recon_path = fsm._make_tmp(fsm.context["recon"])
+    # Current file's recon only — appended last by RECON
+    recon_cur = fsm.context["recon"][-1]
+    recon_path = fsm._make_tmp([recon_cur])
     phase_conf = fsm._get_recipe_phase("payload")
     max_concepts = phase_conf.get("partition_if_over", 200)
     max_bytes = int(os.getenv("DISTILLER_CHUNK_MAX_BYTES", str(30 * 1024)))
@@ -252,9 +248,8 @@ def handle_payload(fsm: "InjectorFSM") -> None:
         raise RuntimeError(f"Payload failed: {res['error']}")
     fsm.context["payload"] = res
 
-    # Build per-file chunk hierarchy (§3.6).
-    # Try to use partition_by_file when the payload has proper batch structure;
-    # fall back to the legacy flat-chunk path when batches are absent (e.g. tests).
+    # Re-partition this file's payload (§3.6); fall back to the legacy
+    # flat-chunk path when batch structure is absent (e.g. tests).
     from silica.kernel.partition import partition_by_file
 
     raw_payload: dict | None = None
@@ -270,64 +265,48 @@ def handle_payload(fsm: "InjectorFSM") -> None:
     elif "payload" in res:
         raw_payload = res["payload"]
 
+    new_chunks: list[dict] = []
     if raw_payload and max_concepts > 0:
-        attempt = partition_by_file(raw_payload, max_concepts)
-        if attempt:
-            fsm._file_chunks = attempt
+        # Single-file recon → normally a single group; collect all defensively.
+        for fg in partition_by_file(raw_payload, max_concepts) or []:
+            new_chunks.extend(fg.get("chunks", []))
 
-    if not fsm._file_chunks:
-        # Fallback: all chunks belong to the first (or only) inbox file.
-        # Do NOT split by chunk — one physical file = one file group.
-        raw_chunks = res.get("chunks", [])
-        if not raw_chunks and "payload" in res:
-            raw_chunks = [res["payload"]]
-        if not raw_chunks:
-            raw_chunks = [res]
-        fsm._file_chunks.append({"source_file": fsm.inbox_file, "chunks": raw_chunks})
+    if not new_chunks:
+        # Fallback: all chunks of this payload belong to the current file.
+        new_chunks = res.get("chunks", [])
+        if not new_chunks and "payload" in res:
+            new_chunks = [res["payload"]]
+        if not new_chunks:
+            new_chunks = [res]
 
-    # Build flat chunk list preserving file order (for existing handler logic)
-    fsm._chunks = []
-    fsm._chunk_flat_to_fi_ci = {}
-    flat_idx = 0
-    for fi, fg in enumerate(fsm._file_chunks):
-        for ci, chunk in enumerate(fg.get("chunks", [])):
-            fsm._chunks.append(chunk)
-            fsm._chunk_flat_to_fi_ci[flat_idx] = (fi, ci)
-            flat_idx += 1
+    # Append this file's chunk group; flat indices continue after prior files'
+    start_flat = len(fsm._chunks)
+    fsm._file_chunks[fi] = {"source_file": inbox_file, "chunks": new_chunks}
+    for ci, chunk in enumerate(new_chunks):
+        fsm._chunks.append(chunk)
+        fsm._chunk_flat_to_fi_ci[start_flat + ci] = (fi, ci)
+    fsm._current_chunk_idx = start_flat
 
-    if not fsm._chunks:
-        fsm._chunks = [res]
-        fsm._chunk_flat_to_fi_ci = {0: (0, 0)}
-
-    fsm._current_chunk_idx = 0
-
-    # Build facts["sources"] with per-file concept + chunk counts
-    sources_facts: list[dict] = []
-    for fi, fg in enumerate(fsm._file_chunks):
-        n_chunks = len(fg.get("chunks", []))
-        n_concepts = sum(
-            len(b.get("concepts", []))
-            for chunk in fg.get("chunks", [])
-            for b in chunk.get("batches", [])
-        )
-        sources_facts.append({
-            "inbox_file": fg["source_file"],
-            "concepts": n_concepts,
-            "chunks": n_chunks,
-        })
-
-    # Stash per-file stats in progress inputs for the digest
-    fsm.progress.inputs["sources"] = sources_facts
+    # Accumulate facts["sources"] with per-file concept + chunk counts
+    n_concepts = sum(
+        len(b.get("concepts", []))
+        for chunk in new_chunks
+        for b in chunk.get("batches", [])
+    )
+    fsm.progress.inputs.setdefault("sources", []).append({
+        "inbox_file": inbox_file,
+        "concepts": n_concepts,
+        "chunks": len(new_chunks),
+    })
 
     # Register per-chunk tasks with f{fi}_c{ci}_{cap} IDs and intra-file deps
     caps = ("collision", "distill", "sanitize", "validate", "snapshot", "write", "hub_update", "autolink", "backlink", "lint", "cleanup")
-    for fi, fg in enumerate(fsm._file_chunks):
-        prev_in_file = "payload"
-        for ci in range(len(fg.get("chunks", []))):
-            for cap in caps:
-                tid = f"f{fi}_c{ci}_{cap}"
-                fsm.progress.add_task(cap, task_id=tid, depends_on=[prev_in_file])
-                prev_in_file = tid
+    prev_in_file = "payload"
+    for ci in range(len(new_chunks)):
+        for cap in caps:
+            tid = f"f{fi}_c{ci}_{cap}"
+            fsm.progress.add_task(cap, task_id=tid, depends_on=[prev_in_file])
+            prev_in_file = tid
     try:
         fsm.progress.save()
     except Exception as _e:
@@ -335,34 +314,34 @@ def handle_payload(fsm: "InjectorFSM") -> None:
 
     fsm._progress_note("payload", "payload", "done")
     logger.info(
-        "Pipeline initialized: %d file(s), %d total chunk(s). Files: %s",
-        len(fsm._file_chunks),
-        len(fsm._chunks),
-        [fg["source_file"] for fg in fsm._file_chunks],
+        "File %d/%d '%s': %d chunk(s) queued (flat %d–%d).",
+        fi + 1, len(fsm.inbox_files), inbox_file,
+        len(new_chunks), start_flat, len(fsm._chunks) - 1,
     )
 
-    # Build vault graph context (cluster/hub/pagerank) once per run.
-    # Stored in context["vault_graph_ctx"] and consumed by COLLISION,
+    # Build vault graph context (cluster/hub/pagerank) once per run — reused
+    # across files (consumers accept bounded staleness). Consumed by COLLISION,
     # DELEGATE (distiller enrichment), AUTOLINK, and HUB_UPDATE.
-    fsm.context["vault_graph_ctx"] = build_vault_graph_ctx(fsm)
+    if "vault_graph_ctx" not in fsm.context:
+        fsm.context["vault_graph_ctx"] = build_vault_graph_ctx(fsm)
 
     fsm._transition_success()
 
 
 def handle_salience(fsm: "InjectorFSM") -> None:
-    """Thematic salience gate — Phase 2.05.
+    """Thematic salience gate — Phase 2.05, current file's chunks only.
 
-    Single-pass over ALL chunks: drops concepts whose embedding is too far
-    from the document's thematic centroid.  Best-effort: any failure
-    (embedder down, empty index) is logged and chunks pass unchanged.
-    Does NOT re-run on subsequent chunk iterations — _eval_loop_or_done
-    restarts from COLLISION, which is correct.
+    Drops concepts whose embedding is too far from the document's thematic
+    centroid.  Best-effort: any failure (embedder down, empty index) is
+    logged and chunks pass unchanged.  Runs once per file (per-file
+    pipeline); _eval_loop_or_done restarts chunks from COLLISION, which is
+    correct.
     """
     τ_theme = getattr(orch.CONFIG, "sim_threshold_theme", 0.35)
     try:
         from silica.agent.providers import get_embedder
         from silica.kernel.embed import document_theme_vector, _cosine
-        from silica.kernel.recon import _strip_frontmatter
+        from silica.kernel.text import clean_body
         embedder = get_embedder(orch.CONFIG)
     except Exception as _e:
         logger.warning("SALIENCE: embedder unavailable (%s) — skipping", _e)
@@ -373,12 +352,20 @@ def handle_salience(fsm: "InjectorFSM") -> None:
     theme_cache: dict[str, list[float]] = {}
     dropped = 0
 
-    for chunk in fsm._chunks:
+    cur_fi = fsm._current_file_idx
+    current_chunks = [
+        chunk for flat_idx, chunk in enumerate(fsm._chunks)
+        if fsm._chunk_flat_to_fi_ci.get(flat_idx, (0, 0))[0] == cur_fi
+    ] or fsm._chunks  # fallback: no fi map (legacy/test paths) → all chunks
+
+    for chunk in current_chunks:
         for batch in chunk.get("batches", []):
             inbox_file = batch.get("inbox_file", fsm.inbox_file)
             if inbox_file not in theme_cache:
                 try:
-                    body = _strip_frontmatter(orch.DRIVER.read_note(inbox_file).content)
+                    # Same cleaned body as RECON's keyphrase pass → the theme
+                    # vector is a cache hit in embed._theme_cache, no re-embed.
+                    body = clean_body(orch.DRIVER.read_note(inbox_file).content, fences=True)
                 except Exception:
                     body = ""
                 theme_cache[inbox_file] = document_theme_vector(embedder, body)
