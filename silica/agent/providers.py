@@ -298,6 +298,66 @@ def get_embedder(config: Any) -> OpenAIEmbedder:
     )
 
 
+class Reranker:
+    """Cross-encoder reranker over a served /rerank endpoint.
+
+    Speaks the de-facto protocol (llama.cpp --rerank, Infinity, Jina, Cohere):
+    ``POST {model, query, documents} -> {results: [{index, relevance_score}]}``.
+    A cross-encoder scores query x document *jointly* — the biggest precision
+    lever retrieval has after first-stage recall — so it is used to reorder an
+    already-fused candidate pool, never to retrieve.
+    """
+
+    def __init__(self, base_url: str, model: str, api_key: str = "", timeout: float = 5.0):
+        self.url = base_url.rstrip("/") + "/rerank"
+        self.model = model
+        self.headers = {"Authorization": f"Bearer {api_key}"} if api_key else {}
+        self.timeout = timeout
+
+    def scores(self, query: str, documents: list[str]) -> list[float] | None:
+        """Relevance score per document in input order, or None to abstain.
+
+        Abstains (None) on any transport or response-shape failure so the caller
+        keeps its prior ordering rather than dropping candidates. The short
+        timeout keeps a slow reranker from stalling an interactive path.
+        """
+        if not query or not documents:
+            return None
+        try:
+            resp = httpx.post(
+                self.url,
+                json={"model": self.model, "query": query, "documents": documents},
+                headers=self.headers,
+                timeout=self.timeout,
+            )
+            resp.raise_for_status()
+            results = resp.json().get("results")
+            if not isinstance(results, list):
+                return None
+            scored = [0.0] * len(documents)
+            for r in results:
+                i = r.get("index")
+                if isinstance(i, int) and 0 <= i < len(documents):
+                    scored[i] = float(r.get("relevance_score", r.get("score", 0.0)))
+            return scored
+        except Exception as e:
+            logger.debug("rerank abstained: %s", e)
+            return None
+
+
+def get_reranker(config: Any) -> Reranker | None:
+    """Return a Reranker when a /rerank endpoint is configured, else None (disabled)."""
+    base_url = getattr(config, "rerank_base_url", "")
+    model = getattr(config, "rerank_model", "")
+    if not base_url or not model:
+        return None
+    return Reranker(
+        base_url=base_url,
+        model=model,
+        api_key=getattr(config, "rerank_api_key", ""),
+    )
+
+
 def get_provider(config: Any, role: str = "router") -> OpenAICompatibleProvider:
     """Return an LLM provider for the given role.
 

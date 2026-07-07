@@ -132,13 +132,20 @@ class Coordinator:
             from silica.kernel.embed import get_store
             from silica.kernel.relatedness import related_notes
 
+            from silica.agent.providers import get_reranker
+            from silica.kernel.rerank import note_document, rerank_related
+
             key = _norm_path(path)
+            reranker = get_reranker(CONFIG)
+            pool = max(k, 20) if reranker else k
             results = related_notes(
                 key,
                 embed_store=get_store(),
                 cooccur_store=get_cooccur_store(lang=CONFIG.cooccurrence_lang),
-                k=k,
+                k=pool,
             )
+            if reranker:
+                results = rerank_related(reranker, note_document(key), results, k=k)
             return [{"name": r.name, "path": r.path} for r in results]
         except Exception as e:
             logger.debug("orphan candidate lookup failed (non-fatal): %s", e)

@@ -180,6 +180,20 @@ class SilicaConfig:
         default_factory=lambda: os.getenv("SILICA_EMBEDDING_API_KEY", "lm-studio")
     )
 
+    # Cross-encoder reranker (optional, OFF by default). When both base_url and
+    # model are set, the relatedness retrieval sites rerank the fused candidate
+    # pool with a served /rerank endpoint (llama.cpp --rerank, Infinity, Jina,
+    # Cohere). An empty base_url or model leaves the reranker disabled (no-op).
+    rerank_base_url: str = field(
+        default_factory=lambda: os.getenv("SILICA_RERANK_BASE_URL", "")
+    )
+    rerank_model: str = field(
+        default_factory=lambda: os.getenv("SILICA_RERANK_MODEL", "")
+    )
+    rerank_api_key: str = field(
+        default_factory=lambda: os.getenv("SILICA_RERANK_API_KEY", "lm-studio")
+    )
+
     # Cosine similarity thresholds for dedup routing (Phase 5)
     # score >= sim_threshold_high → strong duplicate → patch existing note
     # score <= sim_threshold_low  → clearly new concept → write new note
