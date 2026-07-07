@@ -250,37 +250,71 @@ def silica_backlink(new_titles: list[str], neighbourhood: list[str]) -> dict[str
     return {"added": total, "notes_modified": len(added_map), "details": added_map}
 
 
+def _facade_search(text: str, k: int) -> dict[str, Any]:
+    """Fused embeddings + co-occurrence search for a fresh text, then reranked.
+
+    Shared core of silica_semantic_search and silica_similar. Returns
+    ``{"results": [{path, name, score}, ...]}`` or ``{"error": ...}`` when no
+    index is available at all. The two legs abstain independently: an empty
+    embedding index (or an offline embedder) still serves co-occurrence results,
+    and vice versa — mirroring how autolink/collision consume the facade.
+    """
+    from silica.agent.providers import get_embedder, get_reranker
+    from silica.config import CONFIG
+    from silica.kernel.cooccurrence import get_cooccur_store
+    from silica.kernel.embed import get_store
+    from silica.kernel.relatedness import related_notes_for_query
+    from silica.kernel.rerank import rerank_related
+
+    embed_store = get_store()
+    try:
+        cooccur_store = get_cooccur_store(lang=CONFIG.cooccurrence_lang)
+        if len(cooccur_store) == 0:
+            cooccur_store = None
+    except Exception:
+        cooccur_store = None
+
+    query_vec = None
+    if len(embed_store) > 0:
+        try:
+            query_vec = get_embedder(CONFIG).embed([text])[0]
+        except Exception:
+            query_vec = None  # embed leg abstains; co-occurrence may still carry
+
+    if query_vec is None and cooccur_store is None:
+        return {"error": "No index available. Run silica_embed_refresh or silica_cooccurrence_refresh first."}
+
+    reranker = get_reranker(CONFIG)
+    pool = max(k, 20) if reranker else k
+    results = related_notes_for_query(
+        query_vec=query_vec,
+        query_text=text,
+        embed_store=embed_store,
+        cooccur_store=cooccur_store,
+        k=pool,
+    )
+    results = rerank_related(reranker, text, results, k=k) if reranker else results[:k]
+    return {"results": [{"path": r.path, "name": r.name, "score": round(r.score, 4)} for r in results]}
+
+
 class SemanticSearchArgs(BaseModel):
     query: str = Field(description="Free-form query text to embed and search against the vault index")
     k: int = Field(default=5, description="Number of results to return")
 
 @tool(SemanticSearchArgs, cls="composed")
 def silica_semantic_search(query: str, k: int = 5) -> dict[str, Any]:
-    """Find vault notes by MEANING: embeds a short query and ranks notes by similarity.
+    """Find vault notes by MEANING: fuses embeddings + co-occurrence, then reranks.
 
-    Use for "what do I have about X" when the exact wording is unknown. For
-    literal text matches use silica_search_context; to rank against a longer
-    text you already have (a snippet, a note body) use silica_similar.
-    Returns at most k results, highest similarity first. Requires the embedding
-    index (silica_embed_refresh). Results are candidates — verify with
+    Use for "what do I have about X" when the exact wording is unknown. Routes
+    through the same relatedness facade as autolink/collision — RRF fusion of the
+    embedding and co-occurrence legs, cross-encoder reranked when configured — so
+    a leg that is down (empty embedding index, embedder offline) degrades to the
+    survivor instead of failing. For literal text matches use
+    silica_search_context; to rank against a longer text you already have use
+    silica_similar. Returns at most k results, best first; verify with
     silica_read_note before acting on them.
     """
-    from silica.agent.providers import get_embedder
-    from silica.config import CONFIG
-    from silica.kernel.embed import get_store
-
-    store = get_store()
-    if len(store) == 0:
-        return {"error": "Embedding index is empty. Run silica_embed_refresh to build it first."}
-
-    try:
-        embedder = get_embedder(CONFIG)
-        vecs = embedder.embed([query])
-    except Exception as e:
-        return {"error": f"Embedding call failed: {e}"}
-
-    results = store.cosine_top_k(vecs[0], k=k)
-    return {"query": query, "results": results}
+    return {"query": query, **_facade_search(query, k=k)}
 
 
 class SimilarArgs(BaseModel):
@@ -291,26 +325,12 @@ class SimilarArgs(BaseModel):
 def silica_similar(text: str, k: int = 5) -> dict[str, Any]:
     """Find vault notes semantically similar to a given text snippet.
 
-    Same index as silica_semantic_search, but takes a longer text (a note body,
-    a paragraph) instead of a short query — use it for "which notes resemble
-    this content". Requires the embedding index (silica_embed_refresh).
+    Same relatedness facade as silica_semantic_search (fused embeddings +
+    co-occurrence, reranked), but framed for a longer text (a note body, a
+    paragraph) rather than a short query — use it for "which notes resemble this
+    content". A down leg degrades to the survivor instead of failing.
     """
-    from silica.agent.providers import get_embedder
-    from silica.config import CONFIG
-    from silica.kernel.embed import get_store
-
-    store = get_store()
-    if len(store) == 0:
-        return {"error": "Embedding index is empty. Run silica_embed_refresh to build it first."}
-
-    try:
-        embedder = get_embedder(CONFIG)
-        vecs = embedder.embed([text])
-    except Exception as e:
-        return {"error": f"Embedding call failed: {e}"}
-
-    results = store.cosine_top_k(vecs[0], k=k)
-    return {"text": text[:120], "results": results}
+    return {"text": text[:120], **_facade_search(text, k=k)}
 
 
 class EmbedRefreshArgs(BaseModel):

@@ -378,6 +378,29 @@ def test_silica_semantic_search_empty_index(tmp_path, monkeypatch):
     assert "error" in result
 
 
+def test_silica_semantic_search_uses_cooccurrence_when_embed_empty(tmp_path, monkeypatch):
+    """Routing through the relatedness facade: with an empty embedding index but
+    a populated co-occurrence store, search still returns results (the co-occur
+    leg carries it) instead of the old cosine-only 'empty index' error."""
+    monkeypatch.setattr("silica.kernel.embed._index_path", lambda: tmp_path / "empty_embed.json")
+
+    from silica.kernel.cooccurrence import build_index as cooc_build
+    cooc_build(
+        [
+            ("Concepts/Neural", "Neural", "neural network architecture deep learning"),
+            ("Concepts/Sailing", "Sailing", "sailing boat harbour wind"),
+        ],
+        lang="english",
+        force=True,
+    )
+
+    from silica.tools.composed import silica_semantic_search
+    result = silica_semantic_search(query="neural network", k=5)
+    assert "error" not in result
+    paths = [r["path"] for r in result["results"]]
+    assert any("Neural" in p for p in paths)
+
+
 def test_silica_semantic_search_returns_results(tmp_path, monkeypatch):
     from silica.kernel.embed import EmbedStore as _ES
 
