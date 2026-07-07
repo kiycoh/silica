@@ -98,10 +98,13 @@ def _run_wizard_inner(
 
     CONSOLE.print("\n  [bold]silica init[/] — interactive setup\n")
 
-    # 1. Vault — repo mode (.silica/) when inside a git repo, else explicit path.
+    # 1. Vault — repo mode (docs/silica/) when inside a git repo, else explicit
+    # path. An Obsidian-vault repo (.obsidian/) is adopted verbatim instead.
     use_repo_mode = False
     if repo_root is not None:
-        repo_vault = Path(repo_root) / ".silica"
+        from silica.kernel.paths import is_obsidian_vault, repo_mode_vault
+
+        repo_vault = Path(repo_root) if is_obsidian_vault(repo_root) else repo_mode_vault(repo_root)
         state = "exists" if repo_vault.is_dir() else "will be created"
         answer = _ask(
             input_fn,

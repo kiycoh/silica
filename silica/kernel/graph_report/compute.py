@@ -125,7 +125,7 @@ def compute_report(
 
     # Source drift (spec-hermes-coherence §3) — analytics-only for parity with
     # the other on-demand /report signals above, though the read itself is
-    # cheap (one .silica/provenance.json parse, no per-note driver reads).
+    # cheap (one <vault>/provenance.json parse, no per-note driver reads).
     source_drift: list[SourceDrift] = []
     if analytics:
         try:

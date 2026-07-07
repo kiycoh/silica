@@ -131,7 +131,7 @@ Configure the agent via environment variables (e.g., in a `.env` file). `silica 
 | `SILICA_MODEL` | Chat LLM model identifier (litellm format, e.g. `openrouter/anthropic/claude-sonnet-4-20250514`) |
 | `SILICA_PROVIDER` | Chat provider preset: `lmstudio` or `openrouter` |
 | `OPENROUTER_API_KEY` | Required when the provider is `openrouter` |
-| `SILICA_VAULT` | Vault path for the filesystem backend (or repo mode: `.silica/` in git root) |
+| `SILICA_VAULT` | Vault path. An Obsidian vault (`.obsidian/`) is used verbatim; any other path is repo mode → `docs/silica/` |
 | `SILICA_BACKEND` | `fs` (headless filesystem, default) or `cli` (live Obsidian desktop via CDP — adds rollback + live cache) |
 | `SILICA_EMBEDDING_MODEL` | Embedding model identifier used for semantic tasks |
 | `SILICA_WORKER_MODEL` | Sub-agent worker model (e.g., a small local model for dedup / refinement) |

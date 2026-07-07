@@ -10,6 +10,7 @@
   <div id="drop-hint">drop to ingest → Inbox/</div>
 
   <header>
+    <button id="sidebar-toggle" class="ghost" title="toggle history">☰</button>
     <div class="brand">silica</div>
     <div class="vault" id="vault">—</div>
     <div class="spacer"></div>
@@ -23,8 +24,54 @@
   </header>
 
   <main>
+    <aside id="sidebar">
+      <div class="sidebar-head">history</div>
+      <div id="sessions"></div>
+    </aside>
     <section id="view-chat" class="view active">
-      <div id="log"></div>
+      <div id="log" data-caption="vault ready · type below, or drop a file to ingest" data-intro="
+              ▒▒▒                ░░                   ░░░░
+             ▒▒▒▒▒▒           ░░░░░░░░            ░░░░░▒▒░
+             ▒▒▒▓▓▒▒▒      ░░░░░░▒░▒▒░░░       ░░▒▒░░░▒▓▒▒
+            ▒▒▒▒▓▓▓▓▒  ░░░░░░░░░▒▒░░▒▒▒▒░░░   ░░▒▒▒░░▒▓▓▒▒
+           ▒▒▒▒▒▒▓▓▒▒░░░░░░░░░░▒▒▒▒░▒▒▒▒▒▒▒░░ ░▒▓▒▒▒▓▓▓▓▓▒
+           ▒▒▒▓▓▒▒▒░░░░░░░░░░░░▒▒▒▒░▒▒▒▒▒▒▒▒▒▒░▒▒▒▒▓▓▓▓▓▓▒
+            ▒▒▓▓░░░░░░░░░░▒▒▒▒▒▒░▒▒▒░▒▒▒▒▒▒▒▓▓▒▒▒▒▓▓▒▒▓▓▒▒
+              ░░░░░░░░░▒▒▒▒░▒▒▒▒▒▒▒░░▒▒▒▒▒░▒▒▓▒▒▒▓▓▓▒▒▒▒
+             ░░░░░░░░▒▒▒░░░▒▒▒▒▒▒▒▒▒░░▒▒▒░░▒▒▒▓▒▒▒▒▒▒▒
+    ▒      ░░░▒░░░▒▒░▒▒░░░▒▒▒▒▒▒▒▒▒▒▒░▓▒▒▒▒▒▒▒▒▓▓▓▓▓▓▒▒░
+    ▒▒    ░░░░░░░▒▓▓▓▒░▒▒▒▒▒▒▒▒▒▒▒▒▒░░▓▓▓▓▒▒▒▒▒▓▓▓▓▓▓▓▒▒
+         ░░░░░░░▒▓▓▓▓▓▒░░░▒▒▒▒▒▒▒▒▒░░░▒▓▓▓▓▓▓▒▒▒▓▓▒▒▓▓▒▒░
+  ░     ░░░░░░░▒▓▒▓▓▓▓▓▒▒░▒▒▒▒▒▒▒▒░░▒▓▓▓▓▓▓▓▓▓▓▓▒▓▓▓▓▓▒▒░
+░░░░░   ░░░░▒▓▓▓▓▓▓▒▒▒▒▒▒▒▒▒▒▒▒▒░▒▓▓▓▓▓▓▓▓▓▓▓▓▓▓▒▒▓▓▓▓▒▒░
+ ░░░   ░░▒░▓▓▓▒▒░░▒▓▒▒▒▒▒▒▒▒▒▒▒░▓▓▒░░░▒▒▓▓▓▓▒▓▓▓▒▒▒▒▓▒▒▒░░
+       ░▒▒▒▓▓▒░░░░░▒▒▒▒▒▒▒▒▒▒▒▒░▓▒░░░░░░▒▓▓▓▒▓▓▓▒▒▒▒▒▒▒▒▒░
+       ░▒░▒▓▓▒░░░░░▒▒▒▒▒▒▒▒▒▒▒▒░▓▒░░░░░░▒▓▓▓▓▒▓▓▓▒▒▒▒▒▒▒▒░
+      ░▒▒░▓▓▓▒░░░░░▒▒▒▒▒▒▒▒▒▒▒▒░▓▓▒░░░░▒▓▓▓▓▓▒▒▒▒▒▒▒▒▒▒▒▒▒░
+      ░▒▓▒▒▒▓▓▓▓▒▓▓▒▒▒▒▒▒▒▒▒▒▒▒▒░▒▓▓▒▒▓▓▓▓▒▒▒▒▒▒▒▒▒▒▒▒▒▒▒░░
+       ▒▒▓▓▓▒▒▓▓▒▒▒▒▒▒▓▓▓▓▓▓▓▓▒▒▒▒▒▒▓▓▓▓▒▒▒░▒▒▒▒▒▓▓▓▓▓▓▓▒░   ░░
+        ░▒▓▓▓▓▒▒▒▒▒▒▒▒▒▓█▓▒▓▓▒▒▒▒▒▒▒▒▒▒▒▒▒░░▒▒▒▒▓▓▓▓▓▓▓▒    ▒▒░
+         ▒▒▓▓▒▒▓▓▒▒▒▒▒▒▒▒▒▒▒░▒▒▒▒▒▒▒▒▒▒▒▒▒░▒▒▒▒▓▓▓▓▓▓▓▒     ▒▒▒
+    ▒▒▒   ▒▒▓▒▓▓▓▓▒▒▒▒▒▒▒▒▒▒▒▒▒▒▒▒▒▒▒▒▒▒░░░░▒▓▓▒▒▓▓▓▓▓▒     ▒
+           ▒▒▒▒▒▒▒▒▒▒▒▒▒▒▒▒▒▒▒░░░░░▒▒▒▒▒▒░░▒▒▒▓▓▓▓▒▒▒▒▒░░     ░
+        ▒▒▓▓▒▒▒▓▓▓▒▒▒░░░▒▒░░░░░░░░░░░░▒▒░▒▒▒▓▓▓▓▓▓▒▓▒▒▒▒▒░    ░
+       ░▒▓▓▓▓▒▒▒▓▓▒▒▒▒▒░░░░░░░░░░░░░▒▒▒░▒▒▒▒▓▓▓▓▓▓▒▓▓▒▒▒▒▒░
+░░   ░░▒▒▓▓▓▓▒▓▒▒▒▒▒▒▒░░░░░░░░░░░░░░░░░░▒▒▒▒▒▓▓▓▓▓▓▓▓▒▒▒▒▒▒░░   ▓
+    ░░▒▒▒▒▓▓▓▒▓▓▒░▒▒▒░░░░░░░░░░░░░░░░░▒░░░░░▒▒▓▓▓▓▒▓▓▓▒▒▒▒▒▒░░
+   ░░░░▒▒▓▓▒▓▒▓▓▓▒░▒░░░░░░░░░░░░░░░░░▒▒▒▒▒▒▒▒▒▒▓▓▓▓▒▒▒▒▒▒▒▒░░░░
+   ░▒▒░▒▒▒▒▒▒▒▒▓▓▓▒░░░░░░░░░░░░░░░░▒▒▒▒▒▒▒▒▒▒▓▒▓▓▓▓▓▒▒▒▒▒▒▒▒▒░░
+   ░░░▒▒▒░░   ▒▓▓▓▓▒▒▒░░░░░░░░░░▒▒▒▒▒▒▒▒▒▒▒▒▓▒░▒▓▓▓▒ ░▒▒▒▒▒░░░░
+   ░░░░░░░    ▒▒▓▓▓▒▒▒▒▒▒░░░░▒▒▒▒▒▒▒▒▒▒▒▒▒▒▓▒░▒▒░▒▒▒  ░░▒▒▒░░░
+          ░░   ▒▒▒▓▒▓▒▒▓▓▒▒▒▒▒▒▒▒▓▓▒▒▒▒▒▒▓▒▒░░▒▒▒▒░     ░░░░░░
+         ▒▒▒░  ▒▒▒▒▒▒▓▓▓▓▓▓▒▒▒▒▒▓▓▓▓▒▒▒▓▓▒▒▒▒▒▒▒▒░░   ▒▒
+          ▒▒    ▒▒▓▒▒▓▓▓▓▓▓▓▒▒▒▓▓▓▒▓▒░▒▒▒▒▒▒▒▒▓▓▒░   ▒▒▒
+              ▓▓ ▒▒▓▓▒▒▓▓▒▒▓▒▒▒▒▓▓▓▓░░▒▒▒▒░▒▒▒▒░░     ▒▒
+                  ▒▒▒▓▒▒▒▓▓▓▒▒▓▓▓▓▓▒▒▒▒▒░░░░░░░   ▓
+               ▒▒  ▒▒▒  ▒▒▒▒▒▒▒▒▒▒▒░▒▒░░░   ░░  ░░
+                      ░   ░░▒▒▒▒▒▒░░░░░   ░     ░░
+                      ░░    ░░▒░▒░░░
+                              ░░░░   ░░░
+                                    ░▒▒░"></div>
       <div class="commands" id="commands">
         <button data-cmd="/report">/report</button>
         <button data-cmd="/organize">/organize</button>
@@ -38,6 +85,10 @@
     </section>
 
     <section id="view-graph" class="view">
+      <div id="graph-loading" class="frame-loading" hidden>
+        <div class="spinner"></div>
+        <div>building graph… large vaults take a moment</div>
+      </div>
       <iframe id="graph-frame" title="vault graph"></iframe>
     </section>
 
@@ -46,9 +97,21 @@
         <input id="map-note" type="text" placeholder="note to map (e.g. concepts/mind-maps)…" autocomplete="off" />
         <button type="submit">map</button>
       </form>
+      <div id="map-loading" class="frame-loading" hidden>
+        <div class="spinner"></div>
+        <div>building map…</div>
+      </div>
       <iframe id="map-frame" title="radial map"></iframe>
     </section>
   </main>
+
+  <aside id="note-panel" aria-hidden="true">
+    <header>
+      <span id="note-title"></span>
+      <button id="note-close" class="ghost" title="close">✕</button>
+    </header>
+    <div id="note-body"></div>
+  </aside>
 
   <script src="/static/app.js"></script>
 </body>

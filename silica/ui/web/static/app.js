@@ -67,6 +67,7 @@ async function runTurn(fetchPromise) {
     streaming = false;
     stopBtn.hidden = true;
     text.classList.remove("streaming");
+    loadSessions(); // turn saved server-side — refresh titles/order
   }
 
   function handle(ev) {
@@ -146,7 +147,46 @@ $("#new-chat").addEventListener("click", async () => {
   await fetch("/reset", { method: "POST" });
   log.innerHTML = "";
   loadVault();
+  loadSessions();
 });
+
+// --- history sidebar --------------------------------------------------------
+if (localStorage.getItem("sidebar-collapsed") === "1")
+  document.body.classList.add("sidebar-collapsed");
+$("#sidebar-toggle").addEventListener("click", () => {
+  const collapsed = document.body.classList.toggle("sidebar-collapsed");
+  localStorage.setItem("sidebar-collapsed", collapsed ? "1" : "0");
+});
+
+async function loadSessions() {
+  try {
+    const r = await fetch("/sessions");
+    const current = r.headers.get("X-Silica-Session") || "";
+    const box = $("#sessions");
+    box.innerHTML = "";
+    for (const s of await r.json()) {
+      const el = document.createElement("div");
+      el.className = "session" + (s.id === current ? " active" : "");
+      el.textContent = s.title || "untitled";
+      el.title = s.title || "";
+      el.addEventListener("click", () => openSession(s.id));
+      box.appendChild(el);
+    }
+  } catch (_) {}
+}
+
+async function openSession(id) {
+  if (streaming) return;
+  const r = await fetch("/session/load", {
+    method: "POST",
+    headers: { "Content-Type": "application/json" },
+    body: JSON.stringify({ id }),
+  });
+  if (!r.ok) return;
+  document.querySelector('.tab[data-tab="chat"]').click(); // surface the loaded chat
+  await loadVault();
+  loadSessions();
+}
 
 // --- tabs -------------------------------------------------------------------
 $(".tabs").addEventListener("click", (e) => {
@@ -156,16 +196,19 @@ $(".tabs").addEventListener("click", (e) => {
   $("#view-chat").classList.toggle("active", tab === "chat");
   $("#view-graph").classList.toggle("active", tab === "graph");
   $("#view-map").classList.toggle("active", tab === "map");
-  if (tab === "graph") $("#graph-frame").src = "/graph?" + Date.now();
+  if (tab === "graph") { $("#graph-loading").hidden = false; $("#graph-frame").src = "/graph?" + Date.now(); }
   if (tab === "map") $("#map-note").focus();
 });
+// iframe finishes loading only once the server is done building the graph — drop the loader then
+$("#graph-frame").addEventListener("load", () => { $("#graph-loading").hidden = true; });
 
 // --- mindmap: root on a named note, render its precomputed positions ---------
 $("#map-bar").addEventListener("submit", (e) => {
   e.preventDefault();
   const note = $("#map-note").value.trim();
-  if (note) $("#map-frame").src = "/map?note=" + encodeURIComponent(note) + "&t=" + Date.now();
+  if (note) { $("#map-loading").hidden = false; $("#map-frame").src = "/map?note=" + encodeURIComponent(note) + "&t=" + Date.now(); }
 });
+$("#map-frame").addEventListener("load", () => { $("#map-loading").hidden = true; });
 
 // --- drop-zone (whole window) ----------------------------------------------
 let dragDepth = 0;
@@ -184,6 +227,38 @@ window.addEventListener("drop", (e) => {
   runTurn(fetch("/ingest", { method: "POST", body: fd }));
 });
 
+// --- note panel (right overlay drawer; opens from .note-link and the graph) -
+const notePanel = $("#note-panel");
+async function openNote(path) {
+  if (!path) return;
+  try {
+    const r = await fetch("/note?path=" + encodeURIComponent(path));
+    const data = await r.json();
+    $("#note-title").textContent = data.title || "";
+    $("#note-body").innerHTML = data.html || "";
+    $("#note-body").scrollTop = 0;
+    notePanel.classList.add("open");
+    notePanel.setAttribute("aria-hidden", "false");
+  } catch (_) {}
+}
+function closeNote() {
+  notePanel.classList.remove("open");
+  notePanel.setAttribute("aria-hidden", "true");
+}
+// One delegated handler: .note-link (chat OR in-panel → in-place nav) opens the
+// drawer; a click outside an open drawer closes it.
+document.addEventListener("click", (e) => {
+  const link = e.target.closest(".note-link");
+  if (link) { e.preventDefault(); openNote(link.dataset.path); return; }
+  if (notePanel.classList.contains("open") && !e.target.closest("#note-panel")) closeNote();
+});
+$("#note-close").addEventListener("click", closeNote);
+document.addEventListener("keydown", (e) => { if (e.key === "Escape") closeNote(); });
+// Graph node clicks (in the iframe) post a message up when embedded.
+window.addEventListener("message", (e) => {
+  if (e.data && e.data.type === "silica-open-note") openNote(e.data.path);
+});
+
 // --- session bootstrap (re-render server-side history; never resets on load) -
 async function loadVault() {
   try {
@@ -199,3 +274,4 @@ async function loadVault() {
   } catch (_) {}
 }
 loadVault();
+loadSessions();

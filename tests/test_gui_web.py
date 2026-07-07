@@ -32,10 +32,11 @@ def _read_sse(response) -> list[dict]:
 
 
 @pytest.fixture
-def client(tmp_vault):
+def client(tmp_vault, tmp_path, monkeypatch):
     """Fresh module-level session per test, backed by a tmp fs vault."""
     from silica.ui.web import server
 
+    monkeypatch.setattr(server, "SESSIONS_DIR", tmp_path / "web_sessions")
     server._reset_session()
     return TestClient(server.app), server
 
@@ -169,3 +170,152 @@ def test_messages_endpoint_returns_user_and_assistant_turns(client, monkeypatch)
     roles = [m["role"] for m in data]
     assert "user" in roles and "assistant" in roles
     assert not any(m["role"] == "system" for m in data)
+
+
+def test_sessions_persist_across_reset_and_reload(client, monkeypatch):
+    tc, server = client
+
+    def fake_run_agent(messages, model, tool_progress_callback=None, cancel_token=None, **kw):
+        messages.append({"role": "assistant", "content": "Reply one"})
+        return "Reply one"
+
+    monkeypatch.setattr(server, "run_agent", fake_run_agent)
+
+    tc.post("/chat", json={"text": "first question"})
+    listed = tc.get("/sessions")
+    sessions = listed.json()
+    assert len(sessions) == 1
+    assert sessions[0]["title"] == "first question"
+    sid = sessions[0]["id"]
+    assert listed.headers["X-Silica-Session"] == sid
+
+    # new chat clears the live session; the saved one survives on disk
+    tc.post("/reset")
+    assert not any(m["role"] in ("user", "assistant") for m in server.messages)
+
+    r = tc.post("/session/load", json={"id": sid})
+    assert r.status_code == 200
+    assert any(m.get("content") == "Reply one" for m in server.messages)
+    assert server.current_session_id == sid
+
+    # unknown / path-traversal ids are rejected
+    assert tc.post("/session/load", json={"id": "../../etc/passwd"}).status_code == 404
+    assert tc.post("/session/load", json={"id": "deadbeef"}).status_code == 404
+
+
+# ---------------------------------------------------------------------------
+# _linkify — resolvable note refs become .note-link anchors (token-stream, so
+# code is never touched). Pure: driven by a fake dict resolver, no vault.
+# ---------------------------------------------------------------------------
+
+_FAKE_INDEX = {
+    "Foo": "Foo.md",
+    "a/b": "sub/a-b.md",
+    "concepts/mind-maps.md": "concepts/mind-maps.md",
+    "concepts/x.md": "concepts/x.md",
+    "index": "index.md",  # resolvable, but not path-shaped → must NOT link
+}
+
+
+def _fake_resolve(ref: str):
+    return _FAKE_INDEX.get(ref)
+
+
+def test_linkify_resolved_wikilink_becomes_clean_anchor():
+    from silica.ui.web.server import _linkify
+
+    html = _linkify("see [[Foo]] here", _fake_resolve)
+    assert '<a class="note-link" data-path="Foo.md">Foo</a>' in html
+    assert "[[" not in html and "]]" not in html
+
+
+def test_linkify_wikilink_alias_shows_alias_but_resolves_target():
+    from silica.ui.web.server import _linkify
+
+    html = _linkify("read [[a/b|Bar]] now", _fake_resolve)
+    assert 'data-path="sub/a-b.md"' in html
+    assert ">Bar</a>" in html
+
+
+def test_linkify_unresolved_wikilink_stays_literal():
+    from silica.ui.web.server import _linkify
+
+    html = _linkify("a [[nope]] ref", _fake_resolve)
+    assert "[[nope]]" in html
+    assert "note-link" not in html
+
+
+def test_linkify_pathlike_md_token_becomes_link_with_clean_name():
+    from silica.ui.web.server import _linkify
+
+    html = _linkify("open concepts/mind-maps.md today", _fake_resolve)
+    assert 'data-path="concepts/mind-maps.md"' in html
+    assert ">mind-maps</a>" in html
+
+
+def test_linkify_bare_word_is_never_linked():
+    from silica.ui.web.server import _linkify
+
+    # `index` resolves in the fake index, but has no `/` and no `.md` → not a
+    # link candidate, so predictability wins over resolvability.
+    html = _linkify("the index of notes", _fake_resolve)
+    assert "note-link" not in html
+
+
+def test_linkify_never_touches_code():
+    from silica.ui.web.server import _linkify
+
+    html = _linkify("run `concepts/x.md` inline", _fake_resolve)
+    assert "note-link" not in html
+    assert "<code>concepts/x.md</code>" in html
+
+
+def test_linkify_without_resolver_is_plain_render():
+    from silica.ui.web.server import _linkify
+
+    assert _linkify("see [[Foo]] here").strip() == "<p>see [[Foo]] here</p>"
+
+
+# ---------------------------------------------------------------------------
+# GET /note — read-only rendered note for the drawer.
+# ---------------------------------------------------------------------------
+
+def test_note_endpoint_returns_title_and_linkified_html(client, tmp_vault):
+    tc, _server = client
+    tmp_vault.note("Foo.md", "# Foo")
+    tmp_vault.note("concepts/mind-maps.md", "body links to [[Foo]] inside")
+
+    data = tc.get("/note", params={"path": "concepts/mind-maps.md"}).json()
+    assert data["title"] == "mind-maps"
+    assert 'class="note-link"' in data["html"]
+    assert 'data-path="Foo.md"' in data["html"]
+
+
+def test_note_endpoint_missing_path_is_graceful_not_500(client, tmp_vault):
+    tc, _server = client
+    r = tc.get("/note", params={"path": "does/not/exist.md"})
+    assert r.status_code == 200
+    assert "html" in r.json()
+
+
+def test_note_endpoint_rejects_path_outside_vault(client, tmp_vault):
+    tc, _server = client
+    r = tc.get("/note", params={"path": "../../etc/passwd"})
+    assert r.status_code == 200
+    assert "note-link" not in r.json()["html"]  # nothing read, graceful message
+
+
+def test_chat_done_html_linkifies_a_cited_note(client, tmp_vault, monkeypatch):
+    tc, server = client
+    tmp_vault.note("Foo.md", "# Foo")
+
+    def fake_run_agent(messages, model, tool_progress_callback=None, cancel_token=None, **kw):
+        messages.append({"role": "assistant", "content": "look at [[Foo]]"})
+        return "look at [[Foo]]"
+
+    monkeypatch.setattr(server, "run_agent", fake_run_agent)
+    events = _read_sse(tc.post("/chat", json={"text": "where?"}))
+    done = events[-1]
+    assert done["type"] == "done"
+    assert 'class="note-link"' in done["html"]
+    assert 'data-path="Foo.md"' in done["html"]

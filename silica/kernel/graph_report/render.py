@@ -187,7 +187,7 @@ def to_markdown(r: VaultReport, title: str = "Silica Vault Report") -> str:
             add(f"- _… +{len(r.contested) - _LIST_CAP} more (see GRAPH_REPORT.json)_")
         add("")
 
-    # Source drift — authoritative, from .silica/provenance.json: notes still
+    # Source drift — authoritative, from <vault>/provenance.json: notes still
     # carrying claims from a source version that has since been re-ingested
     if r.source_drift:
         add("## Source Drift (Notes From a Superseded Source Version)")

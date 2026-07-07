@@ -87,7 +87,7 @@ class ContestedNote:       # AUTHORITATIVE — frontmatter `contested: true`
 
 
 @dataclass
-class SourceDrift:         # AUTHORITATIVE — derived from .silica/provenance.json
+class SourceDrift:         # AUTHORITATIVE — derived from <vault>/provenance.json
     note: str               # node id, derived from a superseded source version
     source: str              # source basename whose version moved on without this note
 

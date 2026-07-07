@@ -587,6 +587,12 @@ function focusNode(node) {{
 }}
 
 function selectNode(node) {{
+  // Embedded in the web-UI iframe: hand off to the parent's note drawer instead
+  // of opening this internal metadata drawer (avoids two stacked drawers).
+  if (window.parent !== window) {{
+    window.parent.postMessage({{ type: "silica-open-note", path: node.path }}, "*");
+    return;
+  }}
   document.getElementById("drawer-title").textContent = node.label;
   document.getElementById("drawer-path").textContent  = node.path || "(ghost node)";
   const commText = (Number.isInteger(node.group) && node.group >= 0 && COMM_LABELS[node.group])

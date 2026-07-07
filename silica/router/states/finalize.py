@@ -200,7 +200,7 @@ def _log_ingest_completion(fsm: "InjectorFSM", fi: int, source_file: str) -> Non
 
 
 def _record_provenance(fsm: "InjectorFSM", fi: int, source_file: str) -> None:
-    """Append one .silica/provenance.json record (spec-hermes-coherence §3).
+    """Append one `<vault>/provenance.json` record (spec-hermes-coherence §3).
 
     Sibling projection to _log_ingest_completion, at the same CLEANUP point:
     reuses fsm._file_content_hashes[fi] — the sha256 already computed once

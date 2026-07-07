@@ -68,7 +68,7 @@ def test_vault_no_args_warns_on_frozen_store_mismatch(tmp_path, monkeypatch, cap
 
 def test_vault_switch_updates_config_and_resets_driver(tmp_path, monkeypatch):
     target = tmp_path / "other_vault"
-    target.mkdir()
+    (target / ".obsidian").mkdir(parents=True)  # Obsidian vault → adopted verbatim
     monkeypatch.setattr(CONFIG, "vault_path", str(tmp_path))
     # Prime the driver singleton with a sentinel so we can observe the reset.
     monkeypatch.setattr(driver_pkg, "_driver", object())
@@ -80,17 +80,19 @@ def test_vault_switch_updates_config_and_resets_driver(tmp_path, monkeypatch):
     assert driver_pkg._driver is None  # reset so next get_driver() rebuilds
 
 
-def test_vault_switch_rejects_nonexistent_path(tmp_path, monkeypatch, capsys):
+def test_vault_switch_nonexistent_path_creates_repo_mode(tmp_path, monkeypatch):
+    # A not-yet-existing path is no longer rejected: no .obsidian → repo mode,
+    # docs/silica created on demand.
     monkeypatch.setattr(CONFIG, "vault_path", str(tmp_path))
-    sentinel = object()
-    monkeypatch.setattr(driver_pkg, "_driver", sentinel)
+    monkeypatch.setattr(driver_pkg, "_driver", object())
+    target = tmp_path / "does_not_exist"
 
-    handled = _handle_direct_shortcut(f"/vault {tmp_path / 'does_not_exist'}", [])
+    handled = _handle_direct_shortcut(f"/vault {target}", [])
 
     assert handled is True
-    assert CONFIG.vault_path == str(tmp_path)  # unchanged
-    assert driver_pkg._driver is sentinel  # driver NOT reset
-    assert "directory" in capsys.readouterr().out.lower()
+    assert CONFIG.vault_path == str((target / "docs" / "silica").resolve())
+    assert (target / "docs" / "silica").is_dir()
+    assert driver_pkg._driver is None  # reset
 
 
 def test_reset_driver_forces_rebuild(monkeypatch):

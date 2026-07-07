@@ -36,6 +36,27 @@ def silica_tmp_dir() -> Path:
     return d
 
 
+def is_obsidian_vault(path) -> bool:
+    """True when `path` is an Obsidian vault (carries a `.obsidian/` dir).
+
+    This — not git presence — is the single signal that decides vault layout:
+    an Obsidian vault is adopted verbatim (notes in its root), anything else is
+    Silica repo mode (notes under `docs/silica`). Non-existent paths are False.
+    """
+    return (Path(path) / ".obsidian").is_dir()
+
+
+def repo_mode_vault(root) -> Path:
+    """Silica's notes location for a non-Obsidian target: `<root>/docs/silica`.
+
+    Visible and committable next to the code it documents, unlike the old
+    hidden `<root>/.silica`. ponytail: a plain dir with neither `.obsidian` nor
+    git also lands here; telling a real repo from a bare dir would need a
+    stronger signal (source files? a marker?) — not worth it until it bites.
+    """
+    return Path(root) / "docs" / "silica"
+
+
 def index_dir_for(vault: str) -> Path:
     """Per-vault index namespace for an explicit `vault` path, independent of
     the global CONFIG singleton. Same digest scheme as `index_dir()` — the

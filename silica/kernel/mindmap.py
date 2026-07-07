@@ -459,13 +459,23 @@ def _resolve_in(note: str, note_paths: list[str], titles: dict[str, str]) -> str
     return None
 
 
-def resolve_note_path(note: str) -> str | None:
-    """Resolve a note path or title to its vault-relative graph key (with .md)."""
+def note_resolver():
+    """One driver read → a pure closure: ref (path or title) -> graph key | None.
+
+    Reuse when resolving many refs per render (e.g. linkifying a message): the
+    driver graph is read once, the returned callable does no further IO.
+    """
     from silica.driver import get_driver
 
     notes, _unresolved, _g = get_driver().graph_data("")
     titles = {p.replace("\\", "/"): ref.name for p, ref in notes.items()}
-    return _resolve_in(note, list(notes), titles)
+    paths = list(notes)
+    return lambda ref: _resolve_in(ref, paths, titles)
+
+
+def resolve_note_path(note: str) -> str | None:
+    """Resolve a note path or title to its vault-relative graph key (with .md)."""
+    return note_resolver()(note)
 
 
 def gather_materials(root: str, *, latent_k: int = 10) -> MapMaterials:

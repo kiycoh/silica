@@ -96,7 +96,7 @@ class TestRunWizard:
     def test_repo_mode_skips_vault_key(self, monkeypatch, tmp_path):
         import silica.onboarding.wizard as wizard
 
-        (tmp_path / ".silica").mkdir(parents=True)
+        (tmp_path / "docs" / "silica").mkdir(parents=True)
         env_path = tmp_path / ".env"
 
         monkeypatch.setattr(wizard.gitstate, "find_repo_root", lambda p: tmp_path)
@@ -138,7 +138,7 @@ class TestRunWizard:
         rc = wizard.run_wizard(input_fn=self._scripted(answers), env_path=env_path)
 
         assert rc == 0
-        manifest = tmp_path / ".silica" / "vault.yaml"
+        manifest = tmp_path / "docs" / "silica" / "vault.yaml"
         assert manifest.is_file()
         text = manifest.read_text(encoding="utf-8")
         assert "sources:" in text and "code" in text and "overlay: codebase" in text
@@ -165,7 +165,7 @@ class TestRunWizard:
         rc = wizard.run_wizard(input_fn=self._scripted(answers), env_path=env_path)
 
         assert rc == 0
-        manifest = tmp_path / ".silica" / "vault.yaml"
+        manifest = tmp_path / "docs" / "silica" / "vault.yaml"
         text = manifest.read_text(encoding="utf-8")
         assert "conventions:\n  language: Italian" in text
 
@@ -182,7 +182,7 @@ class TestRunWizard:
         answers = ["", "Italian", "", "", "test-model", "skip", ""]
         wizard.run_wizard(input_fn=self._scripted(answers), env_path=env_path)
 
-        manifest = load_manifest(str(tmp_path / ".silica"))
+        manifest = load_manifest(str(tmp_path / "docs" / "silica"))
         assert manifest.conventions.language == "Italian"
 
     def test_enter_leaves_language_none_after_load_manifest(self, monkeypatch, tmp_path):
@@ -198,14 +198,14 @@ class TestRunWizard:
         answers = ["", "", "", "", "test-model", "skip", ""]
         wizard.run_wizard(input_fn=self._scripted(answers), env_path=env_path)
 
-        manifest = load_manifest(str(tmp_path / ".silica"))
+        manifest = load_manifest(str(tmp_path / "docs" / "silica"))
         assert manifest.conventions.language is None
 
     def test_repo_mode_preserves_existing_manifest(self, monkeypatch, tmp_path):
         import silica.onboarding.wizard as wizard
 
-        (tmp_path / ".silica").mkdir(parents=True)
-        (tmp_path / ".silica" / "vault.yaml").write_text("sources: [prose]\n", encoding="utf-8")
+        (tmp_path / "docs" / "silica").mkdir(parents=True)
+        (tmp_path / "docs" / "silica" / "vault.yaml").write_text("sources: [prose]\n", encoding="utf-8")
         env_path = tmp_path / ".env"
 
         monkeypatch.setattr(wizard.gitstate, "find_repo_root", lambda p: tmp_path)
@@ -216,7 +216,7 @@ class TestRunWizard:
         rc = wizard.run_wizard(input_fn=self._scripted(answers), env_path=env_path)
 
         assert rc == 0
-        assert (tmp_path / ".silica" / "vault.yaml").read_text(encoding="utf-8") == "sources: [prose]\n"
+        assert (tmp_path / "docs" / "silica" / "vault.yaml").read_text(encoding="utf-8") == "sources: [prose]\n"
 
     def test_eof_mid_wizard_aborts_cleanly(self, monkeypatch, tmp_path):
         import silica.onboarding.wizard as wizard
@@ -316,7 +316,7 @@ class TestRunWizard:
         rc = wizard.run_wizard(input_fn=self._scripted(answers), env_path=env_path)
 
         assert rc == 0
-        manifest = tmp_path / ".silica" / "vault.yaml"
+        manifest = tmp_path / "docs" / "silica" / "vault.yaml"
         text = manifest.read_text(encoding="utf-8")
         assert "language" not in text
 
@@ -346,7 +346,7 @@ class TestRunWizard:
         rc = wizard.run_wizard(input_fn=self._scripted(answers), env_path=env_path)
 
         assert rc == 0
-        manifest = load_manifest(str(tmp_path / ".silica"))
+        manifest = load_manifest(str(tmp_path / "docs" / "silica"))
         # sources/overlay are written unconditionally in repo mode — an invalid
         # language answer must never degrade the whole manifest to defaults.
         assert "code" in manifest.sources

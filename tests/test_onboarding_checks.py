@@ -119,9 +119,9 @@ class TestCheckVault:
         assert r.status == "warn"
         assert "silica init" in r.hint
 
-    def test_unset_with_repo_dot_silica_ok(self, monkeypatch, tmp_path):
+    def test_unset_with_repo_docs_silica_ok(self, monkeypatch, tmp_path):
         import silica.onboarding.checks as checks
-        (tmp_path / ".silica").mkdir(parents=True)
+        (tmp_path / "docs" / "silica").mkdir(parents=True)
         monkeypatch.setattr(checks.gitstate, "find_repo_root", lambda p: tmp_path)
         r = checks.check_vault(_cfg(vault_path=""))
         assert r.status == "ok"

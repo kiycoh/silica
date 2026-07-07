@@ -255,6 +255,15 @@ class TestSearchResultsFlyTo:
         html = render_html(nodes, edges, lib_js="// dummy")
         assert "onSearchKey(" in html
 
+    def test_embedded_node_click_posts_open_note_to_parent(self, small_graph):
+        """When embedded in the web-UI iframe, a node click hands off to the
+        parent's note drawer instead of opening the internal metadata drawer."""
+        nodes, edges = small_graph
+        html = render_html(nodes, edges, lib_js="// dummy")
+        assert "window.parent !== window" in html
+        assert "postMessage" in html
+        assert "silica-open-note" in html
+
 
 # ---------------------------------------------------------------------------
 # 5. Perf knobs for big vaults — keep WebGL geometry count low

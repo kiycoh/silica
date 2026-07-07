@@ -166,39 +166,31 @@ def _setup_logging(debug: bool = False) -> None:
 class VaultTarget(NamedTuple):
     """Outcome of resolving a runtime ``/vault <arg>`` switch.
 
-    ``vault`` is the absolute path to adopt (None on error). ``created`` is
-    True when the codebase has no ``.silica/`` yet and the caller must mkdir it.
-    ``error`` carries a human-readable message when the arg cannot be adopted.
+    ``vault`` is the absolute path to adopt. ``created`` is True when repo mode
+    has no ``docs/silica`` yet and the caller must mkdir it. Every path now
+    resolves to a valid target — an Obsidian vault verbatim, everything else
+    repo mode — so there is no error outcome.
     """
-    vault: str | None
+    vault: str
     created: bool
-    error: str | None
 
 
 def resolve_vault_switch(arg: str) -> VaultTarget:
-    """Resolve a ``/vault <arg>`` target, codebase-aware (pure, read-only I/O).
+    """Resolve a ``/vault <arg>`` (or explicit ``SILICA_VAULT``) target.
 
-    Mirrors the startup repo-mode rule for the runtime command: if ``arg`` lives
-    inside a git repo, the vault is that repo's ``.silica/`` (memory node) rather
-    than the repo root itself — created on demand. A path that is already a
-    ``.silica`` dir, or any plain (non-codebase) directory, is adopted verbatim.
+    ``.obsidian/`` is the sole layout signal, not git: an Obsidian vault is
+    adopted verbatim (notes in its root); anything else — a code repo, a plain
+    or not-yet-existing directory — is Silica repo mode, notes under
+    ``<arg>/docs/silica`` (created on demand). Pure, read-only I/O.
     """
     from pathlib import Path
-    from silica.kernel import gitstate
+    from silica.kernel.paths import is_obsidian_vault, repo_mode_vault
 
-    target = Path(arg).expanduser()
-    # An explicit .silica dir is already a vault root — adopt it verbatim.
-    if target.is_dir() and target.name == ".silica":
-        return VaultTarget(str(target.resolve()), False, None)
-    # Codebase? Adopt <repo>/.silica, creating it on demand.
-    repo = gitstate.find_repo_root(target) if target.exists() else None
-    if repo is not None:
-        silica_dir = repo / ".silica"
-        return VaultTarget(str(silica_dir), not silica_dir.is_dir(), None)
-    # Plain directory → literal vault (preserves pre-codebase behaviour).
-    if target.is_dir():
-        return VaultTarget(str(target.resolve()), False, None)
-    return VaultTarget(None, False, f"Not a directory: {arg}")
+    target = Path(arg).expanduser().resolve()
+    if is_obsidian_vault(target):
+        return VaultTarget(str(target), False)
+    vault = repo_mode_vault(target)
+    return VaultTarget(str(vault), not vault.is_dir())
 
 
 def default_user_vault(home=None):
@@ -214,16 +206,19 @@ def resolve_repo_mode_vault(cwd, vault_env: str, docs_exists_ok: bool, self_repo
     """Pure resolver for repo-mode vault selection (testable, no I/O prompts).
 
     Returns the vault path string to adopt, or None to leave config unchanged.
+    Git still *discovers* the project root from cwd; ``.obsidian`` then decides
+    the layout on that root.
     - Explicit SILICA_VAULT (vault_env truthy) always wins → None.
     - Not inside a git repo → None.
     - Inside Silica's own source repo (root == self_repo) → None: that's dev
       mode, not a vault. Caller falls back to the home default.
-    - .silica/ exists → return it.
-    - .silica/ missing → return it only if docs_exists_ok (caller already
-      confirmed creation); otherwise None.
+    - root is an Obsidian vault (.obsidian/) → adopt it verbatim.
+    - else docs/silica exists → return it; missing → only if docs_exists_ok
+      (caller confirmed creation); otherwise None.
     """
     from pathlib import Path
     from silica.kernel import gitstate
+    from silica.kernel.paths import is_obsidian_vault, repo_mode_vault
 
     if vault_env.strip():
         return None
@@ -232,7 +227,9 @@ def resolve_repo_mode_vault(cwd, vault_env: str, docs_exists_ok: bool, self_repo
         return None
     if self_repo is not None and root == Path(self_repo):
         return None
-    vault_dir = Path(root) / ".silica"
+    if is_obsidian_vault(root):
+        return str(Path(root).resolve())
+    vault_dir = repo_mode_vault(root)
     if vault_dir.is_dir():
         return str(vault_dir)
     if docs_exists_ok:
@@ -242,17 +239,17 @@ def resolve_repo_mode_vault(cwd, vault_env: str, docs_exists_ok: bool, self_repo
 
 def _activate_repo_mode() -> None:
     """Side-effecting startup vault selection. Explicit SILICA_VAULT wins; else
-    a *user* project repo → its .silica/ (prompted if absent); else — including
-    inside Silica's own source repo (dev mode) — a stable ~/.silica/vault."""
+    a *user* project repo → its docs/silica (prompted if absent), unless the
+    repo is an Obsidian vault (adopted verbatim); else — including inside
+    Silica's own source repo (dev mode) — a stable ~/.silica/vault."""
     from pathlib import Path
     from silica.kernel import gitstate
     import silica
 
     if CONFIG.vault_path.strip():
-        # Explicit SILICA_VAULT wins — but still codebase-aware, like /vault:
-        # a repo root becomes <repo>/.silica (created on demand); a .silica dir
-        # or plain (non-repo) directory is adopted verbatim; a not-yet-existing
-        # path stays as-is for the backend to create.
+        # Explicit SILICA_VAULT wins, resolved like /vault: an Obsidian vault
+        # (.obsidian/) is adopted verbatim; anything else → <path>/docs/silica,
+        # created on demand. Git is never consulted for a named path.
         t = resolve_vault_switch(CONFIG.vault_path)
         if t.vault:
             if t.created:
@@ -267,11 +264,13 @@ def _activate_repo_mode() -> None:
         CONSOLE.print(f"  Repo mode: vault = [bold]{existing}[/]")
         return
     root = gitstate.find_repo_root(cwd)
-    if root is not None and root != self_repo:  # user repo, .silica/ missing → ask
-        CONSOLE.print(f"  Git repo detected at [bold]{root}[/] but no [bold].silica/[/] folder.")
-        answer = input("  Create .silica/ and manage it as the Silica vault? [y/N] ").strip().lower()
+    if root is not None and root != self_repo:  # user repo, no docs/silica → ask
+        from silica.kernel.paths import repo_mode_vault
+
+        vault_dir = repo_mode_vault(root)
+        CONSOLE.print(f"  Git repo detected at [bold]{root}[/] but no [bold]docs/silica/[/] folder.")
+        answer = input("  Create docs/silica/ and manage it as the Silica vault? [y/N] ").strip().lower()
         if answer in ("y", "yes"):
-            vault_dir = Path(root) / ".silica"
             vault_dir.mkdir(parents=True, exist_ok=True)
             CONFIG.vault_path = str(vault_dir)
             CONSOLE.print(f"  Repo mode: vault = [bold]{vault_dir}[/]")
@@ -313,9 +312,6 @@ def _handle_direct_shortcut(raw_input: str, messages: list[dict]) -> bool:
         arg = " ".join(parts[1:]).strip()
         if arg:
             target = resolve_vault_switch(arg)
-            if target.error:
-                CONSOLE.print(f"  [red]{target.error}[/]")
-                return True
             if target.created:
                 Path(target.vault).mkdir(parents=True, exist_ok=True)
                 CONSOLE.print(
