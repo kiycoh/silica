@@ -34,8 +34,8 @@ dependencies = [
 ]
 
 [project.optional-dependencies]
-# Opt-in PDF support (requires pymupdf4llm):
-pdf = ["pymupdf4llm>=1.27.2.3"]
+# PDF support is not an extra: the provider (markitdown / docling / mineru — all
+# permissively licensed) is installed manually. See SILICA_PDF_PROVIDER.
 # Opt-in localhost web GUI (`silica --gui`); python-multipart backs the drop-zone upload:
 gui = ["fastapi", "uvicorn", "python-multipart"]
 dev = ["pytest>=8.0", "mypy>=1.10", "import-linter>=2.0"]
@@ -164,5 +164,9 @@ python_version = "3.11"
 ignore_missing_imports = false
 
 [[tool.mypy.overrides]]
-module = ["yaml", "yaml.*", "networkx", "networkx.*"]
+module = [
+    "yaml", "yaml.*", "networkx", "networkx.*",
+    # Optional PDF providers, installed manually (see SILICA_PDF_PROVIDER):
+    "markitdown", "markitdown.*", "docling.*", "docling_core.*",
+]
 ignore_missing_imports = true

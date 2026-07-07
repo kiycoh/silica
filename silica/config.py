@@ -129,11 +129,12 @@ class SilicaConfig:
         default_factory=lambda: os.getenv("SILICA_INBOX_DIR", "Inbox")
     )
 
-    # PDF→Markdown converter (ADR-0011 provider seam): "pymupdf4llm" (default,
-    # pure-Python, fast on text PDFs) or "mineru" (heavyweight OCR/layout CLI,
-    # shelled out as a subprocess).
+    # PDF→Markdown converter (ADR-0011 provider seam), all permissively licensed:
+    # "markitdown" (default, MIT, lightweight, text-only), "docling" (MIT, keeps
+    # figures/tables, heavy ML deps), or "mineru" (OCR/layout CLI, subprocess).
+    # Each is installed manually by the user; an unmet provider errors clearly.
     pdf_provider: str = field(
-        default_factory=lambda: os.getenv("SILICA_PDF_PROVIDER", "pymupdf4llm")
+        default_factory=lambda: os.getenv("SILICA_PDF_PROVIDER", "markitdown")
     )
 
     # Tavily API key for /web-search. Empty → /web-search errors clearly and

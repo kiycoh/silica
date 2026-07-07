@@ -2,8 +2,10 @@
 
 A plain function, not a `SourceAdapter`: `/convert` exposes it and `/ingest`
 calls it as the fallback when no source adapter claims a file. Dispatch is by
-extension; PDF is the only converter today, provider-selectable
-(`pymupdf4llm` default, MinerU opt-in via `CONFIG.pdf_provider` — ADR-0011).
+extension; PDF is the only converter today, provider-selectable via
+`CONFIG.pdf_provider` (ADR-0011): `markitdown` default (permissive, text-only),
+`docling` (permissive, keeps figures/tables), `mineru` (heavyweight CLI). All
+open-source under permissive licences; the user installs the chosen one.
 
 Both PDF providers return `(markdown, images_dir)`; the rest of the pipeline
 (sanitize → copy images flat into the vault → rewrite image links to Obsidian
@@ -67,19 +69,49 @@ def _pdf_to_md(target: str, dest_dir: str) -> str:
 
 
 # --- providers (each: src pdf, workdir → markdown text, images dir) ---------
+#
+# TODO(real-api): each provider's third-party call surface is only exercised by
+# hand-faked modules in tests/test_convert.py — a library rename would drift the
+# fakes and pass silently. Add a real-install smoke test to catch API drift.
 
-def _pdf_via_pymupdf4llm(src: Path, workdir: Path) -> tuple[str, Path]:
+def _pdf_via_markitdown(src: Path, workdir: Path) -> tuple[str, Path]:
     try:
-        import pymupdf4llm
+        from markitdown import MarkItDown
     except ImportError:
         raise ValueError(
-            "pymupdf4llm not installed (AGPL extra) — `pip install silica[pdf]`, "
-            "or set SILICA_PDF_PROVIDER=mineru"
+            "markitdown not installed — `pip install 'markitdown[pdf]'`, "
+            "or set SILICA_PDF_PROVIDER to docling/mineru"
         ) from None
 
+    md = MarkItDown().convert(str(src)).text_content
+    # ponytail: markitdown is text-only for PDF — no figures extracted. The empty
+    # images dir is honest; _copy_images no-ops on a missing dir. Use docling/mineru
+    # if you need the figures carried into the vault.
+    return md, workdir / "images"
+
+
+def _pdf_via_docling(src: Path, workdir: Path) -> tuple[str, Path]:
+    try:
+        from docling.datamodel.base_models import InputFormat
+        from docling.datamodel.pipeline_options import PdfPipelineOptions
+        from docling.document_converter import DocumentConverter, PdfFormatOption
+        from docling_core.types.doc import ImageRefMode
+    except ImportError:
+        raise ValueError(
+            "docling not installed — `pip install docling`, "
+            "or set SILICA_PDF_PROVIDER to markitdown/mineru"
+        ) from None
+
+    opts = PdfPipelineOptions()
+    opts.generate_picture_images = True  # else REFERENCED export emits placeholders
+    converter = DocumentConverter(
+        format_options={InputFormat.PDF: PdfFormatOption(pipeline_options=opts)}
+    )
+    doc = converter.convert(str(src)).document
     images = workdir / "images"
-    md = pymupdf4llm.to_markdown(str(src), write_images=True, image_path=str(images))
-    return md, images
+    md_path = workdir / f"{src.stem}.md"
+    doc.save_as_markdown(md_path, image_mode=ImageRefMode.REFERENCED, artifacts_dir=images)
+    return md_path.read_text(encoding="utf-8", errors="replace"), images
 
 
 def _pdf_via_mineru(src: Path, workdir: Path) -> tuple[str, Path]:
@@ -100,7 +132,11 @@ def _pdf_via_mineru(src: Path, workdir: Path) -> tuple[str, Path]:
     return md_path.read_text(encoding="utf-8", errors="replace"), md_path.parent / "images"
 
 
-_PDF_PROVIDERS = {"pymupdf4llm": _pdf_via_pymupdf4llm, "mineru": _pdf_via_mineru}
+_PDF_PROVIDERS = {
+    "markitdown": _pdf_via_markitdown,
+    "docling": _pdf_via_docling,
+    "mineru": _pdf_via_mineru,
+}
 
 
 # --- shared helpers ---------------------------------------------------------
