@@ -31,6 +31,21 @@ from silica.kernel.graph_report import VaultReport
 # LLM-free direct commit; the rest are WorkItem kinds on the capability seam.
 Kind = str  # "autolink" | "orphan" | "dedup" | "refine"
 
+# Closed set of emittable kinds — single source of truth for CurationPlan.filtered
+# validation, so a typo like "dedups" is rejected loudly instead of silently
+# filtering the plan to empty.
+VALID_KINDS = frozenset({"autolink", "orphan", "dedup", "refine"})
+
+
+def _norm_note_path(path: str) -> str:
+    """Forward-slash, `.md`-suffixed note path for suffix matching.
+
+    Local to the kernel (curator.py can't import silica.agent.bounds across the
+    import-linter boundary); named apart from bounds._norm_path to avoid confusion.
+    """
+    p = path.strip().replace("\\", "/")
+    return p if p.endswith(".md") else p + ".md"
+
 # Silica's own generated artifacts, living at the VAULT ROOT: the driver
 # indexes them like any other note (in-degree 0 -> orphan finding, no
 # frontmatter -> reformat finding), but the curator must never plan work
@@ -77,6 +92,53 @@ class CurationPlan:
     def counts(self) -> dict[str, int]:
         """Item count per kind, omitting kinds with zero items."""
         return dict(Counter(i.kind for i in self.items))
+
+    def filtered(
+        self,
+        kinds: list[str] | None = None,
+        targets: list[str] | None = None,
+    ) -> "CurationPlan":
+        """Return a new plan keeping items that satisfy both predicates.
+
+        - `kinds`: keep items whose kind is in `kinds` (case-insensitive).
+          Validated against VALID_KINDS — an unknown kind raises ValueError
+          rather than silently filtering to empty. Empty/None ⇒ all kinds.
+        - `targets`: keep items where a requested path suffix-matches
+          `item.target` OR `item.partner` on segment boundaries (a request `r`
+          matches path `p` when `p == r` or `p.endswith("/" + r)`, both
+          normalized to forward-slash + `.md`). Empty/None ⇒ all targets.
+        - Both predicates AND; both empty ⇒ identity. Pure, no mutation.
+        """
+        kset: set[str] | None = None
+        if kinds:
+            kset = {k.strip().lower() for k in kinds}
+            unknown = kset - VALID_KINDS
+            if unknown:
+                raise ValueError(
+                    "unknown curation kind(s): "
+                    + ", ".join(sorted(unknown))
+                    + "; valid kinds: "
+                    + ", ".join(sorted(VALID_KINDS))
+                )
+        reqs = [_norm_note_path(t) for t in (targets or []) if t.strip()]
+
+        def keep(item: CurationItem) -> bool:
+            if kset is not None and item.kind not in kset:
+                return False
+            if reqs:
+                # ponytail: bare-stem `x.md` suffix-matches every folder's x.md
+                # (intended convenience); the escape hatch is a folder-qualified
+                # path (Concepts/x.md), which the segment-boundary rule narrows.
+                paths = [_norm_note_path(item.target)]
+                if item.partner:
+                    paths.append(_norm_note_path(item.partner))
+                if not any(
+                    p == r or p.endswith("/" + r) for p in paths for r in reqs
+                ):
+                    return False
+            return True
+
+        return CurationPlan(items=[i for i in self.items if keep(i)])
 
 
 def compose_curation_plan(report: VaultReport) -> CurationPlan:

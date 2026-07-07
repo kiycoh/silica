@@ -13,6 +13,8 @@ touched — the same faking style as tests/test_subagent.py.
 """
 from __future__ import annotations
 
+import json
+
 import silica.tools.curate as curate
 from silica.kernel.curator import CurationItem, CurationPlan
 from silica.kernel.graph_report import VaultReport
@@ -235,6 +237,45 @@ def test_apply_flag_routes_through_dispatch(monkeypatch):
     assert seen["n"] == 1
 
 
+def test_filter_matching_nothing_reports_no_matches_not_nothing_to_do(monkeypatch):
+    """A non-empty pre-filter plan emptied by the filter is `no_matches`, not
+    `nothing_to_do` — the vault has work, the filter (not the vault) produced the
+    emptiness. `available` exposes the pre-filter counts so the agent self-corrects."""
+    report = _report(orphans=["Lonely"], reformat_notes=["Bloated"])
+    monkeypatch.setattr(curate, "compute_report", lambda **kw: report)
+
+    def _boom_apply(*a, **k):
+        raise AssertionError("an emptied plan must not dispatch")
+
+    monkeypatch.setattr(curate, "apply_curation_plan", _boom_apply)
+
+    res = curate.silica_curate(apply=True, targets=["does-not-exist.md"])
+
+    assert res["status"] == "no_matches"
+    assert res["available"] == {"orphan": 1, "refine": 1}
+    assert res["total"] == 0
+
+
+def test_filter_on_genuinely_empty_report_stays_nothing_to_do(monkeypatch):
+    monkeypatch.setattr(curate, "compute_report", lambda **kw: _report())
+
+    res = curate.silica_curate(apply=True, kinds=["dedup"])
+    assert res["status"] == "nothing_to_do"
+    assert "available" not in res
+
+
+def test_unknown_kind_surfaces_as_tool_error(monkeypatch):
+    """A kind typo is a loud ValueError, wrapped by the @tool runner as an
+    `error` — never a silent empty filter."""
+    import silica.tools as tools
+
+    monkeypatch.setattr(curate, "compute_report", lambda **kw: _report(orphans=["Lonely"]))
+
+    result = json.loads(tools.TOOLS["silica_curate"].run(kinds=["dedups"]))
+    assert "error" in result
+    assert "dedups" in result["error"]
+
+
 def test_empty_report_tool_reports_nothing_to_do(monkeypatch):
     monkeypatch.setattr(curate, "compute_report", lambda **kw: _report())
 
@@ -257,10 +298,10 @@ def test_cli_curate_dry_run_invokes_tool():
     from silica import cli
 
     fake_tool = MagicMock()
-    fake_tool.run.return_value = {
+    fake_tool.run.return_value = json.dumps({
         "status": "dry_run", "total": 1, "counts": {"orphan": 1},
         "items": [{"kind": "orphan", "target": "Lonely", "partner": "", "reason": ""}],
-    }
+    })
     with patch.dict("silica.tools.TOOLS", {"silica_curate": fake_tool}, clear=False):
         handled = cli._handle_direct_shortcut("/curate Concepts", [])
     assert handled is True
@@ -272,10 +313,10 @@ def test_cli_curate_apply_flag_passed_through():
     from silica import cli
 
     fake_tool = MagicMock()
-    fake_tool.run.return_value = {
+    fake_tool.run.return_value = json.dumps({
         "status": "applied", "total": 2, "counts": {"orphan": 1, "refine": 1},
         "execution": {"outcome_counts": {"committed": 1, "no_link": 1}},
-    }
+    })
     with patch.dict("silica.tools.TOOLS", {"silica_curate": fake_tool}, clear=False):
         handled = cli._handle_direct_shortcut("/curate --apply", [])
     assert handled is True
@@ -290,14 +331,14 @@ def test_cli_curate_apply_prints_real_outcomes_not_planned_counts(monkeypatch):
     from silica.ui.console import CONSOLE
 
     fake_tool = MagicMock()
-    fake_tool.run.return_value = {
+    fake_tool.run.return_value = json.dumps({
         "status": "applied", "total": 1, "counts": {"dedup": 1},
         "execution": {
             "outcome_counts": {"no_merge": 1},
             "batch": {"items": 1, "summary": {"no_merge": 1}, "results": []},
             "autolink": {},
         },
-    }
+    })
     buf: list[str] = []
     monkeypatch.setattr(CONSOLE, "print", lambda *a, **kw: buf.append(" ".join(str(x) for x in a)))
     with patch.dict("silica.tools.TOOLS", {"silica_curate": fake_tool}, clear=False):

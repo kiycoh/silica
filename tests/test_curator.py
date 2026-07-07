@@ -13,6 +13,8 @@ unit test with no live driver.
 """
 from __future__ import annotations
 
+import pytest
+
 from silica.kernel.graph_report import (
     AutolinkCandidate,
     DuplicatePair,
@@ -180,3 +182,83 @@ def test_format_curate_event_omits_zero_types():
 
     event = format_curate_event({"orphan": 1})
     assert event == "curate → 1 item (1 orphan)"
+
+
+# ---------------------------------------------------------------------------
+# CurationPlan.filtered — selective apply (pure, deterministic, no I/O).
+# A user, after seeing the plan, drives a subset in natural language ("apply
+# only the dedups", "refine only x.md"); the agent maps that onto kind/target
+# filter args. The filter shapes both the dry-run preview and the apply path.
+# ---------------------------------------------------------------------------
+
+def _mixed_plan() -> CurationPlan:
+    return CurationPlan(items=[
+        CurationItem(kind="orphan", target="Concepts/Lonely"),
+        CurationItem(kind="dedup", target="Concepts/A", partner="Concepts/B", score=0.9),
+        CurationItem(kind="refine", target="Concepts/Bloated"),
+        CurationItem(kind="autolink", target="Concepts/X", partner="Concepts/Y", score=3.0),
+    ])
+
+
+def test_filtered_kinds_only_keeps_matching_kinds():
+    plan = _mixed_plan().filtered(kinds=["dedup"])
+    assert [i.kind for i in plan.items] == ["dedup"]
+
+
+def test_filtered_kinds_is_case_insensitive():
+    plan = _mixed_plan().filtered(kinds=["DEDUP"])
+    assert [i.kind for i in plan.items] == ["dedup"]
+
+
+def test_filtered_targets_only_keeps_by_path_regardless_of_kind():
+    plan = _mixed_plan().filtered(targets=["Lonely.md", "Bloated.md"])
+    assert {i.kind for i in plan.items} == {"orphan", "refine"}
+
+
+def test_filtered_kinds_and_targets_both_predicates_must_hold():
+    # targets alone would keep dedup (A) AND orphan (Lonely); kinds narrows to dedup.
+    plan = _mixed_plan().filtered(kinds=["dedup"], targets=["A.md", "Lonely.md"])
+    assert [i.kind for i in plan.items] == ["dedup"]
+
+
+def test_filtered_empty_args_is_identity():
+    src = _mixed_plan()
+    assert [i.kind for i in src.filtered().items] == [i.kind for i in src.items]
+    assert [i.kind for i in src.filtered(kinds=[], targets=[]).items] == [
+        i.kind for i in src.items
+    ]
+
+
+def test_filtered_matches_on_partner_side_item_unchanged():
+    # dedup target=A partner=B; requesting the partner's stem keeps the pair intact.
+    plan = _mixed_plan().filtered(targets=["B.md"])
+    assert len(plan.items) == 1
+    item = plan.items[0]
+    assert item.kind == "dedup"
+    assert item.target == "Concepts/A" and item.partner == "Concepts/B"
+
+
+def test_filtered_bare_stem_matches_any_folder_qualified_narrows():
+    plan = CurationPlan(items=[
+        CurationItem(kind="refine", target="Concepts/x.md"),
+        CurationItem(kind="refine", target="Other/x.md"),
+    ])
+    # a bare stem matches every folder's x.md (the intended convenience)
+    assert len(plan.filtered(targets=["x.md"]).items) == 2
+    # a folder-qualified path narrows to that one note (the escape hatch)
+    narrowed = plan.filtered(targets=["Concepts/x.md"]).items
+    assert [i.target for i in narrowed] == ["Concepts/x.md"]
+
+
+def test_filtered_no_match_returns_empty_plan():
+    plan = _mixed_plan().filtered(targets=["does-not-exist.md"])
+    assert plan.is_empty()
+
+
+def test_filtered_unknown_kind_raises_listing_valid_kinds():
+    with pytest.raises(ValueError) as exc:
+        _mixed_plan().filtered(kinds=["dedups"])
+    msg = str(exc.value)
+    assert "dedups" in msg
+    for valid in ("autolink", "orphan", "dedup", "refine"):
+        assert valid in msg

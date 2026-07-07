@@ -305,10 +305,24 @@ class CurateArgs(BaseModel):
         description="If True, enqueue/execute the plan; default is a dry-run that only returns the plan.",
     )
     folder: str = Field(default="", description="Vault-relative folder to scope the audit (empty = whole vault)")
+    kinds: list[str] = Field(
+        default_factory=list,
+        description='Keep only these item kinds (autolink|orphan|dedup|refine); empty = all kinds.',
+    )
+    targets: list[str] = Field(
+        default_factory=list,
+        description="Keep only items touching these note paths (matches target or dedup partner, by path suffix); empty = all.",
+    )
 
 
 @tool(CurateArgs, cls="composed")
-def silica_curate(apply: bool = False, folder: str = "", cancel_token: Any = None) -> dict[str, Any]:
+def silica_curate(
+    apply: bool = False,
+    folder: str = "",
+    kinds: list[str] | None = None,
+    targets: list[str] | None = None,
+    cancel_token: Any = None,
+) -> dict[str, Any]:
     """Curate the vault: turn structural findings into executed maintenance work.
 
     Composes a plan from the vault report (strong autolinks, orphans to link,
@@ -316,7 +330,17 @@ def silica_curate(apply: bool = False, folder: str = "", cancel_token: Any = Non
     the plan, writes nothing. With apply=True it executes the plan (autolinks,
     orphan linking, dedup merges, refinements) with undo journaling.
     For the raw audit report without acting on it, use silica_vault_report.
+
+    Apply a subset with `kinds` and `targets` (they shape both the dry-run
+    preview and the apply path):
+      * "apply only the dedups"       → kinds=["dedup"]
+      * "refine only x.md and y.md"   → kinds=["refine"], targets=["x.md","y.md"]
+    For selection beyond kind/path (ordinals, "all but X"), dry-run first
+    (apply=False), read the returned plan, then pass explicit `targets`.
     """
+    # ponytail: the plan is re-derived on every call, so a subset apply after a
+    # dry-run replans against the current vault (already true today between
+    # /curate and /curate --apply). No plan persistence.
     report = compute_report(
         folder=folder,
         analytics=True,          # lean_notes / reformat_notes triage
@@ -324,6 +348,8 @@ def silica_curate(apply: bool = False, folder: str = "", cancel_token: Any = Non
         with_cooccurrence=True,  # autolink candidates
     )
     plan = compose_curation_plan(report)
+    available = plan.counts()                    # pre-filter shape (no_matches honesty)
+    plan = plan.filtered(kinds, targets)         # may raise ValueError → tool error
 
     result: dict[str, Any] = {
         "apply": apply,
@@ -336,7 +362,14 @@ def silica_curate(apply: bool = False, folder: str = "", cancel_token: Any = Non
     }
 
     if plan.is_empty():
-        result["status"] = "nothing_to_do"
+        # A filter that emptied a non-empty plan is `no_matches`, not
+        # `nothing_to_do` — the CLI must not claim "the vault is coherent"
+        # when the filter, not the vault, produced the emptiness.
+        if available:
+            result["status"] = "no_matches"
+            result["available"] = available
+        else:
+            result["status"] = "nothing_to_do"
         return result
 
     if not apply:

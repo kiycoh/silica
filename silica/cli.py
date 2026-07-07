@@ -635,7 +635,10 @@ def _handle_direct_shortcut(raw_input: str, messages: list[dict]) -> bool:
             CONSOLE.print(f"  Curate on [bold]{scope}[/] — applying via the worker seam…")
         else:
             CONSOLE.print(f"  Curate on [bold]{scope}[/] — dry-run (nothing is written)…")
-        res = TOOLS["silica_curate"].run(apply=apply, folder=folder)
+        res = json.loads(TOOLS["silica_curate"].run(apply=apply, folder=folder))
+        if "error" in res:
+            CONSOLE.print(f"  [yellow]{res['error']}[/]")
+            return True
 
         total = res.get("total", 0)
         counts = res.get("counts", {})
@@ -659,7 +662,7 @@ def _handle_direct_shortcut(raw_input: str, messages: list[dict]) -> bool:
             for it in res.get("items", []):
                 pair = f" ↔ {it['partner']}" if it.get("partner") else ""
                 CONSOLE.print(f"  · [bold]{it['kind']}[/]  {it['target']}{pair}")
-            CONSOLE.print("  Run [bold]/curate --apply[/] to execute.")
+            CONSOLE.print('  Run [bold]/curate --apply[/] to execute, or ask e.g. "apply only dedup".')
         return True
 
     return False
