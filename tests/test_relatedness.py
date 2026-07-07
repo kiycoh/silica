@@ -131,6 +131,21 @@ def test_cooccur_ranking_abstains_when_query_absent(tmp_path):
     assert _cooccur_ranking(st, "UNKNOWN", k=5, exclude=set(), scope=None) is None
 
 
+def test_cooccur_ranking_idf_beats_hub_over_rare_match(tmp_path):
+    # 'hub' appears in every note (zero discriminating power); 'rare' is shared
+    # by only the query and TWIN. IDF must rank the rare-sharing TWIN above a
+    # note that merely piles on the ubiquitous hub concept.
+    st = CooccurStore(path=tmp_path / "c.json", lang="english")
+    st.upsert_note("Q",    build_contribution("Q", "hub rare"))
+    st.upsert_note("TWIN", build_contribution("TWIN", "hub rare"))       # shares the rare concept
+    st.upsert_note("HUB1", build_contribution("HUB1", "hub hub hub"))    # only the ubiquitous hub
+    st.upsert_note("HUB2", build_contribution("HUB2", "hub filler"))     # keeps 'hub' near-ubiquitous
+
+    ranking = _cooccur_ranking(st, "Q", k=5, exclude=set(), scope=None, expand=False)
+    paths = [p for p, _w in ranking or []]
+    assert paths and paths[0] == "TWIN"   # rare shared concept wins over hub breadth
+
+
 def test_cooccur_ranking_expansion_reaches_associative_notes(tmp_path):
     # A is about alpha. Elsewhere alpha co-occurs strongly with omega.
     # A note about omega (but not alpha) is associatively related ONLY via expansion.

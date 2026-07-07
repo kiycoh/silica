@@ -397,9 +397,23 @@ class CooccurStore:
 
         return result
 
+    def adjacency(self, scope: str | None = None) -> dict[str, dict[str, float]]:
+        """Cached undirected adjacency {stem: {neighbour: weight}}, no NetworkX.
+
+        The same aggregated data `to_networkx()` wraps in a graph object,
+        exposed directly for callers that only need a neighbour-weight lookup
+        (e.g. profile expansion) rather than graph algorithms — skips paying
+        to construct a graph object just to immediately walk it.
+        """
+        adj, _labels = self._aggregate(scope=scope)
+        return adj
+
     def to_networkx(self, scope: str | None = None):
         """Return an undirected weighted nx.Graph for consumers (centrality,
         delta-vs-wikilink in graph_report). Built from aggregated adjacency.
+
+        For a plain neighbour-weight lookup instead of graph algorithms, use
+        `adjacency()` — it skips the per-call graph construction below.
         """
         import networkx as nx
 

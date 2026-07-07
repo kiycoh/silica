@@ -163,12 +163,9 @@ def _profile_from_seeds(
         return {}
     profile: dict[str, float] = dict(seeds)
     if expand:
-        graph = cooccur_store.to_networkx(scope=scope)
+        adj = cooccur_store.adjacency(scope=scope)
         for stem, weight in list(profile.items()):
-            if stem not in graph:
-                continue
-            for neighbour in graph[stem]:
-                edge_weight = graph[stem][neighbour].get("weight", 0.0)
+            for neighbour, edge_weight in adj.get(stem, {}).items():
                 profile[neighbour] = (
                     profile.get(neighbour, 0.0)
                     + weight * edge_weight * _EXPANSION_DISCOUNT
@@ -187,6 +184,45 @@ def _seed_from_text(text: str, lang: str) -> dict[str, float]:
     return seeds
 
 
+def _concept_idf(
+    cooccur_store: CooccurStore,
+    stems: set[str],
+    *,
+    scope: str | None,
+) -> dict[str, float]:
+    """Inverse document frequency per stem: log((N+1) / df), N = in-scope notes.
+
+    Without this, a hub concept present in hundreds of notes (e.g. "data
+    science", "statistica") dominates every ranking purely by breadth, burying
+    the discriminative concepts that actually make two notes the same. IDF is the
+    standard fix — a stem in every note scores ~0, a rare stem scores high — and
+    on the real vault it lifts true twins from rank 6/miss into the visible top-k
+    where plain overlap left them buried. Rarity is a corpus property, so `blocked`
+    (query + excludes) still counts toward df.
+
+    The `N+1` numerator (smoothed IDF) keeps the weight strictly positive even
+    when a stem sits in every note — the raw `log(N/df)` collapses to exactly 0
+    there, which on a tiny or brand-new vault (N=1, every stem ubiquitous) would
+    zero the whole co-occurrence signal and silently drop the leg. On a real
+    corpus the smoothing is negligible, so hub suppression is unchanged.
+
+    ponytail: one extra O(notes) pass, recomputed per query; memoise on the store
+    if a profiler ever shows it hot.
+    """
+    df: dict[str, int] = {}
+    n = 0
+    for path in cooccur_store.paths():
+        if not _path_in_scope(path, scope):
+            continue
+        n += 1
+        for stem in cooccur_store.note_nodes(path):
+            if stem in stems:
+                df[stem] = df.get(stem, 0) + 1
+    import math
+
+    return {stem: math.log((n + 1) / c) for stem, c in df.items() if c > 0}
+
+
 def _rank_cooccur_from_profile(
     cooccur_store: CooccurStore,
     profile: dict[str, float],
@@ -195,11 +231,12 @@ def _rank_cooccur_from_profile(
     blocked: set[str],
     scope: str | None,
 ) -> list[tuple[str, float]] | None:
-    """Rank in-scope notes by concept overlap with `profile` (implicit
-    concept->notes inverted index). Returns None when nothing overlaps.
+    """Rank in-scope notes by IDF-weighted concept overlap with `profile`
+    (implicit concept->notes inverted index). Returns None when nothing overlaps.
     """
     if not profile:
         return None
+    idf = _concept_idf(cooccur_store, set(profile), scope=scope)
     note_scores: dict[str, float] = {}
     for path in cooccur_store.paths():
         if path in blocked or not _path_in_scope(path, scope):
@@ -208,7 +245,7 @@ def _rank_cooccur_from_profile(
         for stem, count in cooccur_store.note_nodes(path).items():
             weight = profile.get(stem)
             if weight:
-                overlap += weight * count
+                overlap += weight * count * idf.get(stem, 0.0)
         if overlap > 0.0:
             note_scores[path] = overlap
     if not note_scores:
@@ -304,13 +341,18 @@ def related_notes(
     k: int = 10,
     scope: str | None = None,
     exclude: set[str] | None = None,
-    expand: bool = True,
+    expand: bool = False,
 ) -> list[RelatedNote]:
     """Return the top-k notes related to an INDEXED note `query_path`.
 
     Stores are injected (pass None for a leg that is unavailable — that leg
     abstains and fusion degrades to the survivor). Returns [] only when both
     legs abstain. Each result carries `evidence` recording its provenance.
+
+    `expand` (default off) adds associative co-occurrence neighbours to the
+    concept profile. On a real vault this re-inflates hub concepts and buries
+    true matches even under IDF weighting, so it stays opt-in for the one caller
+    that wants pure associative reach (autolink candidate discovery).
     """
     blocked = set(exclude or ()) | {query_path}
     pool = max(k * 3, _POOL_MIN)
@@ -331,7 +373,7 @@ def related_notes_for_query(
     k: int = 10,
     scope: str | None = None,
     exclude: set[str] | None = None,
-    expand: bool = True,
+    expand: bool = False,
 ) -> list[RelatedNote]:
     """Return the top-k notes related to a FRESH query (not an indexed note).
 
