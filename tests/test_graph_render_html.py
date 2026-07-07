@@ -198,11 +198,17 @@ class TestRenderSanity:
         assert "onNodeClick" in html
         assert 'network.on("click"' not in html
 
-    def test_on_background_click_closes_drawer(self, small_graph):
-        """Background click should be wired to closeDrawer."""
+    def test_on_background_click_closes_drawer_and_clears_focus(self, small_graph):
+        """Background tap closes the drawer AND reverts the focus/dim state.
+
+        (A camera-orbit drag never reaches here: the vendored bundle sets
+        clickAfterDrag=false, so onBackgroundClick fires only on a clean tap.)
+        """
         nodes, edges = small_graph
         html = render_html(nodes, edges, lib_js="// dummy")
-        assert "onBackgroundClick(closeDrawer)" in html
+        assert "onBackgroundClick(" in html
+        assert "closeDrawer()" in html
+        assert "clearFocus()" in html
 
     def test_empty_graph_renders(self):
         """render_html with empty node/edge lists should not raise."""
@@ -263,6 +269,35 @@ class TestSearchResultsFlyTo:
         assert "window.parent !== window" in html
         assert "postMessage" in html
         assert "silica-open-note" in html
+
+
+class TestFocusDim:
+    def test_neighbors_map_precomputed(self, small_graph):
+        nodes, edges = small_graph
+        html = render_html(nodes, edges, lib_js="// dummy")
+        assert "neighbors" in html
+
+    def test_apply_and_clear_focus_present(self, small_graph):
+        nodes, edges = small_graph
+        html = render_html(nodes, edges, lib_js="// dummy")
+        assert "function applyFocus(" in html
+        assert "function clearFocus(" in html
+
+    def test_node_color_has_dim_branch(self, small_graph):
+        nodes, edges = small_graph
+        html = render_html(nodes, edges, lib_js="// dummy")
+        assert "_dim" in html
+        assert "#1a2030" in html
+
+    def test_choose_node_applies_focus(self, small_graph):
+        nodes, edges = small_graph
+        html = render_html(nodes, edges, lib_js="// dummy")
+        assert "applyFocus(node.id)" in html
+
+    def test_clear_focus_zooms_to_fit(self, small_graph):
+        nodes, edges = small_graph
+        html = render_html(nodes, edges, lib_js="// dummy")
+        assert "Graph.zoomToFit(600)" in html
 
 
 class TestFileTree:

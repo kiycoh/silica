@@ -282,6 +282,35 @@ RAW_EDGES.forEach(e => {{
 const NODE_BY_ID = {{}};
 RAW_NODES.forEach(n => {{ NODE_BY_ID[n.id] = n; }});
 
+const neighbors = {{}};
+RAW_EDGES.forEach(e => {{
+  (neighbors[e.from] = neighbors[e.from] || new Set()).add(e.to);
+  (neighbors[e.to]   = neighbors[e.to]   || new Set()).add(e.from);
+}});
+
+let focusId = null;
+
+// Highlight a node and its 1-hop neighbours; dim everything else. Refresh via
+// the accessor re-pass idiom (same trick applyFilters uses for visibility) so
+// the physics layout is untouched.
+function applyFocus(id) {{
+  focusId = id;
+  const nb = neighbors[id] || new Set();
+  RAW_NODES.forEach(n => {{ n._dim = id != null && n.id !== id && !nb.has(n.id); }});
+  RAW_EDGES.forEach(e => {{ e._dim = id != null && e.from !== id && e.to !== id; }});
+  Graph.nodeColor(Graph.nodeColor());
+  Graph.linkColor(Graph.linkColor());
+}}
+
+function clearFocus() {{
+  focusId = null;
+  RAW_NODES.forEach(n => {{ n._dim = false; }});
+  RAW_EDGES.forEach(e => {{ e._dim = false; }});
+  Graph.nodeColor(Graph.nodeColor());
+  Graph.linkColor(Graph.linkColor());
+  Graph.zoomToFit(600);
+}}
+
 let activeCommunity = -2;
 let showExtracted = true;
 let showAmbiguous = false;
@@ -290,6 +319,9 @@ let showAmbiguous = false;
 // One hue per community: every node in a community shares the exact color,
 // hub or leaf. Degree is shown by size, never by washing the hue out.
 function nodeColor(n) {{
+  // ponytail: solid darken-to-background dim; switch to rgba() only if visual
+  // verification shows 3d-force-graph honours per-node alpha.
+  if (n._dim) return '#1a2030';
   if (n.type === 'ghost') return '#4a5468';   // muted slate — dimmed, never black
   return (n.color && n.color.background) || '#5a6372';
 }}
@@ -300,7 +332,7 @@ const Graph = new ForceGraph3D(document.getElementById("graph"))
   .linkSource("from").linkTarget("to")
   .nodeLabel("label").nodeVal("size")
   .nodeColor(nodeColor)
-  .linkColor(l => (l.color && l.color.color) || "#22d3ee")
+  .linkColor(l => l._dim ? '#161b24' : ((l.color && l.color.color) || "#22d3ee"))
   // Perf on big vaults (1200+ notes): linkWidth>0 makes every edge a cylinder
   // mesh and arrows add a cone per edge — thousands of meshes. Width 0 ⇒ cheap
   // GL lines; no arrows; fewer sphere segments; finite cooldown so the sim
@@ -394,6 +426,7 @@ function chooseNode(node) {{
   if (!node) return;
   selectNode(node);
   focusNode(node);
+  applyFocus(node.id);
 }}
 
 function chooseResult(i) {{
@@ -460,7 +493,7 @@ function selectNode(node) {{
 }}
 
 Graph.onNodeClick(selectNode);
-Graph.onBackgroundClick(closeDrawer);
+Graph.onBackgroundClick(() => {{ closeDrawer(); clearFocus(); }});
 
 function closeDrawer() {{
   document.getElementById("drawer").classList.remove("open");
