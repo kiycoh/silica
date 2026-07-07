@@ -154,22 +154,21 @@ def _collapse_near_dup_concepts(chunk: dict, *, is_near_dup) -> dict:
     the chunk's own concepts keeps the richest member of each near-dup group (longest
     excerpt) and drops the rest.
 
-    `is_near_dup(text_a, text_b) -> bool` is injected so the caller supplies the
-    signal it has cheapest: the main path passes embedding cosine (vectors already
-    computed for vault routing), a cold path could pass MinHash. Pure: no FSM, no I/O.
-    Drop-only (no excerpt merge) so the surviving concept's embed text is unchanged
-    and its vault-routing vector stays valid. O(n²) over a chunk's concepts.
+    `is_near_dup((name_a, excerpt_a), (name_b, excerpt_b)) -> bool` is injected so the
+    caller supplies the signal it has cheapest: the main path passes embedding cosine
+    (vectors already computed for vault routing); the cold path passes title-identity
+    + MinHash (no embedder). Pure: no FSM, no I/O. Drop-only (no excerpt merge) so the
+    surviving concept's embed text is unchanged and its vault-routing vector stays
+    valid. O(n²) over a chunk's concepts.
     ponytail: drops the twin's delta; it is assumed subsumed by the longer sibling.
     """
-    from silica.kernel.embed import _note_text
-
     batches = chunk.get("batches", [])
-    entries: list[list] = []  # [batch_idx, concept, excerpt_len, text]
+    entries: list[list] = []  # [batch_idx, concept, name, excerpt]
     for bi, batch in enumerate(batches):
         for c in batch.get("concepts", []):
             name = c.get("name", "") if isinstance(c, dict) else str(c)
             excerpt = c.get("excerpt", "") if isinstance(c, dict) else ""
-            entries.append([bi, c, len(excerpt), _note_text(name, excerpt)])
+            entries.append([bi, c, name, excerpt])
 
     n = len(entries)
     if n < 2:
@@ -183,7 +182,7 @@ def _collapse_near_dup_concepts(chunk: dict, *, is_near_dup) -> dict:
         return i
     for i in range(n):
         for j in range(i + 1, n):
-            if is_near_dup(entries[i][3], entries[j][3]):
+            if is_near_dup((entries[i][2], entries[i][3]), (entries[j][2], entries[j][3])):
                 parent[find(i)] = find(j)
 
     groups: dict[int, list[int]] = {}
@@ -194,7 +193,7 @@ def _collapse_near_dup_concepts(chunk: dict, *, is_near_dup) -> dict:
 
     keep: set[int] = set()
     for members in groups.values():
-        keep.add(max(members, key=lambda k: entries[k][2]))  # richest excerpt survives
+        keep.add(max(members, key=lambda k: len(entries[k][3])))  # richest excerpt survives
 
     new_batches: list[dict] = []
     for bi, batch in enumerate(batches):
@@ -202,6 +201,39 @@ def _collapse_near_dup_concepts(chunk: dict, *, is_near_dup) -> dict:
         if kept:
             new_batches.append({"inbox_file": batch.get("inbox_file", ""), "concepts": kept})
     return {"schema_version": chunk.get("schema_version", 1), "batches": new_batches}
+
+
+def _cold_intra_chunk_near_dup(a: tuple, b: tuple) -> bool:
+    """Embedder-free intra-chunk near-dup predicate for the STABLE leg.
+
+    Conservative on purpose — a wrong drop here is unrecoverable (the concept is
+    never written), so this only fires on high-precision signals:
+      • same title identity (title_key) — a title variant of the same note
+        ("Neurone Artificiale" ≡ "Neurone Artificiale (ANN)" ≡ "… 1"); or
+      • near-verbatim bodies (MinHash char-shingle Jaccard ≥ threshold) — catches
+        body twins whose titles differ ("… Description" vs "… Descriptor").
+    Paraphrased twins slip through (MinHash at this threshold is high-precision,
+    low-recall); the main embedding path catches those when the embedder is up.
+    """
+    from silica.kernel.title import title_key
+    from silica.kernel.minhash_dedup import minhash_signature, estimate_jaccard
+
+    (na, ea), (nb, eb) = a, b
+    ka, kb = title_key(na), title_key(nb)
+    # Require a NON-DEGENERATE shared key: title_key can collapse to a single common
+    # word when the other token is a stopword ("Test Concept" & "Another Concept"
+    # both → "concept"), which is not the same note. Two+ shared stems is a real
+    # title-variant match ("Neurone Artificiale" ≡ "Neurone Artificiale (ANN)").
+    if ka and ka == kb and len(ka.split()) >= 2:
+        return True
+    # MinHash is a BODY signal — comparing near-empty/short excerpts (or the titles)
+    # lets a single shared word inflate the char-shingle Jaccard into a false drop.
+    # Only compare excerpts, and only when both carry enough text to be meaningful.
+    if len(ea) < 40 or len(eb) < 40:
+        return False
+    thr = getattr(orch.CONFIG, "minhash_dup_threshold", 0.6)
+    sa, sb = minhash_signature(ea), minhash_signature(eb)
+    return bool(sa and sb) and estimate_jaccard(sa, sb) >= thr
 
 
 def _run_embedder_free_dedup_leg(fsm: "InjectorFSM", idx: int, chunk: dict) -> None:
@@ -212,6 +244,19 @@ def _run_embedder_free_dedup_leg(fsm: "InjectorFSM", idx: int, chunk: dict) -> N
     embedder-free signal is weaker than a cosine, so it routes to escalate-tier,
     not an auto-write. Best-effort: any failure leaves the chunk untouched.
     """
+    # Fix #4 (cold path): collapse intra-chunk sibling near-dups before the vault
+    # check, so twins from the SAME chunk don't both get written. Embedder-free,
+    # conservative predicate (title identity + near-verbatim MinHash).
+    _before = sum(len(b.get("concepts", [])) for b in chunk.get("batches", []))
+    chunk = fsm._chunks[idx] = _collapse_near_dup_concepts(
+        chunk, is_near_dup=_cold_intra_chunk_near_dup
+    )
+    if sum(len(b.get("concepts", [])) for b in chunk.get("batches", [])) < _before:
+        logger.info(
+            "COLLISION(stable leg): collapsed %d intra-chunk sibling near-dup concept(s)",
+            _before - sum(len(b.get("concepts", [])) for b in chunk.get("batches", [])),
+        )
+
     threshold = getattr(orch.CONFIG, "minhash_dup_threshold", 0.6)
     try:
         corpus: dict[str, str] = {}
@@ -377,8 +422,9 @@ def handle_collision(fsm: "InjectorFSM") -> None:
     # _collapse_near_dup_concepts there — left as a known small gap.)
     import numpy as _np
 
-    def _emb_near_dup(ta: str, tb: str) -> bool:
-        va, vb = vec_by_text.get(ta), vec_by_text.get(tb)
+    def _emb_near_dup(a, b) -> bool:
+        va = vec_by_text.get(_note_text(a[0], a[1]))
+        vb = vec_by_text.get(_note_text(b[0], b[1]))
         if va is None or vb is None:
             return False
         va, vb = _np.asarray(va, dtype=float), _np.asarray(vb, dtype=float)
