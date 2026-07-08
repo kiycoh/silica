@@ -109,7 +109,7 @@ def _deferred_op_dict(fsm: "InjectorFSM", d: dict, reason_prefix: str) -> dict:
 
 
 def _embedder_free_near_dups(
-    chunk: dict, corpus: dict[str, str], *, threshold: float = 0.6
+    chunk: dict, corpus: dict[str, str], *, threshold: float = 0.6, sig_cache: dict | None = None
 ) -> list[dict]:
     """Concepts in `chunk` that have a MinHash near-duplicate in `corpus`.
 
@@ -117,6 +117,9 @@ def _embedder_free_near_dups(
     shaped like the borderline `deferred_concepts` entries so the existing defer
     plumbing handles them unchanged. The returned `concept` is the same object
     held in the chunk, so callers can drop it by identity.
+
+    `sig_cache` (optional) memoizes corpus signatures across chunks in a run, so
+    the vault's notes are hashed once instead of once per chunk.
     """
     from silica.kernel.minhash_dedup import near_duplicates
 
@@ -131,7 +134,7 @@ def _embedder_free_near_dups(
             query = f"{name}\n{excerpt}".strip()
             if not query:
                 continue
-            hits = near_duplicates(query, corpus, threshold=threshold)
+            hits = near_duplicates(query, corpus, threshold=threshold, sig_cache=sig_cache)
             if not hits:
                 continue
             path, score = hits[0]
@@ -261,9 +264,10 @@ def _run_embedder_free_dedup_leg(fsm: "InjectorFSM", idx: int, chunk: dict) -> N
     try:
         corpus: dict[str, str] = {}
         # "" matches every note name → full-vault enumeration. Acceptable on this
-        # cold path (only reached when the embedder/index is down).
-        # ponytail: rebuilds the corpus per chunk; share a MinHash index with the
-        # embed-refresh hook if this ever runs hot.
+        # cold path (only reached when the embedder/index is down). Re-read per
+        # chunk on purpose: chunk N must see notes chunk N-1 just wrote, or
+        # cross-chunk twins land as duplicates. Only the signatures are memoized
+        # (sig_cache below) — the corpus text is cheap I/O, the MinHash is not.
         for ref in orch.DRIVER.search_names(""):
             try:
                 corpus[ref.path] = orch.DRIVER.read_note(ref).content or ""
@@ -275,7 +279,8 @@ def _run_embedder_free_dedup_leg(fsm: "InjectorFSM", idx: int, chunk: dict) -> N
     if not corpus:
         return
 
-    deferred = _embedder_free_near_dups(chunk, corpus, threshold=threshold)
+    sig_cache = fsm.__dict__.setdefault("_minhash_sig_cache", {})
+    deferred = _embedder_free_near_dups(chunk, corpus, threshold=threshold, sig_cache=sig_cache)
     if not deferred:
         return
 

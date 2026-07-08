@@ -63,6 +63,21 @@ def test_empty_text_is_never_a_duplicate() -> None:
     assert estimate_jaccard(minhash_signature(""), minhash_signature("x")) == 0.0
 
 
+def test_sig_cache_reused_and_invalidated_on_content_change() -> None:
+    # The cold-path leg re-reads the corpus per chunk (for freshness) but must
+    # not re-hash unchanged notes; the cache reuses a signature only while the
+    # note's content fingerprint holds, and recomputes when the text changes.
+    corpus = {"a.md": "Transformers use self-attention over input tokens."}
+    cache: dict = {}
+    near_duplicates("q", corpus, threshold=0.99, sig_cache=cache)
+    sig = cache["a.md"][1]
+    near_duplicates("q", corpus, threshold=0.99, sig_cache=cache)
+    assert cache["a.md"][1] is sig  # unchanged text → same tuple, no recompute
+    corpus["a.md"] = "Sourdough needs a long cold ferment for flavour."
+    near_duplicates("q", corpus, threshold=0.99, sig_cache=cache)
+    assert cache["a.md"][1] is not sig  # fingerprint mismatch → recomputed
+
+
 # ── COLLISION wiring: the embedder-free pass that runs when the embed index is
 #    empty or the embedder is down (the hole this leg closes).
 
