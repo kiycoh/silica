@@ -1,4 +1,4 @@
-# Silica Agent
+# Silica
 
 [![Python 3.11+](https://img.shields.io/badge/python-3.11+-22d3ee.svg)](https://www.python.org/)
 [![Obsidian Compatible](https://img.shields.io/badge/Obsidian-Compatible-38afef.svg)](https://obsidian.md/)
@@ -9,7 +9,7 @@
   <img src="docs/assets/sili_no_bg.png" alt="Silica Mascot Sili" width="250" />
 </p>
 
-> **Silica** is a CLI-based agent designed for automated curation, organization and **safe** knowledge management. Local-first and open-source. Supports Obsidian.
+> **Silica** is a coherence engine for human-readable knowledge vaults: a CLI tool for **safe** curation and organization. Local-first and open-source. Supports Obsidian.
 
 ---
 
