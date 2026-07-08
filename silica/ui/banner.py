@@ -1,7 +1,5 @@
 from __future__ import annotations
 
-from pathlib import Path
-
 from rich.padding import Padding
 from rich.table import Table
 from rich.text import Text
@@ -13,8 +11,14 @@ from silica.ui.theme import BRAND_CYAN, BRAND_INDIGO
 
 _CAPTION = f"v{_VERSION.split('+')[0]} · Your personal note curator agent"
 
-# ponytail: read the mascot from disk so it stays editable; add when it ships, inline it.
-_MASCOT_PATH = Path(__file__).resolve().parents[2] / "docs" / "assets" / "sili_compressed.txt"
+# Inlined from docs/assets/sili_compressed.txt (gitignored — a disk read would
+# come up empty on any machine but the author's).
+_MASCOT = (
+    "    ██▄█▄█",
+    "    █▄██▄█",
+    "   ▀ ▀██▀ ▀",
+    "       ▀",
+)
 
 # Hand-drawn wordmark — thin rounded line-art, deliberately not a figlet font
 # (generator fonts like ANSI Shadow are everywhere; bespoke glyphs are not).
@@ -51,19 +55,6 @@ def _painted(lines: tuple[str, ...] | list[str]) -> Text:
     return t
 
 
-def _mascot_lines() -> list[str]:
-    """Mascot rows from sili_compressed.txt (blank edge lines trimmed); [] if missing."""
-    try:
-        rows = _MASCOT_PATH.read_text(encoding="utf-8").splitlines()
-    except OSError:
-        return []
-    while rows and not rows[0].strip():
-        rows.pop(0)
-    while rows and not rows[-1].strip():
-        rows.pop()
-    return rows
-
-
 def print_banner() -> None:
     if not CONFIG.show_banner:
         CONSOLE.print(f"  [bold cyan]silica[/] [dim]{_CAPTION}[/]")
@@ -71,11 +62,10 @@ def print_banner() -> None:
     wordmark = _painted(_ART)
     wordmark.append("\n")
     wordmark.append(_CAPTION, style="dim")  # caption rides under the wordmark, right column
-    mascot = _mascot_lines()
-    mascot_w = max((len(ln) for ln in mascot), default=0)
-    if mascot and CONSOLE.width >= mascot_w + 3 + len(_CAPTION):
+    mascot_w = max(len(ln) for ln in _MASCOT)
+    if CONSOLE.width >= mascot_w + 3 + len(_CAPTION):
         grid = Table.grid(padding=(0, 3))  # logo left column, wordmark right column
-        grid.add_row(_painted(mascot), wordmark)
+        grid.add_row(_painted(_MASCOT), wordmark)
         CONSOLE.print(Padding(grid, (0, 0, 0, 2)))
     else:
         CONSOLE.print(Padding(wordmark, (0, 0, 0, 2)))
