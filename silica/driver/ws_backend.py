@@ -72,6 +72,24 @@ class ObsidianWSBackend(GraphIndexMixin):
     # Connection + RPC transport
     # ------------------------------------------------------------------
 
+    @classmethod
+    def attached(cls, ws: Any, loop: asyncio.AbstractEventLoop) -> ObsidianWSBackend:
+        """Wrap an already-accepted connection (production: `silica connect`
+        hosts the server, the plugin dialed in). The caller owns socket and
+        loop — it routes rpc_result/rpc_error frames to `_on_frame` and must
+        use `detach()` (never `close()`, which would stop the shared loop)."""
+        be = cls(url="", token="")
+        be._ws = ws
+        be._loop = loop
+        be._ready.set()
+        return be
+
+    def detach(self, reason: str) -> None:
+        """Disconnect an attached backend: fail in-flight RPCs, refuse new ones."""
+        self._error = RuntimeError(reason)
+        self._ws = None
+        self._fail_pending(self._error)
+
     def _ensure_connected(self) -> None:
         with self._start_lock:
             if self._loop is None:

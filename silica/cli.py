@@ -1070,11 +1070,11 @@ def _resolve_context_budget() -> None:
 
 
 def _dispatch_subcommand(args: list[str]) -> int | None:
-    """Handle `silica doctor` / `silica init`.
+    """Handle `silica doctor` / `silica init` / `silica connect`.
 
     Returns an exit code, or None when no subcommand matched (→ REPL).
     Lazy imports keep REPL startup unchanged. Module attributes (not `from`
-    imports) so tests can monkeypatch run_checks / run_wizard.
+    imports) so tests can monkeypatch run_checks / run_wizard / run_connect.
     """
     if args[:1] == ["doctor"]:
         import silica.onboarding.checks as checks
@@ -1084,6 +1084,15 @@ def _dispatch_subcommand(args: list[str]) -> int | None:
     if args[:1] == ["init"]:
         import silica.onboarding.wizard as wizard_mod
         return wizard_mod.run_wizard()
+    if args[:1] == ["connect"]:
+        # Dispatch runs before main()'s setup (unlike --gui) — do it here.
+        _activate_repo_mode()
+        from silica.kernel.vault_manifest import apply_manifest_to_config
+        apply_manifest_to_config()
+        _resolve_context_budget()
+        _setup_logging(debug="--verbose" in sys.argv or "-v" in sys.argv or CONFIG.debug_logging)
+        import silica.ui.connect as connect_mod
+        return connect_mod.run_connect()
     return None
 
 

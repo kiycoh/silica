@@ -305,10 +305,14 @@ async def run_turn(text: str) -> AsyncIterator[dict]:
         answer = await task  # re-raises if run_agent failed
         _update_context_tokens(messages)
         _collapsed = _compact_context(messages, _collapsed)
+        # note_resolver reads the DRIVER graph — with the ws backend installed
+        # (silica connect) a driver call on the loop thread deadlocks (`_rpc`
+        # blocks the very loop that must send the frame), so render off-loop.
+        html = await asyncio.to_thread(lambda: _linkify(answer, note_resolver()))
         yield {
             "type": "done",
             "answer": answer,
-            "html": _linkify(answer, note_resolver()),
+            "html": html,
             "context_tokens": CONFIG.context_tokens,
             "max_context_tokens": CONFIG.max_context_tokens,
         }

@@ -42,6 +42,11 @@ def _create_driver() -> ObsidianDriver:
         from silica.driver.fs_backend import ObsidianFSBackend
 
         return ObsidianFSBackend(vault_path=CONFIG.vault_path)
+    elif CONFIG.backend == "ws":
+        raise ValueError(
+            "backend='ws' is installed by `silica connect` when the plugin dials in; "
+            "run `silica connect`, or set SILICA_BACKEND to fs/cli"
+        )
     else:
         raise ValueError(f"Unknown backend: {CONFIG.backend!r}")
 
@@ -69,6 +74,14 @@ def reset_driver() -> None:
     global _driver
     with _driver_lock:
         _driver = None
+
+
+def set_driver(driver: ObsidianDriver | None) -> None:
+    """Install a live driver instance — `silica connect`'s attached ws backend.
+    None falls back to building from CONFIG.backend on next access."""
+    global _driver
+    with _driver_lock:
+        _driver = driver
 
 
 # For convenience: DRIVER can be imported directly
