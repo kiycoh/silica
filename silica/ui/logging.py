@@ -1,7 +1,12 @@
+import io
 import logging
 import sys
 
+from rich.console import Console
+
+from silica.ui.console import CONSOLE
 from silica.ui.style import GLYPHS
+from silica.ui.theme import SILICA_THEME
 
 
 class LiveAwareStreamHandler(logging.StreamHandler):
@@ -194,3 +199,29 @@ class HumanFriendlyFormatter(logging.Formatter):
             friendly_message = "\n".join(head + [f"  [dim]... ({hidden} lines truncated) ...[/dim]"] + tail)
 
         return f"  [muted][{time_str}][/muted] {icon} {friendly_message}"
+
+
+class AnsiHumanFriendlyFormatter(HumanFriendlyFormatter):
+    """HumanFriendlyFormatter for worker threads: renders the markup to ANSI here.
+
+    The main-thread RichHandler renders markup through the shared CONSOLE; a
+    worker thread can't — concurrent rich rendering onto an active Live tears the
+    terminal (see ``_setup_logging``). So we render this one record to its own
+    throwaway Console/buffer (nothing shared → thread-safe) and hand plain ANSI
+    text to the StreamHandler, which the live-aware stderr proxy prints above the
+    Live region intact. The buffer Console mirrors CONSOLE's terminal/colour, so
+    piped output stays plain — exactly like the main-thread path.
+    """
+
+    def format(self, record: logging.LogRecord) -> str:
+        markup = super().format(record)
+        buf = io.StringIO()
+        Console(
+            file=buf,
+            theme=SILICA_THEME,
+            highlight=False,
+            force_terminal=CONSOLE.is_terminal,
+            color_system=CONSOLE.color_system,
+            width=CONSOLE.width,
+        ).print(markup, end="", soft_wrap=True)
+        return buf.getvalue()

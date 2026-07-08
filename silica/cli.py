@@ -112,7 +112,11 @@ def _setup_logging(debug: bool = False) -> None:
     handler: logging.Handler
     if debug:
         from rich.logging import RichHandler
-        from silica.ui.logging import HumanFriendlyFormatter, LiveAwareStreamHandler
+        from silica.ui.logging import (
+            AnsiHumanFriendlyFormatter,
+            HumanFriendlyFormatter,
+            LiveAwareStreamHandler,
+        )
         handler = RichHandler(
             console=CONSOLE,
             markup=True,
@@ -131,10 +135,10 @@ def _setup_logging(debug: bool = False) -> None:
         # sys.stderr at emit time follows rich.Live's redirect, so they print above
         # an active live region instead of tearing it (stale-frame duplication).
         bg_handler = LiveAwareStreamHandler()
-        bg_handler.setFormatter(logging.Formatter(
-            fmt="%(asctime)s [%(name)s] %(levelname)s: %(message)s",
-            datefmt="%H:%M:%S",
-        ))
+        # Same human-friendly seam as the main thread — rendered to ANSI in the
+        # formatter (throwaway Console) so worker logs (dedup, refine, enrich,
+        # expand, orphan…) read like the main-thread ones instead of raw dumps.
+        bg_handler.setFormatter(AnsiHumanFriendlyFormatter())
         bg_handler.addFilter(lambda r: threading.current_thread() is not main_thread)
         root.addHandler(bg_handler)
     else:

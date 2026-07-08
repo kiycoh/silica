@@ -1,6 +1,10 @@
 import logging
 import pytest
-from silica.ui.logging import HumanFriendlyFormatter, FRIENDLY_TEMPLATES
+from silica.ui.logging import (
+    AnsiHumanFriendlyFormatter,
+    HumanFriendlyFormatter,
+    FRIENDLY_TEMPLATES,
+)
 
 def test_human_friendly_formatter_mapped_debug():
     formatter = HumanFriendlyFormatter()
@@ -127,6 +131,53 @@ def test_human_friendly_formatter_bad_args_graceful_fallback():
     # It should fallback gracefully to the standard %-formatted message or original message
     assert "⚙" in formatted
     assert "test_tool" in formatted
+
+
+def _dedup_record():
+    # A real worker-thread call site: it must read human-friendly, not raw.
+    return logging.LogRecord(
+        name="silica.capabilities.dedup",
+        level=logging.INFO,
+        pathname="dedup.py",
+        lineno=1,
+        msg="Restored %s to version %d",  # mapped template, to prove reword survives
+        args=("note.md", 2),
+        exc_info=None,
+    )
+
+
+def test_ansi_formatter_consumes_markup_and_rewords():
+    """The worker seam must interpret markup, never emit literal [muted]/[/] tags.
+
+    (The bug being guarded: writing HumanFriendlyFormatter's markup string raw
+    to stderr, which prints the literal rich tags.)
+    """
+    out = AnsiHumanFriendlyFormatter().format(_dedup_record())
+    assert "Restored file note.md to version 2" in out
+    assert "[muted]" not in out and "[/muted]" not in out and "[/]" not in out
+
+
+def test_ansi_formatter_emits_ansi_on_a_terminal(monkeypatch):
+    """When CONSOLE is a colour terminal, the worker output carries ANSI codes
+    (main-thread parity); when piped it stays plain."""
+    class _FakeConsole:
+        is_terminal = True
+        color_system = "truecolor"
+        width = 120
+
+    monkeypatch.setattr("silica.ui.logging.CONSOLE", _FakeConsole())
+    out = AnsiHumanFriendlyFormatter().format(_dedup_record())
+    assert "\x1b[" in out  # ANSI escape present
+
+    class _PipedConsole:
+        is_terminal = False
+        color_system = None
+        width = 80
+
+    monkeypatch.setattr("silica.ui.logging.CONSOLE", _PipedConsole())
+    plain = AnsiHumanFriendlyFormatter().format(_dedup_record())
+    assert "\x1b[" not in plain
+    assert "Restored file note.md to version 2" in plain
 
 
 def test_no_root_handler_caches_real_stderr(monkeypatch):
