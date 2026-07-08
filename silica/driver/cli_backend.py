@@ -988,6 +988,12 @@ class ObsidianCLIBackend(GraphIndexMixin):
             try:
                 self._eval(js)
             except Exception as e:
+                # "not found" means the note doesn't exist — the verbatim
+                # fallback would fabricate a file at the raw path (the
+                # 2026-07-08 phantom-file incident: 202 extensionless files
+                # in one merge run). Overwrite never creates; propagate.
+                if "not found" in str(e).lower():
+                    raise RuntimeError(f"Cannot overwrite non-existent note: {path}") from e
                 logger.debug("vault.process overwrite failed (%s); falling back to verbatim write.", e)
                 self._write_large_content(path, content, append_mode=False)
                 self._wait_for_content_reflects(ref, content)
@@ -1016,6 +1022,10 @@ class ObsidianCLIBackend(GraphIndexMixin):
             try:
                 self._eval(js)
             except Exception as e:
+                # Same guard as overwrite(): append targets an existing note;
+                # a "not found" must not become a fabricated file.
+                if "not found" in str(e).lower():
+                    raise RuntimeError(f"Cannot append to non-existent note: {path}") from e
                 logger.debug("vault.process append failed (%s); falling back to verbatim write.", e)
                 self._write_large_content(path, content, append_mode=True)
                 self._wait_for_content_contains(ref, content)

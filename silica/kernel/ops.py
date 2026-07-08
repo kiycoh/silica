@@ -51,6 +51,22 @@ class Op(BaseModel):
         if self.op == OpType.move:
             if not self.from_path or not self.to_path:
                 raise ValueError("move op requires both 'from_path' and 'to_path'")
+        # Trust boundary for model-supplied ops (2026-07-08 merge-run corruption):
+        # 1. Note paths must carry the .md extension — the read channel appends
+        #    it but the write channel resolves verbatim, so a bare path makes
+        #    getFileByPath miss and the cli fallback fabricates a phantom
+        #    extensionless file next to the real note.
+        # 2. NUL bytes can never occur in markdown; they arrive as model-emitted
+        #    backslash-u0000 JSON escapes and poison the write channel (subprocess
+        #    rejects NUL in argv). Strip them here so every entry point inherits it.
+        for f in ("path", "from_path", "to_path"):
+            v = getattr(self, f)
+            if v and not v.endswith(".md"):
+                setattr(self, f, v + ".md")
+        for f in ("content", "snippet", "base_content"):
+            v = getattr(self, f)
+            if v and "\x00" in v:
+                setattr(self, f, v.replace("\x00", ""))
         return self
 
     def touched_ref(self) -> str | None:
