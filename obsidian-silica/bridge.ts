@@ -34,6 +34,11 @@ export interface BridgeDeps {
   connect: (url: string) => SocketLike;
   onStatus: (status: Status, detail: string) => void;
   onFrame: (frame: Frame, send: (f: Frame) => void) => void;
+  /** Vet the `welcome` before trusting the session. Return a rejection reason
+   * (e.g. the bridge serves a different vault) to refuse, or null to accept.
+   * The token gates *access*; this gates *identity* — a defense-in-depth check
+   * so a cross-vault bridge file can't drive writes into the wrong vault. */
+  verifyWelcome?: (frame: Frame) => string | null;
   schedule?: (fn: () => void, ms: number) => unknown;
   cancel?: (handle: unknown) => void;
 }
@@ -120,6 +125,15 @@ export class BridgeClient {
     }
     if (!this.handshakeDone) {
       if (frame.type === "welcome") {
+        const reject = this.deps.verifyWelcome?.(frame);
+        if (reject) {
+          // Refuse like a `bye`: close + back off. Reconnect keeps watching the
+          // bridge file, so starting `silica connect` in the right vault heals it.
+          this.setStatus("disconnected", reject);
+          this.closeSocket();
+          this.scheduleReconnect();
+          return;
+        }
         this.handshakeDone = true;
         this.backoff = BACKOFF_START_MS;
         this.setStatus("connected", `vault: ${String(frame.vault ?? "")}`);

@@ -1,6 +1,7 @@
-import { App, ItemView, Plugin, PluginSettingTab, WorkspaceLeaf, normalizePath, type SettingDefinitionItem } from "obsidian";
+import { App, ItemView, MarkdownRenderer, Plugin, PluginSettingTab, WorkspaceLeaf, normalizePath, type SettingDefinitionItem } from "obsidian";
 
 import { BridgeClient, type Frame, type SocketLike, type Status } from "./bridge.ts";
+import { applyChatFrame, emptyTurn, type TurnState } from "./chat.ts";
 import { dispatchRpc, RPC_METHODS, type RpcApp } from "./handlers.ts";
 
 const VIEW_TYPE = "silica-bridge-view";
@@ -50,6 +51,15 @@ export default class SilicaBridgePlugin extends Plugin {
         }
       },
       connect: (url) => wrapSocket(new WebSocket(url)),
+      // Defense-in-depth: refuse a bridge whose vault isn't this one, so a stray
+      // silica-bridge.json can't make Silica reason over vault A and write to B.
+      verifyWelcome: (frame) => {
+        const served = String(frame.vault ?? "");
+        const mine = this.app.vault.getName();
+        return served && served !== mine
+          ? `bridge serves vault "${served}", not "${mine}" — run silica connect in this vault`
+          : null;
+      },
       onStatus: (s, detail) => {
         this.status = s;
         this.statusDetail = detail;
@@ -60,10 +70,19 @@ export default class SilicaBridgePlugin extends Plugin {
     void this.client.start();
   }
 
+  onFrame(frame: Frame, send: (f: Frame) => void): void {
+    if (frame.type === "rpc") return this.onRpc(frame, send);
+    // Chat replies (chat_event/chat_done/chat_error) → the panel that owns the turn.
+    if (typeof frame.type === "string" && frame.type.startsWith("chat_")) {
+      for (const leaf of this.app.workspace.getLeavesOfType(VIEW_TYPE)) {
+        if (leaf.view instanceof BridgeView) leaf.view.handleChatFrame(frame);
+      }
+    }
+  }
+
   // RPC dispatch (phases 3–4): allowlist → typed read/write handlers. An unknown
   // method is refused, never executed (PROTOCOL §Security: fixed allowlist).
-  onFrame(frame: Frame, send: (f: Frame) => void): void {
-    if (frame.type !== "rpc") return;
+  onRpc(frame: Frame, send: (f: Frame) => void): void {
     const id = frame.id as number;
     const method = String(frame.method);
     const params = (frame.params ?? {}) as Record<string, unknown>;
@@ -91,7 +110,7 @@ export default class SilicaBridgePlugin extends Plugin {
 
   refreshViews(): void {
     for (const leaf of this.app.workspace.getLeavesOfType(VIEW_TYPE)) {
-      if (leaf.view instanceof BridgeView) leaf.view.render();
+      if (leaf.view instanceof BridgeView) leaf.view.renderStatus();
     }
   }
 
@@ -113,8 +132,20 @@ function wrapSocket(ws: WebSocket): SocketLike {
   return s;
 }
 
+// Chat panel: a message log + input over the bridge's chat channel. The pure
+// event→view-model fold lives in chat.ts; this class owns only the DOM and the
+// in-flight turn. One turn at a time (the server refuses a concurrent chat).
 class BridgeView extends ItemView {
   plugin: SilicaBridgePlugin;
+  private statusEl: HTMLElement | null = null;
+  private logEl!: HTMLElement;
+  private inputEl!: HTMLTextAreaElement;
+  private sendBtn!: HTMLButtonElement;
+  private stopBtn!: HTMLButtonElement;
+  private turnId: string | null = null;
+  private turn: TurnState | null = null;
+  private bodyEl!: HTMLElement;
+  private toolsEl!: HTMLElement;
 
   constructor(leaf: WorkspaceLeaf, plugin: SilicaBridgePlugin) {
     super(leaf);
@@ -124,17 +155,110 @@ class BridgeView extends ItemView {
   getViewType(): string { return VIEW_TYPE; }
   getDisplayText(): string { return "Silica bridge"; }
   getIcon(): string { return "link"; }
-  async onOpen(): Promise<void> { this.render(); }
+  async onOpen(): Promise<void> { this.build(); }
 
-  render(): void {
+  private build(): void {
     const el = this.contentEl;
     el.empty();
-    el.createEl("h4", { text: "Silica bridge" });
-    el.createEl("p", { text: `Status: ${this.plugin.status}` });
-    if (this.plugin.statusDetail) el.createEl("p", { text: this.plugin.statusDetail });
-    if (this.plugin.status !== "connected") {
-      el.createEl("p", { text: "Run `silica connect` in this vault to start the bridge." });
+    el.addClass("silica-bridge");
+    this.statusEl = el.createEl("p", { cls: "silica-status" });
+    this.logEl = el.createDiv({ cls: "silica-log" });
+    const row = el.createDiv({ cls: "silica-input-row" });
+    this.inputEl = row.createEl("textarea", { attr: { rows: "2", placeholder: "Message Silica…" } });
+    this.sendBtn = row.createEl("button", { text: "Send" });
+    this.stopBtn = row.createEl("button", { text: "Stop" });
+    this.stopBtn.hide();
+    this.sendBtn.onclick = () => this.sendChat();
+    this.stopBtn.onclick = () => {
+      if (this.turnId) this.plugin.client?.send({ type: "chat_cancel", turnId: this.turnId });
+    };
+    this.inputEl.addEventListener("keydown", (e) => {
+      if (e.key === "Enter" && !e.shiftKey) { e.preventDefault(); this.sendChat(); }
+    });
+    this.renderStatus();
+  }
+
+  renderStatus(): void {
+    if (!this.statusEl) return; // status can fire before onOpen builds the DOM
+    const s = this.plugin.status;
+    if (s !== "connected" && this.turnId) this.abortTurn(s); // dropped mid-turn
+    const detail = this.plugin.statusDetail ? ` — ${this.plugin.statusDetail}` : "";
+    this.statusEl.setText(`${s}${detail}`);
+    const blocked = s !== "connected" || this.turnId !== null;
+    this.inputEl.disabled = blocked;
+    this.sendBtn.disabled = blocked;
+  }
+
+  private bubble(role: "user" | "silica"): HTMLElement {
+    const b = this.logEl.createDiv({ cls: `silica-msg silica-${role}` });
+    this.logEl.scrollTop = this.logEl.scrollHeight;
+    return b;
+  }
+
+  private sendChat(): void {
+    if (this.plugin.status !== "connected" || this.turnId !== null) return;
+    const text = this.inputEl.value.trim();
+    if (!text) return;
+    this.inputEl.value = "";
+    this.bubble("user").setText(text);
+    const asst = this.bubble("silica");
+    this.toolsEl = asst.createDiv({ cls: "silica-tools" });
+    this.bodyEl = asst.createDiv({ cls: "silica-body" });
+    this.bodyEl.setText("…");
+    this.turnId = crypto.randomUUID();
+    this.turn = emptyTurn();
+    this.plugin.client?.send({ type: "chat", turnId: this.turnId, text });
+    this.stopBtn.show();
+    this.renderStatus();
+  }
+
+  handleChatFrame(frame: Frame): void {
+    if (!this.turn || frame.turnId !== this.turnId) return; // not our turn
+    applyChatFrame(this.turn, frame);
+    this.renderTurn();
+    if (this.turn.done) this.finishTurn();
+  }
+
+  private renderTurn(): void {
+    const t = this.turn;
+    if (!t) return;
+    this.toolsEl.empty();
+    for (const tool of t.tools) {
+      const glyph = tool.status === "done" ? "✓" : tool.status === "error" ? "✗" : "⏺";
+      this.toolsEl
+        .createDiv({ cls: `silica-tool silica-tool-${tool.status}` })
+        .setText(`${glyph} ${tool.label}${tool.error ? ` — ${tool.error}` : ""}`);
     }
+    if (!t.done) this.bodyEl.setText(t.text || "…");
+    this.logEl.scrollTop = this.logEl.scrollHeight;
+  }
+
+  private finishTurn(): void {
+    const t = this.turn;
+    this.bodyEl.empty();
+    if (t?.error) {
+      this.bodyEl.addClass("silica-error");
+      this.bodyEl.setText(`error: ${t.error}`);
+    } else {
+      // Render markdown (not the server's html) → clickable wikilinks, no innerHTML.
+      void MarkdownRenderer.render(this.app, t?.answer || t?.text || "", this.bodyEl, "", this);
+    }
+    this.turnId = null;
+    this.turn = null;
+    this.stopBtn.hide();
+    this.renderStatus();
+    this.logEl.scrollTop = this.logEl.scrollHeight;
+  }
+
+  private abortTurn(reason: string): void {
+    if (this.turn && this.bodyEl) {
+      this.bodyEl.empty();
+      this.bodyEl.addClass("silica-error");
+      this.bodyEl.setText(`turn aborted: ${reason}`);
+    }
+    this.turnId = null;
+    this.turn = null;
+    this.stopBtn.hide();
   }
 }
 

@@ -60,6 +60,31 @@ test("frames after welcome reach onFrame; not before", async () => {
   assert.equal(h.frames[0].id, 2);
 });
 
+test("verifyWelcome rejection refuses the session (no connect), closes, reconnects", async () => {
+  const sock = fakeSocket();
+  const statuses: string[] = [];
+  const frames: Frame[] = [];
+  const scheduled: Array<{ fn: () => void; ms: number }> = [];
+  const client = new BridgeClient({
+    readBridgeInfo: async () => ({ port: 1, token: "t", protocolVersion: 1 }),
+    connect: () => sock,
+    onStatus: (s) => statuses.push(s),
+    onFrame: (f) => frames.push(f),
+    verifyWelcome: (f) => (f.vault === "test" ? null : `wrong vault: ${String(f.vault)}`),
+    schedule: (fn, ms) => { scheduled.push({ fn, ms }); return scheduled.length; },
+    cancel: () => {},
+  });
+  await client.start();
+  sock.onOpen!();
+  sock.onMessage!(JSON.stringify({ type: "welcome", vault: "alex_second_brain", protocolVersion: 1 }));
+  assert.equal(statuses.at(-1), "disconnected"); // never "connected"
+  assert.ok(sock.closed);
+  assert.equal(scheduled.length, 1);
+  // A post-welcome frame must NOT be dispatched — handshake was refused.
+  sock.onMessage!(JSON.stringify({ type: "rpc", id: 1, method: "read" }));
+  assert.equal(frames.length, 0);
+});
+
 test("bye disconnects, closes the socket, schedules a reconnect", async () => {
   const h = harness({ port: 1, token: "t", protocolVersion: 1 });
   await h.client.start();

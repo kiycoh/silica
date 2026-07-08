@@ -14,12 +14,24 @@ No data leaves your machine through this plugin.
 
 ## Status
 
-Connection lifecycle (handshake, reconnect-with-backoff, status panel, settings)
-and the full vault RPC surface — reads (`read`/`list_files`/`props_of`/`outline`/
-`search_context`/`resolved_links`/`mention_index`) and graph-safe writes
-(`create`/`overwrite`/`append`/`set_prop`/`move`/`delete`/`autolink_note`). The
-chat panel lands in the next phase. The wire contract is `PROTOCOL.md` (kept in
-lockstep with the Python side).
+Feature-complete for v1:
+
+- Connection lifecycle: handshake, reconnect-with-backoff, status panel, settings.
+- Vault RPC surface — reads (`read`/`list_files`/`props_of`/`outline`/
+  `search_context`/`resolved_links`/`mention_index`) and graph-safe writes
+  (`create`/`overwrite`/`append`/`set_prop`/`move`/`delete`/`autolink_note`).
+- Chat panel: message log + input over the bridge's chat channel; assistant
+  replies rendered as markdown (clickable wikilinks).
+
+The wire contract is `PROTOCOL.md` (kept in lockstep with the Python side).
+
+## Use
+
+1. In the vault, run `silica connect` (needs the `[connect]` extra).
+2. Open the **Silica bridge** panel (ribbon icon or command palette). It shows
+   `connected` once the handshake completes.
+3. Type in the panel to chat; Silica reads and edits notes through Obsidian's own
+   APIs, so the graph and file explorer update live.
 
 ## Develop
 

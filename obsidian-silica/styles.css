@@ -1,0 +1,20 @@
+/* Silica bridge chat panel. Uses Obsidian CSS variables so it tracks the theme. */
+.silica-bridge { display: flex; flex-direction: column; height: 100%; gap: var(--size-4-2); }
+.silica-status { margin: 0; color: var(--text-muted); font-size: var(--font-ui-smaller); }
+
+.silica-log { flex: 1; overflow-y: auto; display: flex; flex-direction: column; gap: var(--size-4-3); }
+.silica-msg { padding: var(--size-4-2) var(--size-4-3); border-radius: var(--radius-m); max-width: 100%; }
+.silica-user { background: var(--background-modifier-hover); align-self: flex-end; white-space: pre-wrap; }
+.silica-silica { background: var(--background-secondary); align-self: stretch; }
+.silica-body { white-space: pre-wrap; }
+.silica-body > :first-child { margin-top: 0; }
+.silica-body > :last-child { margin-bottom: 0; }
+.silica-error { color: var(--text-error); }
+
+.silica-tools { display: flex; flex-direction: column; gap: 2px; margin-bottom: var(--size-4-2); }
+.silica-tool { font-size: var(--font-ui-smaller); color: var(--text-muted); font-family: var(--font-monospace); }
+.silica-tool-done { color: var(--text-success); }
+.silica-tool-error { color: var(--text-error); }
+
+.silica-input-row { display: flex; gap: var(--size-4-2); align-items: flex-end; }
+.silica-input-row textarea { flex: 1; resize: vertical; min-height: 2.4em; }
