@@ -1,3 +1,6 @@
+# SPDX-License-Identifier: AGPL-3.0-or-later
+# Copyright (C) 2026 Alessandro Carosia
+
 """Human-readable append-only journal at `<vault>/log.md`.
 
 Every other run-state store under `.silica/` is machine-facing (Run

@@ -1,3 +1,6 @@
+# SPDX-License-Identifier: AGPL-3.0-or-later
+# Copyright (C) 2026 Alessandro Carosia
+
 """WorkQueue — the producer/consumer channel between the Injector and sub-agents.
 
 The Injector (router) *produces* WorkItems as it commits batches; a pool of

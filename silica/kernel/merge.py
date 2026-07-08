@@ -1,3 +1,6 @@
+# SPDX-License-Identifier: AGPL-3.0-or-later
+# Copyright (C) 2026 Alessandro Carosia
+
 """3-way merge with conflict callout (Tier 2, Item 7, ADR-0007 soft-failure sink).
 
 When a write lands on a note that was modified concurrently (base != current),

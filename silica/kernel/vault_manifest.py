@@ -1,3 +1,6 @@
+# SPDX-License-Identifier: AGPL-3.0-or-later
+# Copyright (C) 2026 Alessandro Carosia
+
 """Vault manifest — declared capabilities per vault (ADR-0014).
 
 `<vault>/vault.yaml` declares which source adapters participate, the active

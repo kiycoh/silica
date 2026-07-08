@@ -11,10 +11,16 @@
 
 > **Silica** is a coherence engine for human-readable knowledge vaults: a CLI tool for **safe** curation and organization. Local-first and open-source. Supports Obsidian.
 
+> ⚖️ **License — read this before copying any code.** Silica is licensed under **AGPL-3.0-or-later**, a *strong copyleft* license. If you copy any part of this code — even a single function — into your own project, **that entire project must be released under the AGPL-3.0** with complete source available to every user. Under §13 (the network clause) this applies **even if you only run it as a web service** and never distribute a binary. Closed-source or proprietary use of this code is not permitted. See [LICENSE](LICENSE).
+
 ---
 
 ## Table of Contents
+- [Why guardrails, not trust](#why-guardrails-not-trust)
 - [Overview](#overview)
+- [Git isn't enough](#git-isnt-enough)
+- [Design contracts](#design-contracts)
+- [What Silica is not](#what-silica-is-not)
 - [Use Cases](#use-cases)
 - [Quick Start](#quick-start)
   - [Installation](#installation)
@@ -22,9 +28,25 @@
   - [Execution](#execution)
   - [REPL Commands](#repl-commands)
 - [Configuration](#configuration)
+- [Status](#status)
 - [Quirks & Features](#quirks--features)
 - [References](#references)
 - [License](#license)
+
+---
+
+## Why guardrails, not trust
+
+You already let deterministic tools rewrite and reject your work every day. You don't extend them trust — you trust the guardrail. Silica wraps an LLM's edits to your vault in the same kind of guardrail:
+
+| You already let a deterministic tool… | to guard against… | Silica does the same for a vault by… |
+| :--- | :--- | :--- |
+| a **compiler** reject source that won't build | syntax and type errors | an FSM refusing to commit a note that fails its structural checks |
+| a **test suite** block a merge that breaks behavior | regressions | a post-write **verify gate** that reverts any edit which breaks vault coherence |
+| **git** roll back a bad commit | losing history | `/undo` and `/revert` rolling back an injection, per-note or per-run |
+| a **formatter** rewrite your code without asking | drift and inconsistency | graph-safe refactors that redirect links so a merge or split never orphans a note |
+
+You don't have to believe anything about the model. You only have to believe that compilers and test suites exist — and that the same discipline can wrap a knowledge base.
 
 ---
 
@@ -34,20 +56,51 @@
   <img src="docs/assets/architecture.svg" alt="Silica Architectural Schematic" width="880" />
 </p>
 
-Silica is a CLI-based deterministic agent orchestrator that can manage Obsidian vaults, codebases (wip), images (wip), .pdf/.docx/.txt documents (wip) by having context of their relations (cooccurrence, hyperlinks, graph).
+Silica is a CLI-based deterministic agent orchestrator that manages Obsidian vaults — with codebases, images, and `.pdf`/`.docx`/`.txt` documents in progress (see [Status](#status)) — by keeping context of how their pieces relate (co-occurrence, hyperlinks, graph).
 
-- Silica is ***local-first*** (LM Studio, Ollama), OpenRouter is also supported.
-- **Silica prevents the risk of vault corruption and structural cluttering** by using safety-hardened tools and rollbacks.
-- Silica maintains and updates **a vault index separate from your files.**
-- Silica is not a free-form agent orchestrator.
+- Silica is ***local-first*** (LM Studio, Ollama); OpenRouter is also supported.
+- **Silica prevents vault corruption and structural clutter** through safety-hardened tools and layered rollback.
+- Silica maintains a vault index **separate from your files**.
+- Silica is **not** a free-form agent orchestrator — every write passes through a state machine.
+
+---
+
+## Git isn't enough
+
+`git revert` restores a file's bytes. It cannot see that the edit orphaned a note, broke a wikilink, or created a near-duplicate of a concept you already had — because coherence lives in the *graph between* files, not in any single file's bytes. That's the failure git is blind to, and it's exactly the one Silica's verify gate and graph-safe refactors catch.
+
+So run git *alongside* Silica, not instead of it: git is the byte-level backstop, Silica is the coherence layer on top. Belt and suspenders.
+
+---
+
+## Design contracts
+
+Silica is not a free-form agent. Every vault mutation passes through a finite-state machine that enforces these contracts:
+
+- **Single entry point** — all ingestion flows through the Injector FSM. There is no side channel that writes to the vault.
+- **Verify-or-revert** — every write is re-read and checked afterward; a mismatch (`VerifyMismatchError`) rolls the write back.
+- **Graph-safe moves** — renames, merges, and splits redirect incoming links atomically. No operation leaves a broken reference or an orphan.
+- **Zero-trust ingress** — external content (e.g. web search) can only land in `Inbox/`. Nothing reaches the vault without explicit human staging and FSM review.
+- **Layered rollback** — `/undo` (per note), `/revert` (per run), and optional `SILICA_GIT_COMMIT=auto` stack as independent safety nets.
+
+> **Honesty note.** These are enforced *today* by the FSM on the normal write path. They are not yet *crash-verified*: a chaos harness that kills the process mid-write to prove the invariants survive failure is [in progress](#status). Trust the contracts for what they are — enforced control flow, not a formal proof under adversarial faults.
+
+---
+
+## What Silica is not
+
+- **Not a "point AI at your notes" button.** Ingestion keeps a human in the loop: the agent proposes, the FSM gates, you confirm.
+- **Not a correctness proof.** "Coherence" is a heuristic target enforced by contracts, not a theorem. Silica shrinks the blast radius of a bad edit; it does not guarantee the edit was *semantically* right.
+- **Not a backup.** It runs alongside git and your own backups, never in place of them.
+- **Not a free-form orchestrator.** No open-ended tool-calling loop over your vault — the state machine is the only way in.
 
 ---
 
 ## Use Cases
 
 1. **Automated Inbox Ingestion** — Reads raw clippings and drafts from an inbox directory, distills them into atomic markdown concepts, resolves duplicate matches against the existing vault, and writes them safely.
-2. **Conversational Vault Querying** — Allows users to query their notes, map paths across the graph, and generate outlines or synthesis documents using semantic search and graph-traversal tools in the REPL.
-3. **Graph-Safe Note Refactoring** — Handles complex merges and splits of concept notes. Redirects incoming links automatically to prevent broken references or orphaned files.
+2. **Conversational Vault Querying** — Query your notes, map paths across the graph, and generate outlines or synthesis documents using semantic search and graph-traversal tools in the REPL.
+3. **Graph-Safe Note Refactoring** — Handles complex merges and splits of concept notes, redirecting incoming links automatically to prevent broken references or orphaned files.
 
 ---
 
@@ -84,7 +137,13 @@ Start the interactive REPL:
 uv run silica
 ```
 
-Run the ingestion pipeline from inside the REPL:
+A good first move on an existing vault is a read-only structural audit — it never writes, and it shows you the hubs, bridges, and orphans before you touch anything:
+
+```
+/report
+```
+
+Then run the ingestion pipeline from inside the REPL:
 
 ```
 /ingest Inbox/note.md --target=Concepts/AI
@@ -137,20 +196,30 @@ Configure the agent via environment variables (e.g., in a `.env` file). `silica 
 | `OPENROUTER_API_KEY` | Required when the provider is `openrouter` |
 | `SILICA_VAULT` | Vault path. An Obsidian vault (`.obsidian/`) is used verbatim; any other path is repo mode → `docs/silica/` |
 | `SILICA_BACKEND` | `fs` (headless filesystem, default) or `cli` (live Obsidian desktop via CDP — adds rollback + live cache) |
-| `SILICA_EMBEDDING_MODEL` | Embedding model identifier used for semantic tasks |
+| `SILICA_EMBEDDING_MODEL` | Embedding model identifier used for semantic tasks (default: `qwen3-embedding-4b`) |
 | `SILICA_WORKER_MODEL` | Sub-agent worker model (e.g., a small local model for dedup / refinement) |
 | `SILICA_GIT_COMMIT` | Git commit safety net for vault writes (`off`, `auto`) |
 | `SILICA_TAVILY_API_KEY` | API key for Tavily search (enables the `/web-search` command) |
 
 ---
 
+## Status
+
+Silica is under active development. This is where it honestly stands:
+
+- **Available now** — Obsidian vault ingestion (notes), structural audit (`/report`), semantic (`/find`) and embedder-free co-occurrence search, graph-safe refactor / dedup / merge, git safety net, layered `/undo` and `/revert`.
+- **In progress** — codebase ingestion (skeleton stubs today), PDF/DOCX/TXT ingestion, the live Obsidian bridge (`silica connect` — feature-complete but pending end-to-end hardening), and the crash/chaos harness backing the [design contracts](#design-contracts).
+- **Planned** — image ingestion and an MCP server surface.
+
+Distinguish carefully: what ships today is enforced; what's listed above as in-progress or planned is not yet present.
+
+---
+
 ## Quirks & Features
 
-* **Token-Efficient Vault Auditing (`/report`)**: Computes community detection clusters (Louvain modularity), detects god-nodes (high-degree hubs), structural bridges (inter-community connectors), and orphans. Audits and builds a full structural remediation plan for a vault of **1,000+ markdown files in under 10 seconds**.
-* **Parallel Worker Sub-Agents**: Cognitive-heavy, long-running batch operations like semantic deduplication (`/dedup`) and detail refinement (`/refine` or `/enrich`) are offloaded to leashed sub-agents. These run concurrently (up to `SILICA_SUBAGENT_MAX_CONCURRENT`) on a separate worker model (e.g., a small local model like `SILICA_WORKER_MODEL`), keeping the main model's context window clean and free.
-* **Embedder-Free Concept Modeling**: If an embedding model is offline or unconfigured, Silica's concept matching degrades gracefully. It utilizes a deterministic, local co-occurrence concept graph (`/cooccur`) to query relatedness and label communities in `/graph` exports without making network calls or LLM API queries.
-* **Strict Zero-Trust Staging**: Web search queries (`/web-search`) write findings exclusively into the inbox directory (`Inbox/`). External web content is never injected directly into the active knowledge vault without explicit human staging and FSM ingestion review.
-* **Git Safety Net**: If `SILICA_GIT_COMMIT=auto` is enabled, Silica automatically commits touched paths to Git after each successful write batch, creating a history checkpoint alongside the interactive `/undo` and `/revert` features.
+* **Token-Efficient Vault Auditing (`/report`)** — Computes community-detection clusters (Louvain modularity), god-nodes (high-degree hubs), structural bridges (inter-community connectors), and orphans, then builds a full structural remediation plan for a vault of **1,000+ markdown files in under 10 seconds**.
+* **Parallel Worker Sub-Agents** — Cognitive-heavy batch operations like semantic deduplication (`/dedup`) and detail refinement (`/refine`, `/enrich`) are offloaded to leashed sub-agents. These run concurrently (up to `SILICA_SUBAGENT_MAX_CONCURRENT`) on a separate worker model (`SILICA_WORKER_MODEL`), keeping the main model's context window clean.
+* **Embedder-Free Concept Modeling** — If an embedding model is offline or unconfigured, concept matching degrades gracefully to a deterministic, local co-occurrence graph (`/cooccur`) — querying relatedness and labeling communities in `/graph` exports with no network calls or LLM queries.
 
 ---
 
@@ -162,12 +231,25 @@ Configure the agent via environment variables (e.g., in a `.env` file). `silica 
 *   **[Reliable Graph-RAG for Codebases: AST-Derived Graphs vs LLM-Extracted Knowledge Graphs](https://arxiv.org/abs/2601.08773)** (arXiv:2601.08773, 2026)
 *   **[Predicting new research directions in materials science using large language models and concept graphs](https://doi.org/10.1038/s42256-026-01206-y)** (*Nature Machine Intelligence*, 2026)
 
-Silica's embedder-free near-duplicate detection (`/dedup` command) is inspired by and ports the well-thought-out MinHash design from [Graphify](https://github.com/safishamsi/graphify).
+Silica's embedder-free near-duplicate detection (`/dedup`) is inspired by and ports the well-thought-out MinHash design from [Graphify](https://github.com/safishamsi/graphify).
 
 ---
 
 ## License
 
-This project is licensed under the **GNU Affero General Public License v3.0** (AGPL-3.0).
+This project is licensed under the **GNU Affero General Public License v3.0** (AGPL-3.0-or-later).
+Copyright (C) 2026 Alessandro Carosia.
 
-See [LICENSE](LICENSE) for details.
+AGPL-3.0 is a **strong copyleft** license. In practice, if you incorporate any portion of Silica —
+whole modules or individual functions — into another work:
+
+- that work becomes a *derivative* and **must itself be licensed under AGPL-3.0**;
+- its **complete corresponding source** must be offered to everyone who uses it;
+- **§13** extends this to network use: running a modified version as a hosted service obliges you to
+  provide that source to your users, even without distributing any binary.
+
+There is no permissive fallback. If your project cannot comply with these terms, you do not have a
+license to use this code. Every source file carries an `SPDX-License-Identifier: AGPL-3.0-or-later`
+header; removing it does not remove the obligation.
+
+See [LICENSE](LICENSE) for the full text.

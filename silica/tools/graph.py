@@ -1,3 +1,6 @@
+# SPDX-License-Identifier: AGPL-3.0-or-later
+# Copyright (C) 2026 Alessandro Carosia
+
 """Graph & relatedness tools — indexes, search, linking, and the vault audit.
 
 Embedding and co-occurrence index refresh, semantic search, autolink/backlink

@@ -1,3 +1,6 @@
+# SPDX-License-Identifier: AGPL-3.0-or-later
+# Copyright (C) 2026 Alessandro Carosia
+
 """Process-global worker-concurrency ceiling.
 
 One BoundedSemaphore gates the scarce resource — the worker-model LLM call —

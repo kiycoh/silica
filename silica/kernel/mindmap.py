@@ -1,3 +1,6 @@
+# SPDX-License-Identifier: AGPL-3.0-or-later
+# Copyright (C) 2026 Alessandro Carosia
+
 """L1 Mindmap — deterministic radial map rooted on one note (zero LLM).
 
 Builds a `MapView` — a radial mind-map centred on a single note — from the vault's

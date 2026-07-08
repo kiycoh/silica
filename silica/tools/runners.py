@@ -1,3 +1,6 @@
+# SPDX-License-Identifier: AGPL-3.0-or-later
+# Copyright (C) 2026 Alessandro Carosia
+
 """Runner tools — whole pipelines and leashed sub-agent batches.
 
 Full FSM runs (injector, organizer), taxonomy generation, run-ledger

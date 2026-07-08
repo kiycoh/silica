@@ -1,3 +1,6 @@
+# SPDX-License-Identifier: AGPL-3.0-or-later
+# Copyright (C) 2026 Alessandro Carosia
+
 """Note<->source provenance ledger (spec-hermes-coherence §3).
 
 Append-only record of which notes derive from which version (sha256) of an

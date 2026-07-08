@@ -1,3 +1,6 @@
+# SPDX-License-Identifier: AGPL-3.0-or-later
+# Copyright (C) 2026 Alessandro Carosia
+
 """Typed worker shapes.
 
 A WorkerProfile is the typed shape of a worker: its permitted tool subset, its

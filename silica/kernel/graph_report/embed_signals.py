@@ -1,3 +1,6 @@
+# SPDX-License-Identifier: AGPL-3.0-or-later
+# Copyright (C) 2026 Alessandro Carosia
+
 """Embedding-based PROPOSED signals: missing links and duplicate pairs.
 
 Both functions degrade to [] when the embedding index is empty or the

@@ -1,3 +1,6 @@
+# SPDX-License-Identifier: AGPL-3.0-or-later
+# Copyright (C) 2026 Alessandro Carosia
+
 """Obsidian FS Backend — L0 implementation via direct filesystem access.
 
 From SILICA.md §3 L0:

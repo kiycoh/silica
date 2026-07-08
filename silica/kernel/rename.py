@@ -1,3 +1,6 @@
+# SPDX-License-Identifier: AGPL-3.0-or-later
+# Copyright (C) 2026 Alessandro Carosia
+
 """Pure link-rewriting kernel for note move/rename operations (Phase 1a).
 
 Mirrors Obsidian's "automatically update internal links" behaviour.

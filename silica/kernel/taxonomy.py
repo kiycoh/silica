@@ -1,3 +1,6 @@
+# SPDX-License-Identifier: AGPL-3.0-or-later
+# Copyright (C) 2026 Alessandro Carosia
+
 """L1 Taxonomy schema — declarative folder↔theme mapping for /organize.
 
 The taxonomy is a YAML file that declares a list of FolderRule entries,

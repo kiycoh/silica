@@ -1,3 +1,6 @@
+# SPDX-License-Identifier: AGPL-3.0-or-later
+# Copyright (C) 2026 Alessandro Carosia
+
 """Content-based concept extraction (UKE).
 
 The old `recon.extract_concepts` keyed concepts on markdown markup, so prose

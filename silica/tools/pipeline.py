@@ -1,3 +1,6 @@
+# SPDX-License-Identifier: AGPL-3.0-or-later
+# Copyright (C) 2026 Alessandro Carosia
+
 """Pipeline tools — the mechanical injector stages as system tools.
 
 Recon → payload → sanitize → validate → bulk-write → lint, plus the

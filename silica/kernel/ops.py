@@ -1,3 +1,6 @@
+# SPDX-License-Identifier: AGPL-3.0-or-later
+# Copyright (C) 2026 Alessandro Carosia
+
 """Canonical Op schema for the Silica pipeline (ADR-007 / Addendum C1).
 
 This is the single source of truth imported by sanitize, validate, snapshot,

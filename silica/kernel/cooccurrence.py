@@ -1,3 +1,6 @@
+# SPDX-License-Identifier: AGPL-3.0-or-later
+# Copyright (C) 2026 Alessandro Carosia
+
 """Deterministic co-occurrence graph.
 
 L1 kernel: no LLM, no API, NO embedder dependency. Turns note prose into a

@@ -1,3 +1,6 @@
+# SPDX-License-Identifier: AGPL-3.0-or-later
+# Copyright (C) 2026 Alessandro Carosia
+
 """Curator dispatch — /curate: vault maintenance as a background policy.
 
 The pure composer (silica.kernel.curator) turns an L1 VaultReport into a typed

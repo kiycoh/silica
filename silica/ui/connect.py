@@ -1,3 +1,6 @@
+# SPDX-License-Identifier: AGPL-3.0-or-later
+# Copyright (C) 2026 Alessandro Carosia
+
 """`silica connect` — host the WS bridge server the Obsidian plugin dials into.
 
 PROTOCOL.md's server half. One loopback socket carries both channels: the

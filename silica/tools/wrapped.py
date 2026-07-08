@@ -1,3 +1,6 @@
+# SPDX-License-Identifier: AGPL-3.0-or-later
+# Copyright (C) 2026 Alessandro Carosia
+
 """Wrapped tools — L0 atomics with domain invariants (Golden Rules) baked in.
 
 From SILICA.md §4.4:

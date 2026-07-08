@@ -1,3 +1,6 @@
+# SPDX-License-Identifier: AGPL-3.0-or-later
+# Copyright (C) 2026 Alessandro Carosia
+
 """Per-note self-atomic write primitive.
 
 commit_note_atomic applies a single Op with a micro-snapshot → write → lint

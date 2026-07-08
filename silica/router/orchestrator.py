@@ -1,3 +1,6 @@
+# SPDX-License-Identifier: AGPL-3.0-or-later
+# Copyright (C) 2026 Alessandro Carosia
+
 """L3 Router / Orchestrator for Silica — Injector FSM (S2.3 complete).
 
 From SILICA.md §3 L3 & §7.3:

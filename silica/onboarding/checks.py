@@ -1,3 +1,6 @@
+# SPDX-License-Identifier: AGPL-3.0-or-later
+# Copyright (C) 2026 Alessandro Carosia
+
 """Onboarding checks — pure diagnostics shared by `silica doctor` and `silica init`.
 
 Each check reads config / env / filesystem / HTTP and returns a CheckResult.

@@ -1,3 +1,6 @@
+# SPDX-License-Identifier: AGPL-3.0-or-later
+# Copyright (C) 2026 Alessandro Carosia
+
 """Obsidian CLI Backend — L0 implementation via the official Obsidian CLI.
 
 Wraps `obsidian <command> [options]` shell-outs. Requires Obsidian desktop

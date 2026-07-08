@@ -1,3 +1,6 @@
+# SPDX-License-Identifier: AGPL-3.0-or-later
+# Copyright (C) 2026 Alessandro Carosia
+
 """Capability registry — THE dispatch seam for background work.
 
 A *capability* is a self-contained background behaviour: a plain

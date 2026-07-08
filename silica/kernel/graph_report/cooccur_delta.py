@@ -1,3 +1,6 @@
+# SPDX-License-Identifier: AGPL-3.0-or-later
+# Copyright (C) 2026 Alessandro Carosia
+
 """Co-occurrence vs wikilink delta — PROPOSED, embedder-free signals.
 
 AUTOLINK (co-occurrence − wikilink), STALE (wikilink − co-occurrence) and

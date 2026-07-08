@@ -1,3 +1,6 @@
+# SPDX-License-Identifier: AGPL-3.0-or-later
+# Copyright (C) 2026 Alessandro Carosia
+
 """Optional localhost GUI (`silica --gui`). Requires the `[gui]` extra."""
 
 

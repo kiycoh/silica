@@ -1,3 +1,6 @@
+# SPDX-License-Identifier: AGPL-3.0-or-later
+# Copyright (C) 2026 Alessandro Carosia
+
 """Context-window hygiene for the top-level agent loop.
 
 Pure, I/O-free, LLM-free helpers. Two levers:

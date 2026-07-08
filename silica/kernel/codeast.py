@@ -1,3 +1,6 @@
+# SPDX-License-Identifier: AGPL-3.0-or-later
+# Copyright (C) 2026 Alessandro Carosia
+
 """codeast — native shallow AST skeleton extraction (ADR-0012).
 
 Deterministic, in-process, LLM-free. Extracts ONLY the skeleton: imports,

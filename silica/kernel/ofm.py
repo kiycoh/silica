@@ -1,3 +1,6 @@
+# SPDX-License-Identifier: AGPL-3.0-or-later
+# Copyright (C) 2026 Alessandro Carosia
+
 import re
 
 LIMITS = {"max_lines": 400, "max_chars": 20000, "lean_chars": 600, "max_tags": 3}

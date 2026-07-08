@@ -1,3 +1,6 @@
+# SPDX-License-Identifier: AGPL-3.0-or-later
+# Copyright (C) 2026 Alessandro Carosia
+
 """Path canonicalization for vault notes and Silica runtime directories.
 
 The CLI backend resolves notes by their vault-relative POSIX path. Any code

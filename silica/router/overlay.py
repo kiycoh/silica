@@ -1,3 +1,6 @@
+# SPDX-License-Identifier: AGPL-3.0-or-later
+# Copyright (C) 2026 Alessandro Carosia
+
 """merge_overlay — apply a Domain Pack (overlay) onto a base recipe.
 
 A Domain Pack adapts a recipe by overriding gate thresholds and per-phase

@@ -1,3 +1,6 @@
+# SPDX-License-Identifier: AGPL-3.0-or-later
+# Copyright (C) 2026 Alessandro Carosia
+
 """Static adapter registry — ADR-0014.
 
 A list, not a plugin system (the ADR's scope line): N sources = N entries,

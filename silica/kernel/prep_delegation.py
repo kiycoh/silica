@@ -1,3 +1,6 @@
+# SPDX-License-Identifier: AGPL-3.0-or-later
+# Copyright (C) 2026 Alessandro Carosia
+
 """Prepare and run Distiller delegation for the Injector pipeline.
 
 This module ports `build_tasks()` from Hermes prep_delegation.py as a pure

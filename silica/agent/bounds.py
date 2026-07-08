@@ -1,3 +1,6 @@
+# SPDX-License-Identifier: AGPL-3.0-or-later
+# Copyright (C) 2026 Alessandro Carosia
+
 """CapabilityBounds — execution bounds that constrain what a bounded sub-agent may write.
 
 A bounded sub-agent (dedup, refiner) is allowed to *write*, but only within a

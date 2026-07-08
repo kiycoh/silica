@@ -1,3 +1,6 @@
+# SPDX-License-Identifier: AGPL-3.0-or-later
+# Copyright (C) 2026 Alessandro Carosia
+
 """BoundedSubAgent — a small, tightly-bounded worker that runs on the worker model.
 
 A bounded sub-agent consumes one WorkItem at a time and dispatches it to the

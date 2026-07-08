@@ -1,3 +1,6 @@
+# SPDX-License-Identifier: AGPL-3.0-or-later
+# Copyright (C) 2026 Alessandro Carosia
+
 """codedocs — doc↔source staleness for codebase mode.
 
 A note documents source files via frontmatter:

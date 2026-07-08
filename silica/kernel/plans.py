@@ -1,3 +1,6 @@
+# SPDX-License-Identifier: AGPL-3.0-or-later
+# Copyright (C) 2026 Alessandro Carosia
+
 """plans — deterministic plan-status accounting for plans/ notes.
 
 Twin of codedocs: walks plans/*.md frontmatter, counts by `status:` enum.

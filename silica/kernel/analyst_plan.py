@@ -1,3 +1,6 @@
+# SPDX-License-Identifier: AGPL-3.0-or-later
+# Copyright (C) 2026 Alessandro Carosia
+
 """L3 Analyst Plan — maps VaultReport anomalies to a three-tier task plan.
 
 Translates structural anomalies into actionable TaskCandidates without executing

@@ -1,3 +1,6 @@
+# SPDX-License-Identifier: AGPL-3.0-or-later
+# Copyright (C) 2026 Alessandro Carosia
+
 """WarningLedger — run-scoped memory of non-blocking warnings.
 
 The Injector's blocking gates (lint failure, blocking graph regression) roll the

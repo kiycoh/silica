@@ -1,3 +1,6 @@
+# SPDX-License-Identifier: AGPL-3.0-or-later
+# Copyright (C) 2026 Alessandro Carosia
+
 """L1/L2 Note classifier — assigns notes to taxonomy folders.
 
 Two classification legs, applied in sequence:

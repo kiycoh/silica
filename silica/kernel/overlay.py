@@ -1,3 +1,6 @@
+# SPDX-License-Identifier: AGPL-3.0-or-later
+# Copyright (C) 2026 Alessandro Carosia
+
 """DomainOverlay seam — domain-specific vocabulary plugged in without per-domain code paths.
 
 ADR-0005: domain knowledge lives in overlays, not in kernel conditionals.

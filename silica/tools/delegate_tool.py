@@ -1,3 +1,6 @@
+# SPDX-License-Identifier: AGPL-3.0-or-later
+# Copyright (C) 2026 Alessandro Carosia
+
 """silica_delegate — fan a list of worker tasks out through the capability seam.
 
 Each task becomes a WorkItem (kind = profile name) dispatched by

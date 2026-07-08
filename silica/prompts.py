@@ -1,3 +1,6 @@
+# SPDX-License-Identifier: AGPL-3.0-or-later
+# Copyright (C) 2026 Alessandro Carosia
+
 """Silica system prompt — defines the agent's identity and behavior.
 
 This is NOT where invariants live (those are in the tool wrappers and linter).

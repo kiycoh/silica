@@ -1,3 +1,6 @@
+# SPDX-License-Identifier: AGPL-3.0-or-later
+# Copyright (C) 2026 Alessandro Carosia
+
 """Orphan-connector capability — link a lonely note to offered candidate notes.
 
 The model may only choose among candidates that were actually offered; an

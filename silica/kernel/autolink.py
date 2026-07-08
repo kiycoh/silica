@@ -1,3 +1,6 @@
+# SPDX-License-Identifier: AGPL-3.0-or-later
+# Copyright (C) 2026 Alessandro Carosia
+
 """Deterministic wikilink injector for touched notes (Phase 4).
 
 Rule (from the plan):

@@ -1,3 +1,6 @@
+# SPDX-License-Identifier: AGPL-3.0-or-later
+# Copyright (C) 2026 Alessandro Carosia
+
 """Vault write executor — the single authorised path for applying Ops.
 
 Every write in Silica (FSM bulk write, deferred retry, interactive patch)

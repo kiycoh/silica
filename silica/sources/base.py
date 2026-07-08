@@ -1,3 +1,6 @@
+# SPDX-License-Identifier: AGPL-3.0-or-later
+# Copyright (C) 2026 Alessandro Carosia
+
 """SourceAdapter contract — ADR-0014: sources are adapters, not vault types.
 
 One seam that does not grow with the number of sources: each knowledge

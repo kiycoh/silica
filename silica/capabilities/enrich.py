@@ -1,3 +1,6 @@
+# SPDX-License-Identifier: AGPL-3.0-or-later
+# Copyright (C) 2026 Alessandro Carosia
+
 """Enrich capability — semantic expansion of a note under the anti-info-loss bounds."""
 from __future__ import annotations
 

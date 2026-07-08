@@ -1,3 +1,6 @@
+# SPDX-License-Identifier: AGPL-3.0-or-later
+# Copyright (C) 2026 Alessandro Carosia
+
 """Dedup capability — merge a borderline-duplicate concept into an existing note.
 
 Given an incoming concept vs. an existing larger note, decide whether they are

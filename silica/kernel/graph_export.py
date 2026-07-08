@@ -1,3 +1,6 @@
+# SPDX-License-Identifier: AGPL-3.0-or-later
+# Copyright (C) 2026 Alessandro Carosia
+
 """L1 Graph Data — deterministic, no LLM calls, no network.
 
 Builds the vault's wikilink graph as node/edge lists (build_graph_data) and

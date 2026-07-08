@@ -1,3 +1,6 @@
+# SPDX-License-Identifier: AGPL-3.0-or-later
+# Copyright (C) 2026 Alessandro Carosia
+
 """Prose source adapter — markdown/.txt notes, the Obsidian-native source.
 
 Distill lane: the Injector FSM owns destination and write; this adapter

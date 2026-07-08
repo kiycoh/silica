@@ -1,3 +1,6 @@
+# SPDX-License-Identifier: AGPL-3.0-or-later
+# Copyright (C) 2026 Alessandro Carosia
+
 """gitstate — a deterministic, soft-degrading wrapper over the `git` CLI.
 
 No git library: plain `git` via subprocess (ADR-0009 — provider-free).

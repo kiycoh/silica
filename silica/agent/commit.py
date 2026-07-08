@@ -1,3 +1,6 @@
+# SPDX-License-Identifier: AGPL-3.0-or-later
+# Copyright (C) 2026 Alessandro Carosia
+
 """commit_ops — the reusable validate→snapshot→write→lint micro-gate.
 
 Lets bounded sub-agents commit their proposed ops through the *same*

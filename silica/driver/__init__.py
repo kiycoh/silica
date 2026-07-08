@@ -1,3 +1,6 @@
+# SPDX-License-Identifier: AGPL-3.0-or-later
+# Copyright (C) 2026 Alessandro Carosia
+
 """Obsidian Driver package — exposes the global DRIVER instance.
 
 The backend is selected at import time based on CONFIG.backend (from config.py),

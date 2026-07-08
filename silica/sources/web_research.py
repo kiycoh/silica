@@ -1,3 +1,6 @@
+# SPDX-License-Identifier: AGPL-3.0-or-later
+# Copyright (C) 2026 Alessandro Carosia
+
 """`/web-search` — agentic web-research loop → cited findings note in the Inbox.
 
 ADR-0015 staged acquisition: Silica may *fetch* on request but never *decides*

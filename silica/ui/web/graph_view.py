@@ -1,3 +1,6 @@
+# SPDX-License-Identifier: AGPL-3.0-or-later
+# Copyright (C) 2026 Alessandro Carosia
+
 """Graph viewer — the 3d-force-graph HTML emitter for the vault wikilink graph.
 
 Split out of `silica.kernel.graph_export` (which keeps the deterministic *data*

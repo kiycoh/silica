@@ -1,3 +1,6 @@
+# SPDX-License-Identifier: AGPL-3.0-or-later
+# Copyright (C) 2026 Alessandro Carosia
+
 """Contested-claims layer (spec-hermes-coherence §1).
 
 A contradiction is neither a duplicate nor a new concept: it is recorded on

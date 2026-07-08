@@ -1,3 +1,6 @@
+# SPDX-License-Identifier: AGPL-3.0-or-later
+# Copyright (C) 2026 Alessandro Carosia
+
 """Curator composer — project graph_report findings into a typed CurationPlan.
 
 The vault already has every remediation *mechanism* (/dedup, /refine, orphan

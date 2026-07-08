@@ -1,3 +1,6 @@
+# SPDX-License-Identifier: AGPL-3.0-or-later
+# Copyright (C) 2026 Alessandro Carosia
+
 """Post-distillation cohesion pass: detect sibling write ops and inject cross-references.
 
 Siblings are write ops whose display names share ≥ 1 discriminating content token

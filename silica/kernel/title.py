@@ -1,3 +1,6 @@
+# SPDX-License-Identifier: AGPL-3.0-or-later
+# Copyright (C) 2026 Alessandro Carosia
+
 """kernel/title — THE identity for note titles (C3).
 
 Before this module, five call sites held five divergent normalizations

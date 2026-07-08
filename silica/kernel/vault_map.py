@@ -1,3 +1,6 @@
+# SPDX-License-Identifier: AGPL-3.0-or-later
+# Copyright (C) 2026 Alessandro Carosia
+
 """Vault map — a compact semantic self-model of the corpus for recall at session start.
 
 CoALA: consolidates the persistent co-occurrence index + the folder structure

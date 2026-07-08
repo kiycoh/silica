@@ -1,3 +1,6 @@
+# SPDX-License-Identifier: AGPL-3.0-or-later
+# Copyright (C) 2026 Alessandro Carosia
+
 """ProgressLedger — persistent run-state (working memory of a run).
 
 Distinct from its sibling kernel/ledger.py (CommitLedger), which records

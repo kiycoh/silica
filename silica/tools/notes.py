@@ -1,3 +1,6 @@
+# SPDX-License-Identifier: AGPL-3.0-or-later
+# Copyright (C) 2026 Alessandro Carosia
+
 """Single-note tools — fast-path create/patch with /undo checkpoints.
 
 No temp-file + bulk_write round-trip: these are the interactive-edit

@@ -1,3 +1,6 @@
+# SPDX-License-Identifier: AGPL-3.0-or-later
+# Copyright (C) 2026 Alessandro Carosia
+
 """Media handling for note text — image stripping.
 
 Image embeds are removed from text before it reaches the embedding model,

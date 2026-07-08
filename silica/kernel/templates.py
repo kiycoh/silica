@@ -1,3 +1,6 @@
+# SPDX-License-Identifier: AGPL-3.0-or-later
+# Copyright (C) 2026 Alessandro Carosia
+
 """Note templates — template_spoke and patch_snippet.
 
 Migrated AS-IS from hermes_common/templates.py, with the bootstrap path

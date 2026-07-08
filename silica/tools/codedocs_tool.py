@@ -1,3 +1,6 @@
+# SPDX-License-Identifier: AGPL-3.0-or-later
+# Copyright (C) 2026 Alessandro Carosia
+
 """silica_document — stage a skeleton stub from a source file (ADR-0012).
 
 Thin agent-facing wrapper over the code SourceAdapter (ADR-0014): guards,

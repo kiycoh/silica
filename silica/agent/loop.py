@@ -1,3 +1,6 @@
+# SPDX-License-Identifier: AGPL-3.0-or-later
+# Copyright (C) 2026 Alessandro Carosia
+
 """The agentic loop — the core of Silica.
 
 This is the 'while True' from SILICA.md §8.1:

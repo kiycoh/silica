@@ -1,3 +1,6 @@
+# SPDX-License-Identifier: AGPL-3.0-or-later
+# Copyright (C) 2026 Alessandro Carosia
+
 """RenderEvent -> JSON. The single source of truth for the wire event map.
 
 Mirrors the table in docs/spec-gui-web.md. Reasoning/thinking events are

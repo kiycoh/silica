@@ -1,3 +1,6 @@
+# SPDX-License-Identifier: AGPL-3.0-or-later
+# Copyright (C) 2026 Alessandro Carosia
+
 """Expand capability — author the body for a «snippet too short» rejection.
 
 The MIN_WRITE_SNIPPET_CHARS gate rejects write ops whose body the distiller

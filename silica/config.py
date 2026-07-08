@@ -1,3 +1,6 @@
+# SPDX-License-Identifier: AGPL-3.0-or-later
+# Copyright (C) 2026 Alessandro Carosia
+
 """Silica configuration — model, vault, provider settings.
 
 Configuration is loaded from (in order of precedence):

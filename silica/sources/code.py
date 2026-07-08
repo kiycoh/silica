@@ -1,3 +1,6 @@
+# SPDX-License-Identifier: AGPL-3.0-or-later
+# Copyright (C) 2026 Alessandro Carosia
+
 """Code source adapter — ADR-0012 shallow AST skeleton, vault-terminal lane.
 
 Zero-trust (ADR-0009): the full source NEVER enters a stub or a prompt; all

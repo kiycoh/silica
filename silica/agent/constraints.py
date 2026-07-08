@@ -1,3 +1,6 @@
+# SPDX-License-Identifier: AGPL-3.0-or-later
+# Copyright (C) 2026 Alessandro Carosia
+
 """Optional constraints that turn run_agent into a bounded worker loop.
 
 Carries only the three generic dials (tools, model, iteration cap). The leash is
