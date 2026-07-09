@@ -9,7 +9,7 @@
   <img src="docs/assets/sili_no_bg.png" alt="Silica Mascot Sili" width="250" />
 </p>
 
-> **Silica** is a coherence engine for human-readable knowledge vaults: a CLI tool for **safe** curation and organization. Local-first and open-source. Supports Obsidian.
+> **Silica** is a deterministic agent orchestrator for human-readable knowledge vaults: a CLI tool for **safe** curation and organization. Local-first and open-source. Supports Obsidian.
 
 > ⚖️ **License - read this before modifying, distributing, or using this code.** Silica is licensed under **AGPL-3.0-or-later**, a *strong copyleft* license. If you copy any part of this code - even a single function - into your own project, **that entire project must be released under the AGPL-3.0** with complete source available to every user. Under §13 (the network clause) this applies **even if you only run it as a web service** and never distribute a binary. Closed-source or proprietary use of this code is not permitted. See [LICENSE](LICENSE).
 
@@ -37,7 +37,7 @@
 
 ## Why guardrails, not trust
 
-You already let deterministic tools rewrite and reject your work every day. You don't extend them trust - you trust the guardrail. Silica wraps an LLM's edits to your vault in the same kind of guardrail:
+You already let deterministic tools rewrite and reject your work every day. You don't extend them trust; you trust the guardrail. Silica wraps an LLM's edits to your vault in the same kind of guardrail:
 
 | You already let a deterministic tool… | to guard against… | Silica does the same for a vault by… |
 | :--- | :--- | :--- |
@@ -46,7 +46,7 @@ You already let deterministic tools rewrite and reject your work every day. You 
 | **git** roll back a bad commit | losing history | `/undo` and `/revert` rolling back an injection, per-note or per-run |
 | a **formatter** rewrite your code without asking | drift and inconsistency | graph-safe refactors that redirect links so a merge or split never orphans a note |
 
-You don't have to believe anything about the model. You only have to believe that compilers and test suites exist - and that the same discipline can wrap a knowledge base.
+You don't have to believe anything about the model. You only have to believe that compilers and test suites exist, and that the same discipline can wrap a knowledge base.
 
 ---
 
@@ -56,18 +56,18 @@ You don't have to believe anything about the model. You only have to believe tha
   <img src="docs/assets/pipeline.svg" alt="Silica vault pipeline mapped onto a software engineering pipeline" width="880" />
 </p>
 
-Silica is a CLI-based deterministic agent orchestrator that manages Obsidian vaults - with codebases, images, and `.pdf`/`.docx`/`.txt` documents in progress (see [Status](#status)) - by keeping context of how their pieces relate (co-occurrence, hyperlinks, graph).
+Silica is a CLI-based deterministic agent orchestrator that manages Obsidian vaults, keeping context of how their pieces relate: co-occurrence, hyperlinks, graph. Codebases, images, and `.pdf`/`.docx`/`.txt` documents are in progress (see [Status](#status)).
 
 - Silica is ***local-first*** (LM Studio, Ollama); OpenRouter is also supported.
 - **Silica prevents vault corruption and structural clutter** through safety-hardened tools and layered rollback.
 - Silica maintains a vault index **separate from your files**.
-- Silica is **not** a free-form agent orchestrator - every write passes through a state machine.
+- Silica is **not** a free-form agent orchestrator: every write passes through a state machine.
 
 ---
 
 ## Git isn't enough
 
-`git revert` restores a file's bytes. It cannot see that the edit orphaned a note, broke a wikilink, or created a near-duplicate of a concept you already had - because coherence lives in the *graph between* files, not in any single file's bytes. That's the failure git is blind to, and it's exactly the one Silica's verify gate and graph-safe refactors catch.
+`git revert` restores a file's bytes. It cannot see that the edit orphaned a note, broke a wikilink, or created a near-duplicate of a concept you already had, because coherence lives in the *graph between* files, not in any single file's bytes. That's the failure git is blind to, and it's exactly the one Silica's verify gate and graph-safe refactors catch.
 
 So run git *alongside* Silica, not instead of it: git is the byte-level backstop, Silica is the coherence layer on top. Belt and suspenders.
 
@@ -83,13 +83,13 @@ Silica is not a free-form agent. Every vault mutation passes through a finite-st
 - **Zero-trust ingress** - external content (e.g. web search) can only land in `Inbox/`. Nothing reaches the vault without explicit human staging and FSM review.
 - **Layered rollback** - `/undo` (per note), `/revert` (per run), and optional `SILICA_GIT_COMMIT=auto` stack as independent safety nets.
 
-The full schematic - interfaces, agent loop, ingress adapters, the Injector FSM state sequence, the kernel, write backends, and persistence:
+The full schematic (interfaces, agent loop, ingress adapters, the Injector FSM state sequence, the kernel, write backends, and persistence):
 
 <p align="center">
   <img src="docs/assets/architecture.svg" alt="Silica Architectural Schematic" width="880" />
 </p>
 
-> **Honesty note.** These are enforced *today* by the FSM on the normal write path. They are not yet *crash-verified*: a chaos harness that kills the process mid-write to prove the invariants survive failure is [in progress](#status). Trust the contracts for what they are - enforced control flow, not a formal proof under adversarial faults.
+> **Honesty note.** These are enforced *today* by the FSM on the normal write path. They are not yet *crash-verified*: a chaos harness that kills the process mid-write to prove the invariants survive failure is [in progress](#status). Trust the contracts for what they are: enforced control flow, not a formal proof under adversarial faults.
 
 ---
 
@@ -143,7 +143,7 @@ Start the interactive REPL:
 uv run silica
 ```
 
-A good first move on an existing vault is a read-only structural audit - it never writes, and it shows you the hubs, bridges, and orphans before you touch anything:
+A good first move on an existing vault is a read-only structural audit. It never writes, and it shows you the hubs, bridges, and orphans before you touch anything:
 
 ```
 /report
@@ -201,7 +201,7 @@ Configure the agent via environment variables (e.g., in a `.env` file). `silica 
 | `SILICA_PROVIDER` | Chat provider preset: `lmstudio` or `openrouter` |
 | `OPENROUTER_API_KEY` | Required when the provider is `openrouter` |
 | `SILICA_VAULT` | Vault path. An Obsidian vault (`.obsidian/`) is used verbatim; any other path is repo mode → `docs/silica/` |
-| `SILICA_BACKEND` | `fs` (headless filesystem, default) or `cli` (live Obsidian desktop via CDP - adds rollback + live cache) |
+| `SILICA_BACKEND` | `fs` (headless filesystem, default) or `cli` (live Obsidian desktop via CDP; adds rollback + live cache) |
 | `SILICA_EMBEDDING_MODEL` | Embedding model identifier used for semantic tasks (default: `qwen3-embedding-4b`) |
 | `SILICA_WORKER_MODEL` | Sub-agent worker model (e.g., a small local model for dedup / refinement) |
 | `SILICA_GIT_COMMIT` | Git commit safety net for vault writes (`off`, `auto`) |
@@ -214,7 +214,7 @@ Configure the agent via environment variables (e.g., in a `.env` file). `silica 
 Silica is under active development. This is where it honestly stands:
 
 - **Available now** - Obsidian vault ingestion (notes), structural audit (`/report`), semantic (`/find`) and embedder-free co-occurrence search, graph-safe refactor / dedup / merge, git safety net, layered `/undo` and `/revert`.
-- **In progress** - codebase ingestion (skeleton stubs today), PDF/DOCX/TXT ingestion, the live Obsidian bridge (`silica connect` - feature-complete but pending end-to-end hardening), and the crash/chaos harness backing the [design contracts](#design-contracts).
+- **In progress** - codebase ingestion (skeleton stubs today), PDF/DOCX/TXT ingestion, the live Obsidian bridge (`silica connect`, feature-complete but pending end-to-end hardening), and the crash/chaos harness backing the [design contracts](#design-contracts).
 - **Planned** - image ingestion and an MCP server surface.
 
 Distinguish carefully: what ships today is enforced; what's listed above as in-progress or planned is not yet present.
