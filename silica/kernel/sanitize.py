@@ -33,8 +33,12 @@ _MD_EXT_WIKILINK_RE = re.compile(
 # Characters illegal in filesystem filenames
 _ILLEGAL_FILENAME_CHARS_RE = re.compile(r'[/\\:*?"<>|]')
 
-# Degenerate run: 5+ consecutive identical characters (same char, not newline)
-_DEGENERATE_RUN_RE = re.compile(r'([^\n])\1{4,}')
+# Degenerate run: 5+ consecutive identical characters (LLM output garbage).
+# Excludes markdown-structural chars (# = - * _ ` ~): they legitimately repeat
+# — ATX headings up to ######, thematic breaks / setext underlines, emphasis,
+# code fences — and collapsing them corrupts real document structure (the golden
+# integrity probe caught `##### Heading` → `# Heading` on ingest).
+_DEGENERATE_RUN_RE = re.compile(r'([^\n#*_=~`-])\1{4,}')
 
 # Nested wikilink brackets: 3+ consecutive '[' or ']'. A valid wikilink uses
 # exactly two; 3+ only appears when an already-bracketed name was wrapped again

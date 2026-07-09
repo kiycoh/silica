@@ -188,6 +188,18 @@ def test_strip_newline_not_collapsed():
     assert strip_degenerate_runs(text) == "line1\nline2"
 
 
+def test_strip_preserves_markdown_structural_runs():
+    # Markdown-structural chars legitimately repeat — never collapse them.
+    assert strip_degenerate_runs("##### Prima versione") == "##### Prima versione"
+    assert strip_degenerate_runs("###### H6") == "###### H6"
+    assert strip_degenerate_runs("-----") == "-----"   # thematic break / setext
+    assert strip_degenerate_runs("=====") == "====="   # setext H1 underline
+    assert strip_degenerate_runs("*****") == "*****"
+    assert strip_degenerate_runs("~~~~~") == "~~~~~"    # fence
+    # but real garbage of non-structural chars still collapses
+    assert strip_degenerate_runs("!!!!!") == "!"
+
+
 def test_strip_degenerate_normalized_in_ops():
     ops = [{"op": "write", "path": "Dir/A.md", "heading": "A",
             "source_basename": "inbox.md",
