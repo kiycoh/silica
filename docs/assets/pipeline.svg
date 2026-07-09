@@ -1,0 +1,86 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 1160 410" font-family="Inter, system-ui, -apple-system, 'Segoe UI', sans-serif" role="img" aria-label="Silica pipeline compared to a software engineering pipeline">
+  <defs>
+    <marker id="ac" markerWidth="9" markerHeight="9" refX="7" refY="4" orient="auto"><path d="M0,0 L8,4 L0,8 Z" fill="#38bdf8"/></marker>
+    <marker id="ad" markerWidth="8" markerHeight="8" refX="6" refY="3.5" orient="auto"><path d="M0,0 L7,3.5 L0,7 Z" fill="#6e7681"/></marker>
+    <marker id="am" markerWidth="8" markerHeight="8" refX="6" refY="3.5" orient="auto"><path d="M0,0 L7,3.5 L0,7 Z" fill="#f0883e"/></marker>
+    <pattern id="dots" width="22" height="22" patternUnits="userSpaceOnUse"><circle cx="1" cy="1" r="1" fill="#ffffff" opacity="0.03"/></pattern>
+    <style>
+      .mono{font-family:ui-monospace,'SF Mono',Menlo,Consolas,monospace}
+      .title{font-size:30px;font-weight:800;fill:#e6edf3;letter-spacing:1px}
+      .tag{font-size:12.5px;fill:#9aa4b0}
+      .band{font-size:11px;font-weight:700;fill:#38bdf8;letter-spacing:2px}
+      .hdr{font-size:13px;font-weight:700;fill:#e6edf3}
+      .sub{font-size:10px;fill:#9aa4b0}
+      .leg{font-size:10px;fill:#8b949e}
+      .note{font-size:9.5px;fill:#6e7681}
+      .amber{fill:#f0883e}
+      .green{fill:#7ee2a0}
+    </style>
+  </defs>
+
+  <!-- panel -->
+  <rect x="6" y="6" width="1148" height="398" fill="#0d1117" stroke="#30363d" stroke-width="1.5"/>
+  <rect x="6" y="6" width="1148" height="398" fill="url(#dots)"/>
+  <rect x="6" y="6" width="1148" height="4" fill="#38bdf8"/>
+
+  <!-- header -->
+  <text x="44" y="52" class="title">SILICA</text>
+  <text x="44" y="74" class="tag">You already trust deterministic gates for code. Silica runs your vault through <tspan fill="#cdd5df">the same pipeline</tspan>.</text>
+  <!-- legend -->
+  <rect x="905" y="40" width="14" height="8" fill="#38bdf8"/><text x="925" y="48" class="leg">flow</text>
+  <rect x="965" y="40" width="14" height="8" fill="#241a10" stroke="#f0883e"/><text x="985" y="48" class="leg">gate</text>
+  <rect x="1022" y="40" width="14" height="8" fill="#0e2a1c" stroke="#2ea043"/><text x="1042" y="48" class="leg">live</text>
+  <line x1="44" y1="92" x2="1116" y2="92" stroke="#30363d"/>
+
+  <!-- ============ TRACK 1 · SOFTWARE ENGINEERING ============ -->
+  <text x="44" y="120" class="band">SOFTWARE ENGINEERING &#183; a pipeline you already trust</text>
+  <g>
+    <rect x="56"  y="134" width="190" height="58" fill="#161b22" stroke="#30363d"/>
+    <text x="70"  y="158" class="hdr">Source &#183; PR</text><text x="70" y="177" class="sub">untrusted change arrives</text>
+    <rect x="270" y="134" width="190" height="58" fill="#161b22" stroke="#30363d"/>
+    <text x="284" y="158" class="hdr">Compile &#183; Lint</text><text x="284" y="177" class="sub">reject malformed</text>
+    <rect x="485" y="134" width="190" height="58" fill="#241a10" stroke="#f0883e" stroke-width="1.2"/>
+    <text x="499" y="158" class="hdr amber">Test suite</text><text x="499" y="177" class="sub">block regressions</text>
+    <rect x="699" y="134" width="190" height="58" fill="#161b22" stroke="#30363d"/>
+    <text x="713" y="158" class="hdr">Commit &#183; Merge</text><text x="713" y="177" class="sub">record to history</text>
+    <rect x="914" y="134" width="190" height="58" fill="#0e2a1c" stroke="#2ea043"/>
+    <text x="928" y="158" class="hdr green">Deploy</text><text x="928" y="177" class="sub">live in production</text>
+  </g>
+  <!-- track-1 flow arrows -->
+  <g stroke="#38bdf8" stroke-width="1.6" fill="none" marker-end="url(#ac)">
+    <path d="M246,163 L268,163"/><path d="M460,163 L483,163"/><path d="M675,163 L697,163"/><path d="M889,163 L912,163"/>
+  </g>
+
+  <!-- ============ maps-down connectors ============ -->
+  <g stroke="#6e7681" stroke-width="1.1" stroke-dasharray="4 3" fill="none" marker-end="url(#ad)">
+    <path d="M151,193 L151,249"/><path d="M365,193 L365,249"/><path d="M580,193 L580,249"/><path d="M794,193 L794,249"/><path d="M1009,193 L1009,249"/>
+  </g>
+
+  <!-- ============ TRACK 2 · SILICA ============ -->
+  <text x="44" y="238" class="band">SILICA</text>
+  <g>
+    <rect x="56"  y="250" width="190" height="78" fill="#0e2230" stroke="#245a72"/>
+    <text x="70"  y="273" class="hdr">Inbox</text><text x="70" y="292" class="sub amber">zero-trust staging</text><text x="70" y="309" class="sub">external content only</text>
+    <rect x="270" y="250" width="190" height="78" fill="#0e2230" stroke="#245a72"/>
+    <text x="284" y="273" class="hdr">Injector FSM</text><text x="284" y="292" class="sub">deterministic &#183; per-file</text><text x="284" y="309" class="sub mono">recon &#8594; distill &#8594; sanitize</text>
+    <rect x="485" y="250" width="190" height="78" fill="#241a10" stroke="#f0883e" stroke-width="1.2"/>
+    <text x="499" y="273" class="hdr amber">Verify-or-revert</text><text x="499" y="292" class="sub">re-read after write</text><text x="499" y="309" class="sub">mismatch &#8594; roll back</text>
+    <rect x="699" y="250" width="190" height="78" fill="#0e2230" stroke="#245a72"/>
+    <text x="713" y="273" class="hdr">Write backend</text><text x="713" y="292" class="sub">atomic write</text><text x="713" y="309" class="sub mono">fs (default) &#183; cli</text>
+    <rect x="914" y="250" width="190" height="78" fill="#0e2a1c" stroke="#2ea043"/>
+    <text x="928" y="273" class="hdr green">Vault</text><text x="928" y="292" class="sub">your .md files</text><text x="928" y="309" class="sub mono">+ ~/.silica index</text>
+  </g>
+  <!-- track-2 flow arrows -->
+  <g stroke="#38bdf8" stroke-width="1.6" fill="none" marker-end="url(#ac)">
+    <path d="M246,289 L268,289"/><path d="M460,289 L483,289"/><path d="M675,289 L697,289"/><path d="M889,289 L912,289"/>
+  </g>
+
+  <!-- gate-fail tick into rollback lane -->
+  <path d="M580,328 L580,344" stroke="#f0883e" stroke-width="1.4" fill="none" marker-end="url(#am)"/>
+
+  <!-- ============ ROLLBACK LANE ============ -->
+  <rect x="44" y="346" width="1072" height="46" fill="#1a1410" stroke="#30363d"/>
+  <rect x="44" y="346" width="4" height="46" fill="#f0883e"/>
+  <text x="64" y="368" class="hdr amber">gate fails &#8594; ROLLBACK</text>
+  <text x="64" y="384" class="sub">software: <tspan class="mono">git revert</tspan>    &#183;    Silica: inverse ops &#183; <tspan class="mono">/undo</tspan> &#183; <tspan class="mono">/revert</tspan> &#183; git snapshot (<tspan class="mono">SILICA_GIT_COMMIT=auto</tspan>)</text>
+</svg>

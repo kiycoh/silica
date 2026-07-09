@@ -159,6 +159,7 @@ Thumbs.db
 /docs/assets/*
 !/docs/assets/sili_no_bg.png
 !/docs/assets/architecture.svg
+!/docs/assets/pipeline.svg
 
 # Agents
 /.agents
