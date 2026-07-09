@@ -248,6 +248,31 @@ def test_to_markdown_folds_long_lists_into_callouts():
     assert "> - [[A]]" in md                    # wikilink bullet survives inside callout
 
 
+def test_is_vault_artifact_matches_root_only():
+    from silica.kernel.graph_export import is_vault_artifact
+    assert is_vault_artifact("GRAPH_REPORT.md")
+    assert is_vault_artifact("log")
+    assert not is_vault_artifact("Concepts/log.md")   # a real note in a subfolder
+    assert not is_vault_artifact("Statistica.md")
+
+
+def test_build_graph_data_excludes_vault_artifacts(tmp_vault):
+    """GRAPH_REPORT.md/log.md are Silica's own output — they must stay out of the
+    graph, or the report's own `[[...]]` would zero the orphan count next run."""
+    from silica.kernel.graph_export import build_graph_data
+
+    tmp_vault.note("Real.md", "# Real\nNo links here.\n")
+    tmp_vault.note("GRAPH_REPORT.md", "# Report\n[[Real]]\n")   # report links Real
+    tmp_vault.note("log.md", "# Log\n[[Real]]\n")
+
+    nodes, edges = build_graph_data()
+    ids = {n["id"] for n in nodes}
+    assert "GRAPH_REPORT.md" not in ids and "log.md" not in ids
+    assert "Real.md" in ids
+    # Real is linked ONLY by the artifacts -> excluded, it stays an orphan
+    assert not any(e["to"] == "Real.md" for e in edges)
+
+
 # ---------------------------------------------------------------------------
 # write_report
 # ---------------------------------------------------------------------------

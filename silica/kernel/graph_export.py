@@ -66,6 +66,26 @@ def _infer_type(path: str) -> str:
     return "note"
 
 
+# Silica's own generated files at the vault ROOT (log.md, GRAPH_REPORT.md) are
+# tooling output, not knowledge notes. The driver indexes them like any note, so
+# without this filter GRAPH_REPORT.md's hundreds of `[[...]]` would make it the
+# top hub AND give every note it lists an incoming link — silently zeroing the
+# orphan count on the next run. Matched by root-relative stem only, so a genuine
+# note in a subfolder (e.g. "Concepts/log.md") stays in the graph.
+_VAULT_ROOT_ARTIFACT_STEMS = frozenset({"log", "GRAPH_REPORT"})
+
+
+def is_vault_artifact(note_id: str) -> bool:
+    """True if `note_id` is a Silica-generated file at the vault root.
+
+    Id form varies by caller (graph node ids carry `.md`; other callers may
+    not), so this matches on the `.md`-stripped stem and requires no path
+    separator — i.e. vault-root only.
+    """
+    stem = note_id.replace("\\", "/").removesuffix(".md")
+    return "/" not in stem and stem in _VAULT_ROOT_ARTIFACT_STEMS
+
+
 def build_graph_data(folder: str = "") -> tuple[list[dict], list[dict]]:
     """Build node and edge lists from the driver's internal nx.DiGraph.
 
@@ -92,6 +112,8 @@ def build_graph_data(folder: str = "") -> tuple[list[dict], list[dict]]:
     for raw_path, ref in internal_notes.items():
         path = raw_path.replace("\\", "/")
         if path not in in_scope:
+            continue
+        if is_vault_artifact(path):   # keep Silica's own log.md/GRAPH_REPORT.md out of the graph
             continue
         nodes.append({
             "id":    path,

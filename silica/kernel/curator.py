@@ -28,6 +28,7 @@ from __future__ import annotations
 from collections import Counter
 from dataclasses import dataclass, field
 
+from silica.kernel.graph_export import is_vault_artifact as _is_vault_artifact
 from silica.kernel.graph_report import VaultReport
 
 # The four item kinds the curator can emit. "autolink" is the mechanical,
@@ -49,25 +50,11 @@ def _norm_note_path(path: str) -> str:
     p = path.strip().replace("\\", "/")
     return p if p.endswith(".md") else p + ".md"
 
-# Silica's own generated artifacts, living at the VAULT ROOT: the driver
-# indexes them like any other note (in-degree 0 -> orphan finding, no
-# frontmatter -> reformat finding), but the curator must never plan work
-# against them — --apply would LLM-rewrite the journal or the report on
-# every vault with >=1 ingest. Matched by root-relative stem only, so a
-# genuine note in a subfolder sharing the name (e.g. "Concepts/log.md")
-# stays curatable.
-_VAULT_ROOT_ARTIFACT_STEMS = {"log", "GRAPH_REPORT"}
-
-
-def _is_vault_artifact(note_id: str) -> bool:
-    """True if `note_id` is a Silica-generated file at the vault root.
-
-    Id form varies by caller (graph node ids carry `.md`; other callers may
-    not), so this matches on the `.md`-stripped stem and requires no path
-    separator — i.e. vault-root only.
-    """
-    stem = note_id.removesuffix(".md")
-    return "/" not in stem and stem in _VAULT_ROOT_ARTIFACT_STEMS
+# Silica's own vault-root artifacts (log.md, GRAPH_REPORT.md) must never be
+# planned for work — --apply would LLM-rewrite the journal or the report on
+# every vault with >=1 ingest. Same predicate now also keeps them out of the
+# graph itself (silica.kernel.graph_export.is_vault_artifact), so orphan/hub
+# metrics no longer self-pollute from the report's own wikilinks.
 
 
 @dataclass
