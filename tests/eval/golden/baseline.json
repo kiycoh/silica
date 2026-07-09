@@ -1,0 +1,37 @@
+{
+  "generated_at": "2026-07-09",
+  "tier": "cheap",
+  "vault": {
+    "digest": "sha256:ac65f35fd71562d1dfa3712ef182723251849eecd1b9cb6648aae82a3b1b8aec",
+    "notes": 680,
+    "path": "/home/kiycoh/Documents/Obsidian/test"
+  },
+  "config": {
+    "tau_high": 0.55,
+    "tau_low": 0.15,
+    "sim_threshold_high": 0.85,
+    "sim_threshold_low": 0.65,
+    "embedding_model": "text-embedding-qwen3-embedding-4b",
+    "cooccur_store": "present",
+    "cooccur_lang": "italian",
+    "taxonomy_derivation": "ctfidf-top15",
+    "taxonomy_top_n": 15,
+    "relatedness_legs": null
+  },
+  "metrics": {
+    "classify.agreement": 0.3338,
+    "classify.uncategorized_rate": 0.61,
+    "classify.notes": 677,
+    "links.recall": 0.7532,
+    "links.extra_per_note": 1.204,
+    "links.links_evaluated": 1483,
+    "links.notes_evaluated": 353,
+    "integrity.rate": 1.0,
+    "integrity.notes": 680,
+    "integrity.vault_structural_violations": 574,
+    "integrity.vault_style_flags": 649,
+    "integrity.vault_notes_with_structural": 123,
+    "coherence_index": 0.6957
+  },
+  "frozen_at": "2026-07-09"
+}

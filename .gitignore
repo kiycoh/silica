@@ -181,3 +181,6 @@ CONTEXT.md
 
 # Generated report — line numbers drift; regenerate with /ponytail-debt
 PONYTAIL-DEBT.md
+
+# Golden harness per-run output (only baseline.json is committed)
+tests/eval/golden/metrics.json
