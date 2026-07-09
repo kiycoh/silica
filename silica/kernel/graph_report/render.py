@@ -41,10 +41,29 @@ _TOTAL_LABELS = {
 }
 
 
+def _fold(add, kind: str, title: str, items: list, fmt, *, cap: int = _LIST_CAP, more_json: bool = True) -> None:
+    """Wrap a bulleted list in a collapsed OFM callout (`> [!kind]- title`).
+
+    Every line is `>`-prefixed so it renders inside the callout and the
+    `[[wikilinks]]` survive — an HTML <details> fold would swallow them.
+    `fmt(item)` returns each bullet's text; the list is capped at `cap`.
+    Trailing blank line separates this callout from the next block.
+    """
+    add(f"> [!{kind}]- {title}")
+    for it in items[:cap]:
+        add(f"> - {fmt(it)}")
+    if len(items) > cap:
+        tail = " (see GRAPH_REPORT.json)" if more_json else ""
+        add(f"> - _… +{len(items) - cap} more{tail}_")
+    add("")
+
+
 def to_markdown(r: VaultReport, title: str = "Silica Vault Report") -> str:
     """Render a VaultReport as OFM-friendly, human-readable markdown.
 
-    Singleton clusters are summarised (not listed) and long lists are capped;
+    Long lists fold into collapsed callouts (`[!kind]-`) so the note opens
+    compact; tables (Totals, God Nodes, Bridges) stay flat since tables render
+    poorly inside callouts. Singleton clusters are summarised, lists capped;
     the full data lives in the sibling GRAPH_REPORT.json.
     """
     lines: list[str] = []
@@ -75,6 +94,7 @@ def to_markdown(r: VaultReport, title: str = "Silica Vault Report") -> str:
     if linked:
         top = ", ".join(f"[[{_short(c.hub)}]] ({c.size})" for c in linked[:5])
         add(f"Largest areas: {top}.")
+    add("")
     health = []
     if t.get("orphans"):
         health.append(f"{t['orphans']} orphans (no incoming links)")
@@ -85,7 +105,14 @@ def to_markdown(r: VaultReport, title: str = "Silica Vault Report") -> str:
     if t.get("source_drift"):
         health.append(f"{t['source_drift']} notes derived from a superseded source version")
     if health:
-        add("Health: " + "; ".join(health) + ".")
+        add("> [!warning] Health")
+        for h in health:
+            add(f"> - {h}")
+        add("")
+    else:
+        add("> [!success] Health")
+        add("> No orphans, broken links, or contradictions.")
+        add("")
     fixes = [
         f"{t[k]} {word}"
         for k, word in (
@@ -98,12 +125,10 @@ def to_markdown(r: VaultReport, title: str = "Silica Vault Report") -> str:
         if t.get(k)
     ]
     if fixes:
+        add("> [!tip] Suggestions ready (not applied)")
+        add("> " + " · ".join(fixes) + ".")
+        add("> Nothing changes until you approve — review below, then ask Silica to apply.")
         add("")
-        add(
-            "**Suggestions ready (not applied):** " + ", ".join(fixes)
-            + ". Nothing changes until you approve — review below, then ask Silica to apply."
-        )
-    add("")
 
     # Totals
     add("## Totals")
@@ -143,11 +168,11 @@ def to_markdown(r: VaultReport, title: str = "Silica Vault Report") -> str:
     add("## Clusters (Knowledge Areas)")
     if linked:
         for c in linked:
-            add(f"### [[{_short(c.hub)}]] — {c.size} notes _(cohesion {c.cohesion})_")
+            add(f"> [!abstract]- [[{_short(c.hub)}]] — {c.size} notes · cohesion {c.cohesion}")
             member_links = ", ".join(f"[[{_short(m)}]]" for m in c.members[:_MEMBERS_CAP])
             if len(c.members) > _MEMBERS_CAP:
                 member_links += f" … (+{len(c.members) - _MEMBERS_CAP} more)"
-            add(member_links)
+            add(f"> {member_links}")
             add("")
     else:
         add("_No linked clusters detected (vault has no resolved wikilinks)._")
@@ -159,46 +184,33 @@ def to_markdown(r: VaultReport, title: str = "Silica Vault Report") -> str:
     # Orphans
     add("## Orphans (No Incoming Links)")
     if r.orphans:
-        for o in r.orphans[:_LIST_CAP]:
-            add(f"- [[{_short(o)}]]")
-        if len(r.orphans) > _LIST_CAP:
-            add(f"- _… +{len(r.orphans) - _LIST_CAP} more (see GRAPH_REPORT.json)_")
+        _fold(add, "warning", f"{len(r.orphans)} orphans", r.orphans,
+              lambda o: f"[[{_short(o)}]]")
     else:
         add("_No orphans._")
-    add("")
+        add("")
 
-    # Dangling links
+    # Dangling links — targets are unresolved (inline code, not wikilinks)
     add("## Dangling Links (Unresolved Wikilinks)")
     if r.dangling:
-        add("| Target | References |")
-        add("|---|---|")
-        for d in r.dangling[:_LIST_CAP]:
-            add(f"| `{d['target']}` | {d['refs']} |")
-        if len(r.dangling) > _LIST_CAP:
-            add(f"| _… +{len(r.dangling) - _LIST_CAP} more_ | |")
+        _fold(add, "bug", f"{len(r.dangling)} broken links", r.dangling,
+              lambda d: f"`{d['target']}` — {d['refs']}×", more_json=False)
     else:
         add("_No unresolved wikilinks._")
-    add("")
+        add("")
 
     # Contested claims — authoritative, kept visible until a human resolves them
     if r.contested:
         add("## Contested Claims (Unresolved Contradictions)")
-        for c in r.contested[:_LIST_CAP]:
-            refs = "; ".join(c.refs) if c.refs else "—"
-            add(f"- [[{_short(c.path)}]] ↮ {refs}")
-        if len(r.contested) > _LIST_CAP:
-            add(f"- _… +{len(r.contested) - _LIST_CAP} more (see GRAPH_REPORT.json)_")
-        add("")
+        _fold(add, "danger", f"{len(r.contested)} contested", r.contested,
+              lambda c: f"[[{_short(c.path)}]] ↮ {'; '.join(c.refs) if c.refs else '—'}")
 
     # Source drift — authoritative, from <vault>/provenance.json: notes still
     # carrying claims from a source version that has since been re-ingested
     if r.source_drift:
         add("## Source Drift (Notes From a Superseded Source Version)")
-        for d in r.source_drift[:_LIST_CAP]:
-            add(f"- [[{_short(d.note)}]] — derived from a superseded version of {d.source}")
-        if len(r.source_drift) > _LIST_CAP:
-            add(f"- _… +{len(r.source_drift) - _LIST_CAP} more (see GRAPH_REPORT.json)_")
-        add("")
+        _fold(add, "warning", f"{len(r.source_drift)} drifted notes", r.source_drift,
+              lambda d: f"[[{_short(d.note)}]] — derived from a superseded version of {d.source}")
 
     # Missing links (proposed)
     if r.missing_links:
@@ -213,19 +225,15 @@ def to_markdown(r: VaultReport, title: str = "Silica Vault Report") -> str:
 
     # Likely duplicates (≥ τ_high — genuine merge candidates)
     if r.confirmed_duplicate_pairs:
-        add(f"\n### Likely Duplicates ({len(r.confirmed_duplicate_pairs)}) _(≥ τ_high — review for merge)_")
-        for dp in r.confirmed_duplicate_pairs[:_LIST_CAP]:
-            add(f"- [[{_short(dp.source)}]] vs [[{_short(dp.target)}]] (score: {dp.score:.3f})")
-        if len(r.confirmed_duplicate_pairs) > _LIST_CAP:
-            add(f"- _… +{len(r.confirmed_duplicate_pairs) - _LIST_CAP} more (see GRAPH_REPORT.json)_")
+        add(f"### Likely Duplicates ({len(r.confirmed_duplicate_pairs)}) _(≥ τ_high — review for merge)_")
+        _fold(add, "warning", "Merge candidates", r.confirmed_duplicate_pairs,
+              lambda dp: f"[[{_short(dp.source)}]] vs [[{_short(dp.target)}]] (score {dp.score:.3f})")
 
     # Borderline-related pairs (τ_low..τ_high — topically close, link not merge)
     if r.duplicate_pairs:
-        add(f"\n### Related Pairs ({len(r.duplicate_pairs)}) _(borderline similarity — link, don't merge)_")
-        for dp in r.duplicate_pairs[:_LIST_CAP]:
-            add(f"- [[{_short(dp.source)}]] vs [[{_short(dp.target)}]] (score: {dp.score:.3f})")
-        if len(r.duplicate_pairs) > _LIST_CAP:
-            add(f"- _… +{len(r.duplicate_pairs) - _LIST_CAP} more (see GRAPH_REPORT.json)_")
+        add(f"### Related Pairs ({len(r.duplicate_pairs)}) _(borderline similarity — link, don't merge)_")
+        _fold(add, "note", "Borderline pairs", r.duplicate_pairs,
+              lambda dp: f"[[{_short(dp.source)}]] vs [[{_short(dp.target)}]] (score {dp.score:.3f})")
 
     # Co-occurrence delta (proposed, embedder-free)
     if r.autolink_candidates:
@@ -237,9 +245,10 @@ def to_markdown(r: VaultReport, title: str = "Silica Vault Report") -> str:
             lines.append(f"| [[{_short(a.source)}]] | [[{_short(a.target)}]] | {a.weight} | {a.convergence} | {shared} |")
 
     if r.stale_links:
-        lines.append("\n## Stale Links _(wikilink − co-occurrence — review)_")
-        for s in r.stale_links:
-            lines.append(f"- [[{_short(s.source)}]] ↔ [[{_short(s.target)}]] _(linked, no shared concepts)_")
+        add("\n## Stale Links _(wikilink − co-occurrence — review)_")
+        _fold(add, "note", f"{len(r.stale_links)} stale links", r.stale_links,
+              lambda s: f"[[{_short(s.source)}]] ↔ [[{_short(s.target)}]] _(linked, no shared concepts)_",
+              more_json=False)
 
     if r.missing_hubs:
         lines.append("\n## Missing Hubs _(central concepts with no hub note)_")
@@ -249,18 +258,14 @@ def to_markdown(r: VaultReport, title: str = "Silica Vault Report") -> str:
             lines.append(f"| {h.concept} | {h.centrality} |")
 
     if r.lean_notes:
-        lines.append(f"\n### Lean Notes (Enrichment Candidates) ({len(r.lean_notes)})")
-        for n in r.lean_notes[:_LIST_CAP]:
-            lines.append(f"- [[{_short(n)}]]")
-        if len(r.lean_notes) > _LIST_CAP:
-            lines.append(f"- _… +{len(r.lean_notes) - _LIST_CAP} more (see GRAPH_REPORT.json)_")
+        add(f"\n### Lean Notes (Enrichment Candidates) ({len(r.lean_notes)})")
+        _fold(add, "todo", "Enrichment candidates", r.lean_notes,
+              lambda n: f"[[{_short(n)}]]")
 
     if r.reformat_notes:
-        lines.append(f"\n### Reformat Notes (Stylistic Refinement) ({len(r.reformat_notes)})")
-        for n in r.reformat_notes[:_LIST_CAP]:
-            lines.append(f"- [[{_short(n)}]]")
-        if len(r.reformat_notes) > _LIST_CAP:
-            lines.append(f"- _… +{len(r.reformat_notes) - _LIST_CAP} more (see GRAPH_REPORT.json)_")
+        add(f"\n### Reformat Notes (Stylistic Refinement) ({len(r.reformat_notes)})")
+        _fold(add, "todo", "Stylistic refinements", r.reformat_notes,
+              lambda n: f"[[{_short(n)}]]")
 
     return "\n".join(lines)
 

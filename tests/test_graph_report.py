@@ -230,6 +230,24 @@ def test_to_markdown_proposed_section_when_present():
     assert "Proposed Missing Links" in md
 
 
+def test_to_markdown_folds_long_lists_into_callouts():
+    """Long lists fold into collapsed OFM callouts (`[!kind]-`); the health/tip
+    summaries stay open. Wikilinks must survive inside the `>`-quoted callout."""
+    r = _empty_report()
+    r.totals = {"notes": 3, "orphans": 2, "dangling_links": 1, "lean_notes": 1}
+    r.clusters = [ClusterStat(cluster_id=0, hub="Hub", size=2, cohesion=0.5, members=["A", "B"])]
+    r.orphans = ["A", "B"]
+    r.dangling = [{"target": "X", "refs": 2}]
+    r.lean_notes = ["L"]
+    md = to_markdown(r)
+    assert "> [!warning] Health" in md          # health summary — open, not folded
+    assert "> [!tip] Suggestions" in md         # fixes summary — open
+    assert "> [!abstract]- [[Hub]]" in md       # cluster — folded
+    assert "> [!warning]- 2 orphans" in md      # orphans — folded
+    assert "> [!bug]- 1 broken links" in md     # dangling — folded
+    assert "> - [[A]]" in md                    # wikilink bullet survives inside callout
+
+
 # ---------------------------------------------------------------------------
 # write_report
 # ---------------------------------------------------------------------------
