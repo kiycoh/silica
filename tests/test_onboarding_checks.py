@@ -306,8 +306,30 @@ class TestCheckLanguage:
 
         r = check_language(_cfg(vault_path=str(tmp_path)))
         assert r.status == "ok"
-        assert "detected=italian" in r.detail
+        assert "language=italian" in r.detail
         assert "store=italian" in r.detail
+
+    def test_declared_language_supersedes_misfiring_detection(self, tmp_path, monkeypatch):
+        """User's bug: a vault DECLARES italian in vault.yaml and its store is
+        frozen italian, but a frontmatter-heavy sample makes `detect` say
+        english. The declaration is authority — no false 'mismatch' warning."""
+        import silica.kernel.cooccurrence as cooc_mod
+        from silica.onboarding.checks import check_language, detect_vault_language
+
+        (tmp_path / "n.md").write_text(
+            "---\nlast: 2026-07-09\nrelated:\n  - null\n---\nappunto italiano",
+            encoding="utf-8",
+        )
+        # Sanity: without the declaration, this sample is a real detection trap.
+        assert detect_vault_language(str(tmp_path)) == "english"
+        (tmp_path / "vault.yaml").write_text("cooccurrence_lang: italian\n", encoding="utf-8")
+        index_path = tmp_path / "cooc.json"
+        monkeypatch.setattr(cooc_mod, "_index_path_for", lambda vault: index_path)
+        self._store_with_lang(index_path, "italian")
+
+        r = check_language(_cfg(vault_path=str(tmp_path)))
+        assert r.status == "ok"
+        assert "language=italian" in r.detail
 
     def test_mismatched_store_warns_and_suggests_cooccur(self, tmp_path, monkeypatch):
         import silica.kernel.cooccurrence as cooc_mod

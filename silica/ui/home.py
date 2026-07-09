@@ -43,6 +43,9 @@ def print_home() -> None:
     all_cmds = pinned + [help_cmd, exit_cmd]
 
     print_banner()
+    from silica.update import behind_count
+    if n := behind_count():
+        CONSOLE.print(f"  [yellow]⚠ {n} update(s) behind — run[/] [bold yellow]silica update[/]")
     CONSOLE.print()
     CONSOLE.print(_model_vault_line(model_slug, worker_slug, vault))
     CONSOLE.print()

@@ -335,13 +335,12 @@ def _handle_direct_shortcut(raw_input: str, messages: list[dict]) -> bool:
             # Surface the frozen-language drift here, not only in `/vault` info:
             # a switch is exactly when a wrong-frozen store (english on an IT
             # vault) would otherwise stay silent. Reuses the doctor's check.
-            from silica.onboarding.checks import detect_vault_language, frozen_store_language
+            from silica.onboarding.checks import language_status
 
-            detected = detect_vault_language(resolved)
-            store_lang = frozen_store_language(resolved) if detected else None
-            if detected and store_lang and store_lang != detected:
+            lang, store_lang, drift = language_status(resolved)
+            if drift:
                 CONSOLE.print(
-                    f"  [yellow]⚠ Language: detected {detected}, co-occurrence store "
+                    f"  [yellow]⚠ Language: {lang}, co-occurrence store "
                     f"frozen {store_lang} — run /cooccur --force to rebuild.[/]"
                 )
             CONSOLE.print(
@@ -355,20 +354,18 @@ def _handle_direct_shortcut(raw_input: str, messages: list[dict]) -> bool:
         if CONFIG.vault_path:
             count = len(list(Path(CONFIG.vault_path).rglob("*.md")))
             CONSOLE.print(f"  Notes:   {count}")
-            from silica.onboarding.checks import detect_vault_language, frozen_store_language
+            from silica.onboarding.checks import language_status
 
-            detected = detect_vault_language(CONFIG.vault_path)
-            if detected:
-                store_lang = frozen_store_language(CONFIG.vault_path)
-                if store_lang and store_lang != detected:
-                    CONSOLE.print(
-                        f"  Language: {detected} (store frozen: {store_lang} "
-                        "⚠ — run /cooccur --force to rebuild)"
-                    )
-                elif store_lang:
-                    CONSOLE.print(f"  Language: {detected} (store: {store_lang})")
-                else:
-                    CONSOLE.print(f"  Language: {detected}")
+            lang, store_lang, drift = language_status(CONFIG.vault_path)
+            if lang and drift:
+                CONSOLE.print(
+                    f"  Language: {lang} (store frozen: {store_lang} "
+                    "⚠ — run /cooccur --force to rebuild)"
+                )
+            elif lang and store_lang:
+                CONSOLE.print(f"  Language: {lang} (store: {store_lang})")
+            elif lang:
+                CONSOLE.print(f"  Language: {lang}")
         return True
 
     if cmd == "/status":
@@ -1075,12 +1072,15 @@ def _resolve_context_budget() -> None:
 
 
 def _dispatch_subcommand(args: list[str]) -> int | None:
-    """Handle `silica doctor` / `silica init` / `silica connect`.
+    """Handle `silica doctor` / `silica init` / `silica connect` / `silica update`.
 
     Returns an exit code, or None when no subcommand matched (→ REPL).
     Lazy imports keep REPL startup unchanged. Module attributes (not `from`
     imports) so tests can monkeypatch run_checks / run_wizard / run_connect.
     """
+    if args[:1] == ["update"]:
+        import silica.update as update_mod
+        return update_mod.update(check_only="--check" in args[1:])
     if args[:1] == ["doctor"]:
         import silica.onboarding.checks as checks
         results = checks.run_checks(CONFIG)

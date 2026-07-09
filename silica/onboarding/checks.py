@@ -241,38 +241,67 @@ def frozen_store_language(vault: str) -> str | None:
     return frozen_lang(vault)
 
 
-def check_language(config: SilicaConfig) -> CheckResult:
-    """Detected dominant vault language vs. the cooccurrence store's frozen
-    language. A divergence is the signature of the historic bug that froze
-    stores to "english" on non-English vaults — this is how existing users
-    discover a store needs a `/cooccur` rebuild.
+def declared_language(vault: str) -> str | None:
+    """The language `vault` DECLARES in its `vault.yaml` (`cooccurrence_lang`),
+    or None when it declares none — or declares the `auto` sentinel, meaning
+    "detect me". A declaration is authority: it is the language the
+    co-occurrence store is (or should be) frozen to, so it SUPERSEDES the
+    stopword heuristic. A frontmatter-heavy sample fools `detect` into
+    "english" (the bundled english stoplist matches `last:`/`related:`/`null`
+    scaffolding), but a vault that declares italian is italian.
 
-    Both halves are resolved from `config.vault_path` — never from the
-    global CONFIG singleton — so a caller that just reconfigured (e.g. the
-    init wizard building a fresh `SilicaConfig()` right after a vault
-    switch) never compares the newly-chosen vault's detected language
-    against a *different*, still-active vault's frozen store.
+    Resolved from the `vault` argument, never the global CONFIG singleton —
+    same contract as frozen_store_language above.
+    """
+    from silica.kernel.vault_manifest import load_manifest
+
+    lang = load_manifest(vault).cooccurrence_lang
+    return lang if lang and lang != "auto" else None
+
+
+def language_status(vault: str) -> tuple[str | None, str | None, bool]:
+    """`(authority, store, drift)` for `vault` — the single seam behind both
+    the doctor's `check_language` and the `/vault` info block.
+
+    authority = the declared language if any, else the heuristically detected
+    dominant language (None when there is nothing to sample). store = the
+    frozen co-occurrence store language (None if no store on disk yet). drift =
+    both known and differing — the signal that `/cooccur --force` is needed to
+    rebuild the store in the authoritative language.
+    """
+    authority = declared_language(vault) or detect_vault_language(vault)
+    store = frozen_store_language(vault) if authority else None
+    return authority, store, bool(authority and store and authority != store)
+
+
+def check_language(config: SilicaConfig) -> CheckResult:
+    """The vault's authoritative language (declared in vault.yaml, else
+    detected) vs. the cooccurrence store's frozen language. A divergence is
+    the signature of the historic bug that froze stores to "english" on
+    non-English vaults — this is how existing users discover a store needs a
+    `/cooccur` rebuild.
+
+    Resolved from `config.vault_path` — never from the global CONFIG
+    singleton — so a caller that just reconfigured (e.g. the init wizard
+    building a fresh `SilicaConfig()` right after a vault switch) never
+    compares the newly-chosen vault against a *different*, still-active
+    vault's frozen store.
     """
     vault = config.vault_path.strip()
     if not vault:
         return CheckResult("language", "ok", "no vault — skipped")
 
-    detected = detect_vault_language(vault)
-    if detected is None:
+    authority, store_lang, drift = language_status(vault)
+    if authority is None:
         return CheckResult("language", "ok", "no notes yet")
-
-    store_lang = frozen_store_language(vault)
     if store_lang is None:
-        return CheckResult(
-            "language", "ok",
-            f"detected={detected}, no store frozen yet",
-        )
-    if store_lang == detected:
-        return CheckResult("language", "ok", f"detected={detected}, store={store_lang}")
+        return CheckResult("language", "ok", f"language={authority}, no store frozen yet")
+    if not drift:
+        return CheckResult("language", "ok", f"language={authority}, store={store_lang}")
     return CheckResult(
         "language", "warn",
-        f"detected={detected}, store frozen={store_lang} — mismatch",
-        "run `/cooccur --force` to rebuild the co-occurrence store in the detected language",
+        f"language={authority}, store frozen={store_lang} — mismatch",
+        "run `/cooccur --force` to rebuild the co-occurrence store in the vault's language",
     )
 
 
