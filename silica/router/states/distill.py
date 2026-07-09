@@ -323,6 +323,13 @@ def handle_validate(fsm: "InjectorFSM") -> None:
             res.get("rejection_rate", 0) * 100,
             max_rate * 100,
         )
+        for r in res.get("rejected_ops", []):
+            op = r.get("op", {}) if isinstance(r, dict) else {}
+            label = op.get("path") or op.get("heading") or "?"
+            logger.info(
+                "VALIDATE reject: [%s] %s — %s",
+                op.get("type", "?"), label, r.get("reason", "(no reason given)"),
+            )
 
     if res.get("validated_count", 0) == 0 and res.get("rejected_count", 0) == 0:
         logger.info("VALIDATE: no actionable ops (all skip) — short-circuit to CLEANUP")
