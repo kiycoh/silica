@@ -2,7 +2,10 @@
 # Copyright (C) 2026 Alessandro Carosia
 
 import json
+import logging
 import re
+
+logger = logging.getLogger(__name__)
 
 # Inline ($...$) must not cross newlines; block ($$...$$) may.
 _MATH = re.compile(r"\$\$.*?\$\$|\$[^\n$]+?\$", re.DOTALL)
@@ -157,6 +160,17 @@ def _resolve_op_refs(op, bodies: dict[int, str]) -> None:
             ref = op.pop(ref_key)
             if isinstance(ref, int) and ref in bodies:
                 op[field] = bodies[ref]
+            else:
+                # Dangling ref: the model emitted `snippet_ref: N` but never wrote
+                # the matching `===SILICA-BODY N===` block. Leaving `field` empty
+                # here silently produces a 0-char snippet that validate later
+                # rejects as "too short" with no clue why — surface it instead.
+                logger.warning(
+                    "sanitize: dangling %s=%r for op %r (available bodies: %s) — "
+                    "%s left empty",
+                    ref_key, ref, op.get("path") or op.get("heading") or "?",
+                    sorted(bodies), field,
+                )
 
 
 def _inject_external_bodies(parsed, bodies: dict[int, str]) -> None:
