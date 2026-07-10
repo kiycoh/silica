@@ -71,6 +71,7 @@ class RelatedNote:
     evidence: list[str]
     embed_score: float | None = None
     cooccur_weight: float | None = None
+    edge_score: float | None = None  # CORRELATE (ADR-0013): direct note_edges Jaccard
 
 
 # ---------------------------------------------------------------------------
@@ -290,11 +291,16 @@ def _fuse(
     cooc_rank: list[tuple[str, float]] | None,
     *,
     k: int,
+    edges_rank: list[tuple[str, float]] | None = None,
 ) -> list[RelatedNote]:
-    """RRF-fuse the two per-leg rankings into RelatedNotes with provenance.
+    """RRF-fuse the per-leg rankings into RelatedNotes with provenance.
 
     Shared by both facade entry points. A None ranking is an abstaining leg and
-    contributes no terms; [] is returned only when both abstain.
+    contributes no terms; [] is returned only when all legs abstain.
+
+    `edges_rank` is the CORRELATE third leg — direct note_edges of the query,
+    ranked by Jaccard. Only related_notes(query_path) supplies it; the
+    fresh-query facade always abstains here (fresh text has no note_edges row).
     """
     rankings: list[list[tuple[str, float]]] = []
     embed_scores: dict[str, float] = {}
@@ -310,6 +316,11 @@ def _fuse(
         rankings.append(list(cooc_rank))
         cooc_scores = dict(cooc_rank)
 
+    edge_scores: dict[str, float] = {}
+    if edges_rank is not None:
+        rankings.append(list(edges_rank))
+        edge_scores = dict(edges_rank)
+
     fused = _rrf_fuse(rankings)
     if not fused:
         return []
@@ -319,10 +330,13 @@ def _fuse(
         evidence: list[str] = []
         embed_score = embed_scores.get(path)
         cooc_weight = cooc_scores.get(path)
+        edge_score = edge_scores.get(path)
         if embed_score is not None:
             evidence.append(f"embed:{embed_score:.2f}")
         if cooc_weight is not None:
             evidence.append(f"cooccur:w{int(round(cooc_weight))}")
+        if edge_score is not None:
+            evidence.append(f"edge:{edge_score:.2f}")
         out.append(
             RelatedNote(
                 path=path,
@@ -331,6 +345,7 @@ def _fuse(
                 evidence=evidence,
                 embed_score=embed_score,
                 cooccur_weight=cooc_weight,
+                edge_score=edge_score,
             )
         )
     return out[:k]
@@ -364,7 +379,18 @@ def related_notes(
     cooc_rank = _cooccur_ranking(
         cooccur_store, query_path, k=pool, exclude=blocked, scope=scope, expand=expand
     )
-    return _fuse(embed_rank, cooc_rank, k=k)
+    # CORRELATE third leg: the query's direct note_edges row, ranked by Jaccard.
+    # Abstains (None) when the row is empty — 0.57 edges/note means most queries
+    # abstain and fusion is identical to before; when it fires, high precision.
+    edges_rank = None
+    if cooccur_store is not None:
+        row = cooccur_store.note_edges_for(query_path)
+        ranked = sorted(
+            ((p, s) for p, s in row.items() if p not in blocked),
+            key=lambda kv: (-kv[1], kv[0]),
+        )
+        edges_rank = ranked or None
+    return _fuse(embed_rank, cooc_rank, k=k, edges_rank=edges_rank)
 
 
 def related_notes_for_query(

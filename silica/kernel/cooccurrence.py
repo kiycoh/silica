@@ -217,6 +217,10 @@ class CooccurStore:
     def __init__(self, path: Path | None = None, lang: str = "english"):
         self._path = path if path is not None else _index_path()
         self._notes: dict[str, dict[str, Any]] = {}
+        # note_edges: derived note-to-note edges (CORRELATE / ADR-0013). Stored
+        # ONCE under the ordered pair (min, max) -> {max: score}. Never source of
+        # truth; written only by kernel/correlate.py, pruned by this store.
+        self._note_edges: dict[str, dict[str, float]] = {}
         self.lang = lang
         # lazy aggregated graph caches (scope=None only)
         self._adj: dict[str, dict[str, float]] | None = None
@@ -241,15 +245,19 @@ class CooccurStore:
                 data = orjson.loads(src.read_bytes())
                 self._notes = data.get("notes", {})
                 self.lang = data.get("lang", self.lang)
+                self._note_edges = data.get("note_edges", {})
+                self._prune_orphan_edges()
             except Exception:
                 self._notes = {}
+                self._note_edges = {}
 
     def save(self) -> Path:
         # No OPT_INDENT_2: machine-only derived index, pretty-printing is pure
         # I/O tax (Fix 2A). orjson defaults to compact output.
         self._path.parent.mkdir(parents=True, exist_ok=True)
         self._path.write_bytes(orjson.dumps(
-            {"version": 1, "lang": self.lang, "notes": self._notes},
+            {"version": 1, "lang": self.lang, "notes": self._notes,
+             "note_edges": self._note_edges},
         ))
         return self._path
 
@@ -260,7 +268,54 @@ class CooccurStore:
 
     def delete_note(self, path: str) -> None:
         self._notes.pop(cooccur_key(path), None)
+        self.clear_note_edges(path)
         self._invalidate()
+
+    # --- note_edges (derived; written only by kernel/correlate.py) ---
+    def set_note_edge(self, a: str, b: str, score: float) -> None:
+        """Record one derived edge under its ordered pair (min, max)."""
+        lo, hi = sorted((cooccur_key(a), cooccur_key(b)))
+        self._note_edges.setdefault(lo, {})[hi] = score
+
+    def clear_note_edges(self, path: str) -> None:
+        """Drop every edge that touches `path` (both directions)."""
+        key = cooccur_key(path)
+        self._note_edges.pop(key, None)  # edges where key is the min endpoint
+        for lo, nbrs in list(self._note_edges.items()):
+            nbrs.pop(key, None)          # edges where key is the max endpoint
+            if not nbrs:
+                self._note_edges.pop(lo, None)
+
+    def _prune_orphan_edges(self) -> None:
+        """Drop edges whose endpoint has no contribution (integrity, on load).
+
+        note_edges is derived: an endpoint absent from `notes` is stale (the note
+        was deleted by a writer that never touched edges). Recomputation, never
+        repair — so we simply forget the dangling row.
+        """
+        live = set(self._notes)
+        pruned: dict[str, dict[str, float]] = {}
+        for lo, nbrs in self._note_edges.items():
+            if lo not in live:
+                continue
+            kept = {hi: s for hi, s in nbrs.items() if hi in live}
+            if kept:
+                pruned[lo] = kept
+        self._note_edges = pruned
+
+    def note_edges_for(self, path: str) -> dict[str, float]:
+        """All derived neighbours of `path` -> score, both directions.
+
+        ponytail: O(E) scan for the reverse direction; E ~ 0.57*N (sparse), so
+        cheap. If a consumer ever hot-loops this, cache a two-way adjacency
+        invalidated on set/clear (mirrors the _adj cache).
+        """
+        key = cooccur_key(path)
+        out = dict(self._note_edges.get(key, {}))  # key is the min endpoint
+        for lo, nbrs in self._note_edges.items():
+            if lo != key and key in nbrs:          # key is the max endpoint
+                out[lo] = nbrs[key]
+        return out
 
     # --- lookup ---
     def paths(self) -> list[str]:

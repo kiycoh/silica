@@ -69,6 +69,7 @@ class AutolinkCandidate:    # co-occurrence − wikilink: related in text, unlin
     weight: float          # co-occurrence relatedness weight (higher = stronger)
     shared: list[str]      # directly shared concept labels (evidence)
     convergence: int = 0   # #8: number of god-node hubs this pair connects to
+    provenance: str = "expanded"  # CORRELATE (ADR-0013): "direct" (note_edges) | "expanded"
 
 
 @dataclass

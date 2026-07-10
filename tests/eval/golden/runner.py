@@ -22,13 +22,21 @@ import json
 import os
 from pathlib import Path
 
-from tests.eval.golden import probe_classify, probe_integrity, probe_links
+from tests.eval.golden import (
+    probe_classify,
+    probe_correlate,
+    probe_fusion,
+    probe_integrity,
+    probe_links,
+)
 
 BASELINE_PATH = Path(__file__).parent / "baseline.json"
 METRICS_PATH = Path(__file__).parent / "metrics.json"
 
 # Gate rules (single source — the pytest imports compare()).
-GATED_DROP_2PP = ("classify.agreement", "links.recall")   # Phase 2 appends dedup.*, neighbors.*
+# fusion.recall_at_10 arms itself on the first freeze that records it
+# (compare() skips keys absent from the baseline).
+GATED_DROP_2PP = ("classify.agreement", "links.recall", "fusion.recall_at_10")   # Phase 2 appends dedup.*, neighbors.*
 GATED_EXACT_ONE = ("integrity.rate",)
 _PRIMARIES = ("classify.agreement", "links.recall", "integrity.rate")
 
@@ -89,7 +97,7 @@ def config_snapshot(store) -> dict:
         "cooccur_lang": getattr(store, "lang", None),
         "taxonomy_derivation": probe_classify.DERIVATION,
         "taxonomy_top_n": probe_classify.TOP_N,
-        "relatedness_legs": None,  # Phase 2
+        "relatedness_legs": None,  # filled by collect() from the fusion probe
     }
 
 
@@ -125,6 +133,36 @@ def collect(vault: Path, *, tier: str = "cheap", verbose: bool = False) -> dict:
     metrics["integrity.vault_style_flags"] = ig["vault_style_flags"]
     metrics["integrity.vault_notes_with_structural"] = ig["vault_notes_with_structural"]
 
+    # CORRELATE (ADR-0013): masked-pair recovery lift. Informational — the
+    # fused-ranking regression is gated by fusion.recall_at_10 below. Both this
+    # probe and fusion derive note_edges on the shared store in memory and are
+    # self-contained (each recomputes), so their order does not matter; they run
+    # after the leg probes only to keep the table grouping stable.
+    cr = probe_correlate.run(vault, store, verbose=verbose)
+    metrics["correlate.recall_expanded"] = cr["recall_expanded"]
+    metrics["correlate.recall_union"] = cr["recall_union"]
+    metrics["correlate.lift"] = cr["lift"]
+    metrics["correlate.lift_pairs"] = cr["lift_pairs"]
+    metrics["correlate.pairs_evaluated"] = cr["pairs_evaluated"]
+    metrics["correlate.edges"] = cr["edges"]
+    metrics["correlate.edges_wikilinked_frac"] = cr["edges_wikilinked_frac"]
+
+    # FUSION: masked-pair recovery through the full relatedness facade — the
+    # only end-to-end gate on RRF + leg wiring. The embed leg is offline for
+    # indexed notes (stored-vector lookup + cosine, no API); the explicit
+    # exists() check bypasses EmbedStore's legacy-path fallback so a vault
+    # without an index can never silently measure a foreign one.
+    from silica.kernel.embed import EmbedStore
+    from silica.kernel.paths import index_dir_for
+
+    embed_path = index_dir_for(str(vault)) / "embeddings.json"
+    embed_store = EmbedStore(path=embed_path) if embed_path.exists() else None
+    fz = probe_fusion.run(vault, store, embed_store=embed_store, verbose=verbose)
+    metrics["fusion.recall_at_10"] = fz["recall_at_10"]
+    metrics["fusion.mrr"] = fz["mrr"]
+    metrics["fusion.pairs_evaluated"] = fz["pairs_evaluated"]
+    metrics["fusion.embed_coverage"] = fz["embed_coverage"]
+
     if tier in ("embedder", "all"):
         print("SKIP  dedup.*      — Phase 2 (embedder tier) not implemented")
         print("SKIP  neighbors.*  — Phase 2 (embedder tier) not implemented")
@@ -132,12 +170,15 @@ def collect(vault: Path, *, tier: str = "cheap", verbose: bool = False) -> dict:
     # arbitrary single trend number — labeled as such, never gated
     metrics["coherence_index"] = round(sum(metrics[k] for k in _PRIMARIES) / len(_PRIMARIES), 4)
 
+    cfg = config_snapshot(store)
+    cfg["relatedness_legs"] = fz["legs"]
+
     digest, notes = vault_digest(vault)
     return {
         "generated_at": _today(),
         "tier": tier,
         "vault": {"digest": digest, "notes": notes, "path": str(vault)},
-        "config": config_snapshot(store),
+        "config": cfg,
         "metrics": metrics,
     }
 
@@ -162,7 +203,8 @@ def print_table(doc: dict, baseline: dict | None) -> None:
     print(f"\nvault: {v['path']}  ({v['notes']} notes)")
     print(f"digest: {v['digest']}  tier: {doc['tier']}  "
           f"cooccur: {cfg['cooccur_store']}/{cfg['cooccur_lang']}  "
-          f"embedder: {cfg['embedding_model']}")
+          f"embedder: {cfg['embedding_model']}  "
+          f"legs: {cfg.get('relatedness_legs') or '—'}")
     base_m = baseline["metrics"] if baseline else {}
     gated = set(GATED_DROP_2PP) | set(GATED_EXACT_ONE)
     print(f"\n{'metric':<38} {'value':>10} {'baseline':>10} {'delta':>9}  gate")
@@ -216,6 +258,12 @@ def main(argv=None) -> int:
     if baseline["config"]["cooccur_store"] != doc["config"]["cooccur_store"]:
         print_table(doc, baseline)
         print("\ncooccur mode changed — re-baseline deliberately with --freeze-baseline")
+        return 1
+    # A 2-leg run vs a 3-leg baseline (or vice versa) is a different instrument,
+    # not a regression — refuse the comparison like digest/cooccur drift.
+    if baseline["config"].get("relatedness_legs") != doc["config"].get("relatedness_legs"):
+        print_table(doc, baseline)
+        print("\nrelatedness legs changed — re-baseline deliberately with --freeze-baseline")
         return 1
 
     print_table(doc, baseline)

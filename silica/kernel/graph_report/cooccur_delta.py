@@ -46,8 +46,8 @@ def _compute_cooccur_delta(
     Returns empty lists when the index is empty (best-effort, never raises).
     """
     import networkx as nx
-    from silica.kernel.cooccurrence import get_cooccur_store, tokenize
-    from silica.kernel.relatedness import _cooccur_ranking
+    from silica.kernel.cooccurrence import cooccur_key, get_cooccur_store, tokenize
+    from silica.kernel.relatedness import _concept_idf, _cooccur_ranking
 
     try:
         store = cooccur_store if cooccur_store is not None else get_cooccur_store()
@@ -63,18 +63,52 @@ def _compute_cooccur_delta(
         na, nb = store.note_nodes(a), store.note_nodes(b)
         return sorted(store.node_label(s) for s in (set(na) & set(nb)))
 
-    # --- AUTOLINK: co-occurrence-related but not wikilinked (and >2 hops) ----
+    # Direct-edge evidence orders shared stems by IDF descending (top 5), so the
+    # boilerplate-template stems a raw-count metric admits sink below the
+    # discriminative ones. IDF lives ONLY here (display), never in the metric.
+    # Computed lazily on the first direct edge — one O(N) pass at render.
+    idf_map: dict[str, float] | None = None
+
+    def _shared_by_idf(a: str, b: str) -> list[str]:
+        nonlocal idf_map
+        if idf_map is None:
+            all_stems: set[str] = set()
+            for p in store.paths():
+                all_stems |= set(store.note_nodes(p))
+            idf_map = _concept_idf(store, all_stems, scope=scope)
+        shared = set(store.note_nodes(a)) & set(store.note_nodes(b))
+        ranked = sorted(shared, key=lambda s: (-idf_map.get(s, 0.0), s))
+        return [store.node_label(s) for s in ranked[:5]]
+
+    # Keyspace bridge: G_und node ids are graph paths WITH '.md'; store keys are
+    # stripped (cooccur_key). Membership and hop checks must cross that boundary
+    # here — on a real vault a raw `nid in G_und` matches nothing and the whole
+    # AUTOLINK section silently comes out empty.
+    gid_by_key = {cooccur_key(n): n for n in G_und.nodes}
+
+    # --- AUTOLINK: direct note_edges (CORRELATE) UNION expanded ranking, both
+    #     >2 hops away and not already wikilinked. Direct pairs are a lookup
+    #     (free) and win provenance when a pair appears in both legs.
+    #     Candidates keep STORE keys (stripped): the cosine-band filter and the
+    #     shared-concept evidence below consume them, and render strips anyway.
     autolinks: list[AutolinkCandidate] = []
     seen: set[tuple[str, str]] = set()
     for nid in store.paths():
-        if nid not in G_und:
+        src_gid = gid_by_key.get(nid)
+        if src_gid is None:
             continue
-        ranking = _cooccur_ranking(store, nid, k=k, exclude=set(), scope=scope, expand=True)
-        for tgt, weight in ranking or []:
-            if tgt not in G_und:
+        direct = store.note_edges_for(nid)  # {tgt: jaccard}, both directions
+        expanded = _cooccur_ranking(store, nid, k=k, exclude=set(), scope=scope, expand=True) or []
+        legs = (
+            [(tgt, w, "direct") for tgt, w in direct.items()]
+            + [(tgt, w, "expanded") for tgt, w in expanded]
+        )
+        for tgt, weight, provenance in legs:
+            tgt_gid = gid_by_key.get(tgt)
+            if tgt_gid is None:
                 continue
             try:
-                if nx.shortest_path_length(G_und, nid, tgt) <= 2:
+                if nx.shortest_path_length(G_und, src_gid, tgt_gid) <= 2:
                     continue  # already linked or trivially close
             except Exception:
                 pass  # no path -> genuinely disconnected -> a valid candidate
@@ -82,10 +116,12 @@ def _compute_cooccur_delta(
             if key in seen:
                 continue
             seen.add(key)
+            shared = _shared_by_idf(nid, tgt) if provenance == "direct" else _shared_labels(nid, tgt)
             autolinks.append(AutolinkCandidate(
                 source=key[0], target=key[1],
                 weight=round(float(weight), 2),
-                shared=_shared_labels(nid, tgt),
+                shared=shared,
+                provenance=provenance,
             ))
 
     # --- #6 cosine-band: filter trivially-similar or nonsensically-distant ---
@@ -119,7 +155,9 @@ def _compute_cooccur_delta(
     # endpoint co-occurring with the hub, or being a hub itself) earns a higher
     # convergence and is ranked by convergence × weight. Degrades to the prior
     # weight-only ordering when there are no god nodes.
-    god_ids = [n.id for n in report.god_nodes]
+    # Same keyspace bridge: god-node ids are graph paths, candidates carry store
+    # keys — normalise once so the hub-exclusion and reach comparisons line up.
+    god_ids = [cooccur_key(n.id) for n in report.god_nodes]
     if god_ids:
         god_set = set(god_ids)
         # expand=False: count only DIRECT concept overlap with the hub, so
@@ -138,8 +176,23 @@ def _compute_cooccur_delta(
                 if any(o in god_related[g] for o in others)
             )
 
-    autolinks.sort(key=lambda a: (-(a.convergence * a.weight), -a.weight, a.source, a.target))
-    autolinks = autolinks[:k]
+    # Per-leg quota: direct weights are Jaccard (<=1) while expanded overlaps run
+    # to ~1e6 on a real vault — one mixed sort would bury every direct candidate
+    # (the high-precision leg CORRELATE exists for). Direct gets up to half the
+    # slots ranked by its native Jaccard; expanded keeps the convergence ranking
+    # for the rest; either leg backfills when the other runs short.
+    direct_leg = sorted(
+        (a for a in autolinks if a.provenance == "direct"),
+        key=lambda a: (-a.weight, a.source, a.target),
+    )
+    expanded_leg = sorted(
+        (a for a in autolinks if a.provenance != "direct"),
+        key=lambda a: (-(a.convergence * a.weight), -a.weight, a.source, a.target),
+    )
+    take = min(len(direct_leg), k - k // 2)
+    autolinks = direct_leg[:take] + expanded_leg[: k - take]
+    if len(autolinks) < k:
+        autolinks += direct_leg[take: take + k - len(autolinks)]
 
     # --- STALE: wikilinked but the two notes share no concepts --------------
     stale: list[StaleLink] = []

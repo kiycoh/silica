@@ -417,7 +417,8 @@ def silica_cooccurrence_refresh(folder: str = "", force: bool = False) -> dict[s
     fresh automatically afterwards.
     """
     from silica.config import CONFIG
-    from silica.kernel.cooccurrence import build_index
+    from silica.kernel import correlate
+    from silica.kernel.cooccurrence import build_index, get_cooccur_store
 
     try:
         all_refs = DRIVER.list_files(folder or None)
@@ -441,20 +442,24 @@ def silica_cooccurrence_refresh(folder: str = "", force: bool = False) -> dict[s
     if not notes:
         return {"error": "No notes found to index", "read_errors": errors}
 
+    store = get_cooccur_store(lang=CONFIG.cooccurrence_lang)
+    seeded_before = set(store.paths())
     try:
         # refreeze rides on force: `/cooccur --force` is the deliberate rebuild
         # (and the doctor remedy for a wrong-frozen store language) — it
         # re-processes every note, so re-detecting store.lang here is safe.
         # A plain incremental /cooccur skips already-indexed notes and must NOT
         # refreeze: flipping the language without re-stemming existing
-        # contributions would mix stemmers across node keys.
-        store = build_index(
-            notes, lang=CONFIG.cooccurrence_lang, force=force, refreeze=force,
+        # contributions would mix stemmers across node keys. save=False: one
+        # flush at the end after GC + edge refresh.
+        build_index(
+            notes, store=store, lang=CONFIG.cooccurrence_lang,
+            force=force, refreeze=force, save=False,
         )
     except Exception as e:
         return {"error": f"Index build failed: {e}", "read_errors": errors}
 
-    # Garbage collection: remove stale paths from the store
+    # Garbage collection: remove stale paths from the store (also prunes their edges)
     current_paths = {idx_path for idx_path, _, _ in notes}
     stale_paths = [
         p for p in store.paths()
@@ -462,8 +467,17 @@ def silica_cooccurrence_refresh(folder: str = "", force: bool = False) -> dict[s
     ]
     for p in stale_paths:
         store.delete_note(p)
-    if stale_paths:
-        store.save()
+
+    # CORRELATE note_edges (ADR-0013): --force rebuilds the whole graph; a plain
+    # incremental /cooccur only recomputes rows for notes seeded this run — the
+    # rest have unchanged contributions, so their edges are unchanged too.
+    if force:
+        correlate.recompute_all_edges(store)
+    else:
+        new_paths = [idx for idx, _, _ in notes if idx not in seeded_before]
+        if new_paths:
+            correlate.refresh_edges(store, new_paths)
+    store.save()
 
     return {
         "indexed": len(store),

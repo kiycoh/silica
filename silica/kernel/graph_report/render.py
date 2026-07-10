@@ -238,11 +238,11 @@ def to_markdown(r: VaultReport, title: str = "Silica Vault Report") -> str:
     # Co-occurrence delta (proposed, embedder-free)
     if r.autolink_candidates:
         lines.append("\n## Autolink Candidates _(co-occurrence − wikilink — not authoritative)_")
-        lines.append("| Source | Target | Weight | Hubs | Shared Concepts |")
-        lines.append("|---|---|---|---|---|")
+        lines.append("| Source | Target | Via | Weight | Hubs | Shared Concepts |")
+        lines.append("|---|---|---|---|---|---|")
         for a in r.autolink_candidates:
             shared = ", ".join(a.shared) if a.shared else "_(associative)_"
-            lines.append(f"| [[{_short(a.source)}]] | [[{_short(a.target)}]] | {a.weight} | {a.convergence} | {shared} |")
+            lines.append(f"| [[{_short(a.source)}]] | [[{_short(a.target)}]] | {a.provenance} | {a.weight} | {a.convergence} | {shared} |")
 
     if r.stale_links:
         add("\n## Stale Links _(wikilink − co-occurrence — review)_")

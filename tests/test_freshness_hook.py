@@ -85,6 +85,22 @@ def test_replacement_not_inflation_on_repeated_refresh(tmp_path):
     assert w1 == w2  # force=True replaces the note's contribution, never accumulates
 
 
+def test_hook_creates_note_edges_between_related_notes(tmp_path):
+    # CORRELATE (ADR-0013): the freshness hook also refreshes note_edges, so two
+    # notes sharing enough top stems come out linked after a write commit.
+    store = CooccurStore(path=tmp_path / "c.json", lang="english")
+    ops = [_write_op("Concepts/A.md"), _write_op("Concepts/B.md")]
+    bodies = {
+        "Concepts/A.md": "quick sort compares array elements",
+        "Concepts/B.md": "quick sort swaps array elements",
+    }
+    _refresh_cooccurrence_for_ops(
+        ops, {"Concepts/A.md", "Concepts/B.md"},
+        read_body=bodies.get, lang="english", store=store,
+    )
+    assert "Concepts/B" in store.note_edges_for("Concepts/A")
+
+
 def test_best_effort_never_raises_on_read_failure(tmp_path):
     store = CooccurStore(path=tmp_path / "c.json", lang="english")
 

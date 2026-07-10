@@ -81,8 +81,9 @@ def _refresh_cooccurrence_for_ops(
     save — replacement semantics only: it deliberately does NOT pass
     refreeze=True, so the store's frozen stemming language is never re-detected
     from a write batch (re-detection is reserved for /cooccur --force).
-    Best-effort: a per-note read failure is skipped and the whole call
-    never raises. Returns the number of notes refreshed.
+    It also recomputes the note_edges rows of the touched notes (CORRELATE /
+    ADR-0013) before that single save. Best-effort: a per-note read failure is
+    skipped and the whole call never raises. Returns the number of notes refreshed.
     """
     from silica.kernel.cooccurrence import build_index as _cooccur_build
 
@@ -111,8 +112,16 @@ def _refresh_cooccurrence_for_ops(
     if not notes:
         return 0
     try:
-        _cooccur_build(notes, store=store, lang=lang, force=True,
-                       concepts_by_path=concepts_by_path or None, save=save)
+        # Build contributions without saving, refresh the touched note_edges rows
+        # (CORRELATE / ADR-0013), then a SINGLE save — so edges and contributions
+        # persist together. save=False defers that save to the end-of-run flush,
+        # which rewrites the same singleton (note_edges included).
+        from silica.kernel import correlate
+        built = _cooccur_build(notes, store=store, lang=lang, force=True,
+                               concepts_by_path=concepts_by_path or None, save=False)
+        correlate.refresh_edges(built, [idx_path for idx_path, _n, _b in notes])
+        if save:
+            built.save()
     except Exception as exc:
         logger.debug("WRITE: cooccur refresh skipped (%s)", exc)
         return 0

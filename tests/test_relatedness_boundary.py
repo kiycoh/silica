@@ -36,6 +36,7 @@ LEGS = {"kernel/embed.py", "kernel/cooccurrence.py"}
 # module (relative to silica/) → why direct leg access is legitimate
 ALLOWED = {
     "kernel/relatedness.py":        "the facade itself",
+    "kernel/correlate.py":          "owns note_edges computation; needs cooccur_key for keyspace normalization, not relatedness ranking",
     "kernel/run_substrate.py":      "constructs stores to inject into the facade",
     "kernel/graph_report/embed_signals.py": "pairwise cosine (missing links, dup pairs)",
     "kernel/graph_report/cooccur_delta.py": "co-occurrence delta + cosine-band filter + store injection",

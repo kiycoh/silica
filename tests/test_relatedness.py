@@ -49,6 +49,16 @@ def test_rrf_fuse_empty_is_empty():
     assert _rrf_fuse([[]]) == {}
 
 
+# --- CORRELATE (ADR-0013): third fusion leg from note_edges -----------------
+
+def test_fuse_includes_edges_leg():
+    from silica.kernel.relatedness import _fuse
+    out = _fuse(None, None, edges_rank=[("B", 0.31)], k=5)
+    assert out and out[0].path == "B"
+    assert out[0].edge_score == 0.31
+    assert "edge:0.31" in out[0].evidence
+
+
 # ---------------------------------------------------------------------------
 # Embed leg + abstention
 # ---------------------------------------------------------------------------
@@ -230,6 +240,25 @@ def test_related_notes_evidence_score_formats(tmp_path):
     assert any(e.startswith("cooccur:w") for e in ev_all)
 
 
+def test_related_notes_direct_edge_leg_carries_edge_score(tmp_path):
+    from silica.kernel.correlate import recompute_all_edges
+    st = CooccurStore(path=tmp_path / "c.json", lang="english")
+    st.upsert_note("A", build_contribution("A", "alpha beta gamma"))
+    st.upsert_note("B", build_contribution("B", "alpha beta delta"))  # jaccard 0.5 -> edge
+    recompute_all_edges(st)
+    out = related_notes("A", embed_store=None, cooccur_store=st, k=5)
+    b = next(r for r in out if r.path == "B")
+    assert b.edge_score is not None
+    assert any(e.startswith("edge:") for e in b.evidence)
+
+
+def test_related_notes_edge_leg_abstains_without_edges(tmp_path):
+    st = _cooc_store(tmp_path)  # contributions only, no note_edges built
+    out = related_notes("A", embed_store=None, cooccur_store=st, k=5)
+    assert out  # cooccur leg still carries the fusion
+    assert all(r.edge_score is None for r in out)
+
+
 def test_related_note_exposes_structured_per_leg_scores(tmp_path):
     es = _embed_store(tmp_path)
     st = _cooc_store(tmp_path)
@@ -292,6 +321,17 @@ def test_for_query_respects_exclude(tmp_path):
     st = _cooc_store(tmp_path)
     out = related_notes_for_query(query_text="alpha beta gamma", cooccur_store=st, k=5, exclude={"B"})
     assert "B" not in [r.path for r in out]
+
+
+def test_for_query_never_has_edge_leg(tmp_path):
+    # Structural abstention (ADR-0013 Q5): fresh query text has no note_edges
+    # row, so the third leg NEVER fires here — even when the store has edges.
+    from silica.kernel.correlate import recompute_all_edges
+    st = _cooc_store(tmp_path)
+    recompute_all_edges(st)
+    out = related_notes_for_query(query_text="alpha beta gamma", cooccur_store=st, k=5)
+    assert out
+    assert all(r.edge_score is None for r in out)
 
 
 def test_for_query_both_absent_returns_empty(tmp_path):

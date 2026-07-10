@@ -1,9 +1,9 @@
 {
-  "generated_at": "2026-07-09",
+  "generated_at": "2026-07-10",
   "tier": "cheap",
   "vault": {
-    "digest": "sha256:ac65f35fd71562d1dfa3712ef182723251849eecd1b9cb6648aae82a3b1b8aec",
-    "notes": 680,
+    "digest": "sha256:3006eac21606c7324b2e4f3cfd4db9c1b989d7127dba654d6d3bd73f390b42d5",
+    "notes": 721,
     "path": "/home/kiycoh/Documents/Obsidian/test"
   },
   "config": {
@@ -16,22 +16,33 @@
     "cooccur_lang": "italian",
     "taxonomy_derivation": "ctfidf-top15",
     "taxonomy_top_n": 15,
-    "relatedness_legs": null
+    "relatedness_legs": "embed+cooccur+edges"
   },
   "metrics": {
-    "classify.agreement": 0.3338,
-    "classify.uncategorized_rate": 0.61,
-    "classify.notes": 677,
-    "links.recall": 0.7532,
-    "links.extra_per_note": 1.204,
-    "links.links_evaluated": 1483,
-    "links.notes_evaluated": 353,
+    "classify.agreement": 0.3241,
+    "classify.uncategorized_rate": 0.5911,
+    "classify.notes": 719,
+    "links.recall": 0.7034,
+    "links.extra_per_note": 1.2995,
+    "links.links_evaluated": 1298,
+    "links.notes_evaluated": 434,
     "integrity.rate": 1.0,
-    "integrity.notes": 680,
-    "integrity.vault_structural_violations": 574,
-    "integrity.vault_style_flags": 649,
-    "integrity.vault_notes_with_structural": 123,
-    "coherence_index": 0.6957
+    "integrity.notes": 721,
+    "integrity.vault_structural_violations": 2441,
+    "integrity.vault_style_flags": 678,
+    "integrity.vault_notes_with_structural": 147,
+    "correlate.recall_expanded": 0.102,
+    "correlate.recall_union": 0.142,
+    "correlate.lift": 0.04,
+    "correlate.lift_pairs": 20,
+    "correlate.pairs_evaluated": 500,
+    "correlate.edges": 208,
+    "correlate.edges_wikilinked_frac": 0.3221,
+    "fusion.recall_at_10": 0.73,
+    "fusion.mrr": 0.4064,
+    "fusion.pairs_evaluated": 500,
+    "fusion.embed_coverage": 1.0,
+    "coherence_index": 0.6758
   },
-  "frozen_at": "2026-07-09"
+  "frozen_at": "2026-07-10"
 }
