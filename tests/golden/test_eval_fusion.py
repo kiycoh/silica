@@ -94,6 +94,67 @@ def test_embed_only_pair_needs_the_embed_leg(tmp_path):
     assert full["embed_coverage"] == 1.0
 
 
+def _point_driver_at(tmp_path):
+    """note_document reads through the DRIVER — aim it at the synthetic vault."""
+    import silica.driver
+    from silica.config import CONFIG
+
+    CONFIG.vault_path = str(tmp_path)
+    CONFIG.backend = "fs"
+    silica.driver._driver = None
+
+
+class _FakeReranker:
+    """scores() by document content — deterministic, no HTTP. None = abstain."""
+
+    def __init__(self, favour: str | None):
+        self._favour = favour
+
+    def scores(self, query, documents):
+        if self._favour is None:
+            return None
+        return [1.0 if self._favour in d else 0.0 for d in documents]
+
+
+def test_rerank_ab_promotes_counterpart_past_the_fused_cut(tmp_path):
+    # Embed ranks the decoy X above the true counterpart; with k=1 the fused
+    # arm misses. The reranker favours the counterpart's body text → arm B hits.
+    (tmp_path / "A.md").write_text("alpha alpha alpha\n[[B]]")
+    (tmp_path / "B.md").write_text("epsilon epsilon epsilon")
+    (tmp_path / "X.md").write_text("zeta zeta zeta")
+    _point_driver_at(tmp_path)
+    st = _store(tmp_path, {
+        "A": "alpha alpha alpha", "B": "epsilon epsilon epsilon", "X": "zeta zeta zeta",
+    })
+    fake_embed = _FakeEmbedStore({
+        "A": [1.0, 0.0], "B": [0.9, 0.436], "X": [0.995, 0.1],
+    })
+    res = probe_fusion.run_rerank_ab(
+        tmp_path, st, embed_store=fake_embed,
+        reranker=_FakeReranker(favour="epsilon"), k=1, pool=3,
+    )
+    assert res["pairs_evaluated"] == 1
+    assert res["base_recall"] == 0.0      # X outranks B at k=1 in both directions...
+
+    assert res["rerank_recall"] == 1.0
+    assert res["pairs_won"] == 1 and res["pairs_lost"] == 0
+    assert res["empty_docs"] == 0         # every synthetic note is readable
+
+
+def test_rerank_ab_abstaining_reranker_is_a_no_op(tmp_path):
+    (tmp_path / "A.md").write_text("quick sort compares array elements\n[[B]]")
+    (tmp_path / "B.md").write_text("quick sort swaps array elements")
+    _point_driver_at(tmp_path)
+    st = _store(tmp_path, {
+        "A": "quick sort compares array elements",
+        "B": "quick sort swaps array elements",
+    })
+    res = probe_fusion.run_rerank_ab(tmp_path, st, reranker=_FakeReranker(favour=None))
+    assert res["base_recall"] == res["rerank_recall"] == 1.0
+    assert res["base_mrr"] == res["rerank_mrr"]
+    assert res["pairs_won"] == 0 and res["pairs_lost"] == 0
+
+
 def test_empty_embed_store_abstains_cleanly(tmp_path):
     (tmp_path / "A.md").write_text("quick sort compares array elements\n[[B]]")
     (tmp_path / "B.md").write_text("quick sort swaps array elements")

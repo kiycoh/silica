@@ -101,17 +101,33 @@ def config_snapshot(store) -> dict:
     }
 
 
-def collect(vault: Path, *, tier: str = "cheap", verbose: bool = False) -> dict:
-    """Library entry point (the gate imports this). Runs the cheap-tier probes
-    against ``vault`` and returns the full run document."""
+def _open_stores(vault: Path):
+    """Point CONFIG/DRIVER at ``vault`` and open its on-disk indexes.
+
+    Returns (cooccur_store, embed_store|None). The embed leg is offline for
+    indexed notes (stored-vector lookup + cosine, no API); the explicit
+    exists() check bypasses EmbedStore's legacy-path fallback so a vault
+    without an index can never silently measure a foreign one.
+    """
     import silica.driver
     from silica.config import CONFIG
     from silica.kernel.cooccurrence import CooccurStore, _index_path_for
+    from silica.kernel.embed import EmbedStore
+    from silica.kernel.paths import index_dir_for
 
     CONFIG.vault_path = str(vault)
     CONFIG.backend = "fs"
     silica.driver._driver = None
     store = CooccurStore(path=_index_path_for(str(vault)))
+    embed_path = index_dir_for(str(vault)) / "embeddings.json"
+    embed_store = EmbedStore(path=embed_path) if embed_path.exists() else None
+    return store, embed_store
+
+
+def collect(vault: Path, *, tier: str = "cheap", verbose: bool = False) -> dict:
+    """Library entry point (the gate imports this). Runs the cheap-tier probes
+    against ``vault`` and returns the full run document."""
+    store, embed_store = _open_stores(vault)
 
     metrics: dict[str, float] = {}
 
@@ -148,15 +164,7 @@ def collect(vault: Path, *, tier: str = "cheap", verbose: bool = False) -> dict:
     metrics["correlate.edges_wikilinked_frac"] = cr["edges_wikilinked_frac"]
 
     # FUSION: masked-pair recovery through the full relatedness facade — the
-    # only end-to-end gate on RRF + leg wiring. The embed leg is offline for
-    # indexed notes (stored-vector lookup + cosine, no API); the explicit
-    # exists() check bypasses EmbedStore's legacy-path fallback so a vault
-    # without an index can never silently measure a foreign one.
-    from silica.kernel.embed import EmbedStore
-    from silica.kernel.paths import index_dir_for
-
-    embed_path = index_dir_for(str(vault)) / "embeddings.json"
-    embed_store = EmbedStore(path=embed_path) if embed_path.exists() else None
+    # only end-to-end gate on RRF + leg wiring.
     fz = probe_fusion.run(vault, store, embed_store=embed_store, verbose=verbose)
     metrics["fusion.recall_at_10"] = fz["recall_at_10"]
     metrics["fusion.mrr"] = fz["mrr"]
@@ -227,9 +235,39 @@ def main(argv=None) -> int:
     ap.add_argument("--tier", choices=["cheap", "embedder", "all"], default="cheap")
     ap.add_argument("--verbose", action="store_true")
     ap.add_argument("--freeze-baseline", action="store_true")
+    ap.add_argument("--rerank-ab", action="store_true",
+                    help="A/B the configured cross-encoder over the fused ranking "
+                         "(informational — HTTP provider, never gated, no baseline)")
     args = ap.parse_args(argv)
 
     vault = resolve_vault(args.vault)
+
+    if args.rerank_ab:
+        import silica.driver
+        from silica.agent.providers import get_reranker
+        from silica.config import CONFIG
+
+        store, embed_store = _open_stores(vault)
+        reranker = get_reranker(CONFIG)
+        if reranker is None:
+            print("no reranker configured (rerank_base_url/rerank_model) — nothing to A/B")
+            return 2
+        try:
+            res = probe_fusion.run_rerank_ab(
+                vault, store, embed_store=embed_store, reranker=reranker, verbose=args.verbose
+            )
+        finally:
+            silica.driver._driver = None
+        print(f"\nrerank A/B — informational, never gated "
+              f"({res['pairs_evaluated']} pairs, {res['endpoints']} endpoints, "
+              f"empty docs {res['empty_docs']})")
+        print(f"{'arm':<22} {'recall@10':>10} {'mrr':>8}")
+        print(f"{'fused (gated)':<22} {res['base_recall']:>10.3f} {res['base_mrr']:>8.3f}")
+        print(f"{'reranked':<22} {res['rerank_recall']:>10.3f} {res['rerank_mrr']:>8.3f}")
+        print(f"{'delta':<22} {res['rerank_recall'] - res['base_recall']:>+10.3f} "
+              f"{res['rerank_mrr'] - res['base_mrr']:>+8.3f}   "
+              f"pairs won +{res['pairs_won']} / lost -{res['pairs_lost']}")
+        return 0
     try:
         doc = collect(vault, tier=args.tier, verbose=args.verbose)
     finally:
