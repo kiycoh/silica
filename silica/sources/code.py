@@ -14,30 +14,9 @@ from pathlib import Path
 
 from silica.config import CONFIG
 from silica.kernel import codeast, gitstate
+from silica.kernel.codegraph import is_first_party, package_of
 from silica.kernel.sanitize import strip_degenerate_runs
 from silica.sources.base import GroundedStub, RawItem
-
-
-def _package_of(module: str, root: Path) -> str:
-    """Resolve a first-party module to package granularity (silica.kernel.x →
-    silica/kernel). Falls back to the raw module string."""
-    if module.startswith("."):
-        return module  # relative import — can't resolve without the importer's location
-    parts = [p for p in module.replace("/", ".").split(".") if p]
-    pkg: list[str] = []
-    for part in parts:
-        if root.joinpath(*pkg, part).is_dir():
-            pkg.append(part)
-        else:
-            break
-    return "/".join(pkg) if pkg else module
-
-
-def _is_first_party(module: str, root: Path) -> bool:
-    if module.startswith("."):  # python relative / TS "./x" "../x"
-        return True
-    top = module.split(".")[0].split("/")[0]
-    return (root / top).is_dir() or (root / f"{top}.py").is_file()
 
 
 def _render_skeleton(sk: codeast.ModuleSkeleton, root: Path) -> str:
@@ -46,8 +25,8 @@ def _render_skeleton(sk: codeast.ModuleSkeleton, root: Path) -> str:
     for mod in dict.fromkeys(sk.imports):  # de-dupe, keep order
         if not mod:
             continue
-        if _is_first_party(mod, root):
-            pkg = _package_of(mod, root)
+        if is_first_party(mod, root):
+            pkg = package_of(mod, root)
             if pkg not in first_party:
                 first_party.append(pkg)
         else:
