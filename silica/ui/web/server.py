@@ -787,7 +787,17 @@ def stop():
 
 @app.get("/")
 def index():
-    return FileResponse(STATIC_DIR / "index.html")
+    # Cache-bust app.js/app.css by content hash: StaticFiles sets no
+    # Cache-Control, so browsers serve them stale from heuristic freshness
+    # (edited JS never reaches the page). A content-keyed URL can't be stale.
+    # The big vendored bundles keep their long-lived cache — only these churn.
+    import hashlib
+
+    html = (STATIC_DIR / "index.html").read_text(encoding="utf-8")
+    for asset in ("app.js", "app.css"):
+        ver = hashlib.sha256((STATIC_DIR / asset).read_bytes()).hexdigest()[:8]
+        html = html.replace(f"/static/{asset}", f"/static/{asset}?v={ver}")
+    return HTMLResponse(html)
 
 
 app.mount("/static", StaticFiles(directory=str(STATIC_DIR)), name="static")

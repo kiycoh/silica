@@ -54,6 +54,14 @@ def test_event_to_json_maps_the_render_event_seam():
         "type": "tool_start",
         "name": "t",
         "id": "c1",
+        "notes": [],
+    }
+    # note refs are pulled from the tool args (allowlisted keys) → sources chips
+    assert event_to_json(ToolStartEvent("t", {"path": "a/b.md"}, "c2", 0)) == {
+        "type": "tool_start",
+        "name": "t",
+        "id": "c2",
+        "notes": ["a/b.md"],
     }
     assert event_to_json(ToolCompleteEvent("t", {}, "c1", "ok", 0.1, 0)) == {
         "type": "tool_done",
@@ -73,6 +81,18 @@ def test_event_to_json_maps_the_render_event_seam():
     }
     # v1 ignores reasoning/thinking events (no JSON emitted).
     assert event_to_json(ReasoningEvent("thinking", 0)) is None
+
+
+def test_index_cache_busts_churning_assets(client):
+    # app.js/app.css must carry a ?v= content hash so an edited asset can't be
+    # served stale from the browser's heuristic cache; vendored bundles don't.
+    tc, _ = client
+    html = tc.get("/").text
+    import re
+
+    assert re.search(r"/static/app\.js\?v=[0-9a-f]{8}", html), "app.js not cache-busted"
+    assert re.search(r"/static/app\.css\?v=[0-9a-f]{8}", html), "app.css not cache-busted"
+    assert "/static/app.js\"" not in html, "unversioned app.js reference still present"
 
 
 def test_chat_streams_events_and_appends_the_user_message(client, monkeypatch):
