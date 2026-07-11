@@ -155,6 +155,23 @@ Then run the ingestion pipeline from inside the REPL:
 /ingest Inbox/note.md --target=Concepts/AI
 ```
 
+### MCP server (Silica as agent memory)
+
+`silica mcp` serves the vault over stdio to any MCP client — semantic/text search, note reading, and gated single-note writing (12 tools; `--all` exposes the full toolset). For Claude Code the repo is also a plugin: one install wires the MCP server **and** the `silica` skill (the recall-before-answering / capture-after-learning loop):
+
+```bash
+claude plugin marketplace add /path/to/silica-agent   # or the GitHub repo
+claude plugin install silica@silica
+```
+
+To wire only the MCP server, without the skill:
+
+```bash
+claude mcp add silica -- uv run --project /path/to/silica-agent --with mcp silica mcp
+```
+
+The vault resolves like the REPL: `SILICA_VAULT` if set (add `-e SILICA_VAULT=/path/to/vault` to pin one), else from the client's working directory — a project repo gets its `docs/silica`. Requires the `[mcp]` extra (`uv pip install -e '.[mcp]'`).
+
 ### REPL Commands
 
 **Workflow** - agent-directed:
@@ -213,9 +230,9 @@ Configure the agent via environment variables (e.g., in a `.env` file). `silica 
 
 Silica is under active development. This is where it honestly stands:
 
-- **Available now** - Obsidian vault ingestion (notes), structural audit (`/report`), semantic (`/find`) and embedder-free co-occurrence search, graph-safe refactor / dedup / merge, git safety net, layered `/undo` and `/revert`.
+- **Available now** - Obsidian vault ingestion (notes), structural audit (`/report`), semantic (`/find`) and embedder-free co-occurrence search, graph-safe refactor / dedup / merge, git safety net, layered `/undo` and `/revert`, the MCP server (`silica mcp`) with the Claude Code plugin packaging.
 - **In progress** - codebase ingestion (skeleton stubs today), PDF/DOCX/TXT ingestion, the live Obsidian bridge (`silica connect`, feature-complete but pending end-to-end hardening), and the crash/chaos harness backing the [design contracts](#design-contracts).
-- **Planned** - image ingestion and an MCP server surface.
+- **Planned** - image ingestion and MCP/skill packaging for non-Claude coding agents.
 
 Distinguish carefully: what ships today is enforced; what's listed above as in-progress or planned is not yet present.
 

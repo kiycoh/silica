@@ -36,12 +36,18 @@ import silica.sources.web_research  # noqa: F401  (registers the web_search tool
 logger = logging.getLogger(__name__)
 
 
-def _update_context_tokens(messages: list[dict]) -> None:
+def _count_context_tokens(messages: list[dict]) -> int:
+    """Pure counter — lets callers (e.g. the web seed prewarm) count a candidate
+    message list without clobbering the live session's CONFIG.context_tokens."""
     try:
         import litellm
-        CONFIG.context_tokens = litellm.token_counter(model=CONFIG.model, messages=messages)
+        return litellm.token_counter(model=CONFIG.model, messages=messages)
     except Exception:
-        CONFIG.context_tokens = sum(len(m.get("content") or "") for m in messages) // 4
+        return sum(len(m.get("content") or "") for m in messages) // 4
+
+
+def _update_context_tokens(messages: list[dict]) -> None:
+    CONFIG.context_tokens = _count_context_tokens(messages)
 
 
 # ponytail: fixed knobs, promote to Config only if someone actually needs to tune them
@@ -1072,7 +1078,7 @@ def _resolve_context_budget() -> None:
 
 
 def _dispatch_subcommand(args: list[str]) -> int | None:
-    """Handle `silica doctor` / `silica init` / `silica connect` / `silica update`.
+    """Handle `silica doctor` / `silica init` / `silica connect` / `silica mcp` / `silica update`.
 
     Returns an exit code, or None when no subcommand matched (→ REPL).
     Lazy imports keep REPL startup unchanged. Module attributes (not `from`
@@ -1098,6 +1104,16 @@ def _dispatch_subcommand(args: list[str]) -> int | None:
         _setup_logging(debug="--verbose" in sys.argv or "-v" in sys.argv or CONFIG.debug_logging)
         import silica.ui.connect as connect_mod
         return connect_mod.run_connect()
+    if args[:1] == ["mcp"]:
+        # Same bootstrap as connect, minus the REPL context meter (no agent
+        # loop behind MCP tools). stdio transport: stdout is the protocol
+        # channel, so plain stderr logging instead of _setup_logging's console.
+        _activate_repo_mode()
+        from silica.kernel.vault_manifest import apply_manifest_to_config
+        apply_manifest_to_config()
+        logging.basicConfig(stream=sys.stderr, level=logging.WARNING)
+        import silica.ui.mcp as mcp_mod
+        return mcp_mod.run_mcp(all_tools="--all" in args[1:])
     return None
 
 

@@ -1,0 +1,14 @@
+{
+  "name": "silica",
+  "description": "Silica for Claude Code — an Obsidian vault as persistent agent memory, served by a deterministic knowledge-graph engine.",
+  "owner": {
+    "name": "Alessandro Carosia"
+  },
+  "plugins": [
+    {
+      "name": "silica",
+      "source": "./",
+      "description": "Obsidian-vault memory over MCP: recall before answering, capture after learning."
+    }
+  ]
+}
