@@ -75,6 +75,48 @@ COMMANDS: tuple[Command, ...] = (
         ),
         home_pin=True,
     ),
+    # Reader — agent-directed, strictly read-only (output in chat, never writes)
+    Command(
+        name="/summarize",
+        group="workflow",
+        usage="<note|folder...>",
+        summary="read-only digest of one or more notes in chat (key points, tables)",
+        examples=(
+            "/summarize Concepts/AI/RAG.md",
+            "/summarize Concepts/ML",
+        ),
+    ),
+    Command(
+        name="/explain",
+        group="workflow",
+        usage='"<concept>" [--level=intro|expert]',
+        summary="explain a concept grounded in the vault, at the chosen register",
+        examples=(
+            '/explain "retrieval-augmented generation"',
+            '/explain "backpropagation" --level=intro',
+        ),
+    ),
+    Command(
+        name="/compare",
+        group="workflow",
+        usage='"<A>" "<B>" [...]',
+        summary="comparison table of notes/concepts; surfaces contradictions",
+        examples=('/compare "RAG" "fine-tuning"',),
+    ),
+    Command(
+        name="/quiz",
+        group="workflow",
+        usage="<note|folder> [--n=10]",
+        summary="active-recall quiz from notes: questions first, answers keyed below",
+        examples=("/quiz Concepts/ML --n=5",),
+    ),
+    Command(
+        name="/relate",
+        group="workflow",
+        usage="<note> [--n=8]",
+        summary="typed relationship map: how/why one note relates to its vault neighbors",
+        examples=("/relate Concepts/AI/RAG.md --n=6",),
+    ),
     # Direct — immediate, no LLM round-trip
     Command(
         name="/status",
@@ -174,6 +216,19 @@ COMMANDS: tuple[Command, ...] = (
         group="direct",
         usage="",
         summary="list plans/ notes grouped by status: (todo|in-progress|blocked|done)",
+    ),
+    Command(
+        name="/path",
+        group="direct",
+        usage="<noteA> <noteB>",
+        summary="shortest reading path between two notes (wikilinks + co-occurrence)",
+        examples=('/path "RAG" "Transformers"',),
+    ),
+    Command(
+        name="/contested",
+        group="direct",
+        usage="",
+        summary="list notes flagged contested: true with their unresolved contradictions",
     ),
     # System
     Command(

@@ -1223,9 +1223,19 @@ body.dragging #drop-hint {
 
 #note-title {
   flex: 1;
+  min-width: 0; /* yield space to the action buttons; ellipsis instead of pushing them off */
   color: var(--frost);
   font-size: 13px;
-  word-break: break-word;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+/* header actions (summarize/explain/quiz/map/close) pack tight so they + the
+   title fit one line even on a narrow drawer. */
+#note-panel > header .ghost {
+  padding: 0.4rem 0.45rem;
+  font-size: 10px;
 }
 
 #note-body {

@@ -795,6 +795,11 @@ def _expand_workflow_shortcut(user_input: str) -> str | None:
         /report [folder] [--top-k=N] [--embeddings]
         /ingest <file...> [--target=DIR] [--hub=H]
         /convert <file...> [--target=DIR]
+        /summarize <note|folder...>
+        /explain "<concept>" [--level=intro|expert]
+        /compare "<A>" "<B>" [...]
+        /quiz <note|folder> [--n=10]
+        /relate <note> [--n=8]
 
     Examples:
         /report
@@ -1092,6 +1097,110 @@ def _expand_workflow_shortcut(user_input: str) -> str | None:
                 "show me the taxonomy, and run `silica_run_organizer` with dry_run=true to preview."
             )
         return msg
+
+    # --- reader commands: agent-directed, strictly read-only ---------------
+
+    if cmd == "/summarize":
+        targets = [a for a in parts[1:] if not a.startswith("-")]
+        if not targets:
+            return "Error: /summarize requires a note or folder. Usage: /summarize <note|folder...>"
+        listing = ", ".join(f"`{t}`" for t in targets)
+        return (
+            f"Summarize {listing} from the vault.\n"
+            f"Resolve each target (note path, note title, or folder — list a folder's notes and "
+            f"read them). Then write a digest in chat: lead with the core ideas, use tables for "
+            f"anything enumerable (comparisons, parameters, timelines), keep it scannable.\n"
+            f"READ-ONLY: do not create, edit, patch, or move any note."
+        )
+
+    if cmd == "/explain":
+        level = ""
+        words: list[str] = []
+        for arg in parts[1:]:
+            if arg.startswith("--level="):
+                level = arg[len("--level="):]
+            elif not arg.startswith("-"):
+                words.append(arg)
+        concept = " ".join(words).strip()
+        if not concept:
+            return 'Error: /explain requires a concept. Usage: /explain "<concept>" [--level=intro|expert]'
+        register = {
+            "intro": "for a newcomer: plain language, concrete analogies, no unexplained jargon",
+            "expert": "for an expert: precise and technical, no hand-holding",
+        }.get(level, "for a practitioner: clear, correct, minimal jargon")
+        return (
+            f"Explain {json.dumps(concept)} grounded in this vault, {register}.\n"
+            f"Search the vault (semantic search + related notes), read the top matches, and explain "
+            f"the concept in chat, citing every note you drew on as a [[wikilink]]. If the vault has "
+            f"nothing relevant, say so plainly — do not silently answer from general knowledge alone.\n"
+            f"READ-ONLY: do not create, edit, patch, or move any note."
+        )
+
+    if cmd == "/compare":
+        subjects = [a for a in parts[1:] if not a.startswith("-")]
+        if len(subjects) < 2:
+            return 'Error: /compare requires at least two subjects. Usage: /compare "<A>" "<B>"'
+        listing = ", ".join(f"`{s}`" for s in subjects)
+        return (
+            f"Compare {listing} using the vault.\n"
+            f"Each subject is a note (path or title) or a concept — locate and read the matching "
+            f"note(s) for each. Output in chat: a comparison table (one column per subject, "
+            f"dimensions as rows), then a short similarities/differences rundown. If any involved "
+            f"note carries `contested: true`, or the notes contradict each other, call that out "
+            f"explicitly.\n"
+            f"READ-ONLY: do not create, edit, patch, or move any note."
+        )
+
+    if cmd == "/quiz":
+        n = 10
+        targets = []
+        for arg in parts[1:]:
+            if arg.startswith("--n="):
+                try:
+                    n = int(arg[len("--n="):])
+                except ValueError:
+                    pass
+            elif not arg.startswith("-"):
+                targets.append(arg)
+        if not targets:
+            return "Error: /quiz requires a note or folder. Usage: /quiz <note|folder> [--n=10]"
+        listing = ", ".join(f"`{t}`" for t in targets)
+        return (
+            f"Create a {n}-question active-recall quiz from {listing}.\n"
+            f"Read the note(s) (list a folder's notes first). Mix recall, comprehension, and "
+            f"application questions; ask only what the notes actually support. Output in chat: "
+            f"numbered questions first, then an 'Answers' section keyed by number, each answer "
+            f"citing its source note as a [[wikilink]].\n"
+            f"READ-ONLY: do not create, edit, patch, or move any note."
+        )
+
+    if cmd == "/relate":
+        n = 8
+        targets = []
+        for arg in parts[1:]:
+            if arg.startswith("--n="):
+                try:
+                    n = int(arg[len("--n="):])
+                except ValueError:
+                    pass
+            elif not arg.startswith("-"):
+                targets.append(arg)
+        if not targets:
+            return "Error: /relate requires a note. Usage: /relate <note> [--n=8]"
+        target = targets[0]
+        return (
+            f"Map how and why `{target}` relates to its most relevant neighbors in the vault.\n"
+            f"Resolve the note, then pull its top {n} related notes via silica's relatedness "
+            f"(the fusion of embeddings + co-occurrence). Read the target and each neighbor enough "
+            f"to judge the link, and note which neighbors the target already [[wikilinks]].\n"
+            f"Output in chat a Markdown table: | Neighbor | Relation | Why | Link |. "
+            f"For Relation pick the type that fits — common ones: prerequisite, elaborates, "
+            f"contradicts, sibling, example-of, depends-on, alternative-to. Why is one line grounded "
+            f"in the notes. Link is [[the neighbor]] if already linked, else 'latent'. Cite every "
+            f"neighbor as a [[wikilink]]. If a neighbor is `contested: true` or contradicts the "
+            f"target, flag it.\n"
+            f"READ-ONLY: do not create, edit, patch, or move any note."
+        )
 
     return None
 

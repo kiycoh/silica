@@ -561,13 +561,32 @@ $("#note-mini-map").addEventListener("toggle", function () {
 });
 
 // "map" button in the drawer header — jump to the full map tab, rooted here.
+// Capture the path FIRST: the programmatic tab .click() bubbles to the
+// document outside-click handler, which closes the drawer and nulls
+// lastNotePath synchronously before the src line runs (else note=null).
 $("#note-map").addEventListener("click", () => {
-  if (!lastNotePath) return;
+  const note = lastNotePath;
+  if (!note) return;
   document.querySelector('.tab[data-tab="map"]').click();
-  $("#map-note").value = lastNotePath;
+  $("#map-note").value = note;
   $("#map-loading").hidden = false;
-  $("#map-frame").src = "/map?note=" + encodeURIComponent(lastNotePath) + "&t=" + Date.now();
+  $("#map-frame").src = "/map?note=" + encodeURIComponent(note) + "&t=" + Date.now();
 });
+
+// summarize / explain / quiz — dispatch the reader slash-command for the open
+// note as a chat turn, then close the drawer so the streamed answer is visible.
+// Capture path/title BEFORE closeNote() nulls lastNotePath.
+const shellQuote = (s) => '"' + String(s).replace(/"/g, '\\"') + '"';
+function drawerReader(makeCmd) {
+  if (!lastNotePath) return;
+  const cmd = makeCmd(lastNotePath, $("#note-title").textContent.trim());
+  closeNote();
+  send(cmd);
+}
+$("#note-summarize").addEventListener("click", () => drawerReader((p) => "/summarize " + shellQuote(p)));
+$("#note-explain").addEventListener("click", () => drawerReader((p, t) => "/explain " + shellQuote(t || p)));
+$("#note-quiz").addEventListener("click", () => drawerReader((p) => "/quiz " + shellQuote(p)));
+$("#note-relate").addEventListener("click", () => drawerReader((p) => "/relate " + shellQuote(p)));
 
 // --- note panel resize (drag left edge, clamped) ----------------------------
 const NOTE_MIN_W = 280, NOTE_MAX_W = 800;

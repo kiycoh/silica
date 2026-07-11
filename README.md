@@ -181,6 +181,10 @@ The vault resolves like the REPL: `SILICA_VAULT` if set (add `-e SILICA_VAULT=/p
 | `/report` | `[folder] [--top-k=N] [--embeddings]` | Structural audit of the vault (hubs, bridges, orphans). Pauses for confirmation. |
 | `/ingest` | `<file...> [--target=DIR] [--hub=H]` | Bring files in: notes via Injector FSM, code as skeleton stubs |
 | `/organize` | `"<intent>" [--scope=FOLDER] [--file=taxonomy.yaml] [--merge] [--move-uncategorized] [--apply]` | Classify and reorganize vault notes according to a taxonomy |
+| `/summarize` | `<note\|folder...>` | Read-only digest of one or more notes in chat (key points, tables) |
+| `/explain` | `"<concept>" [--level=intro\|expert]` | Explain a concept grounded in the vault, at the chosen register (read-only) |
+| `/compare` | `"<A>" "<B>" [...]` | Comparison table of notes/concepts; surfaces contradictions (read-only) |
+| `/quiz` | `<note\|folder> [--n=10]` | Active-recall quiz from notes: questions first, answers keyed below (read-only) |
 
 **Direct** - immediate, no LLM round-trip:
 
