@@ -439,7 +439,7 @@ class TestSampleVaultTextSpread:
 
 
 class TestAggregation:
-    def test_run_checks_returns_all_seven(self, monkeypatch, tmp_path):
+    def test_run_checks_returns_all_eight(self, monkeypatch, tmp_path):
         import silica.onboarding.checks as checks
 
         def boom(url, timeout):
@@ -450,8 +450,17 @@ class TestAggregation:
         results = checks.run_checks(_cfg(vault_path=str(tmp_path)))
         assert [r.name for r in results] == [
             "chat model", "chat endpoint", "vault", "vault manifest",
-            "language", "obsidian backend", "embeddings",
+            "language", "obsidian backend", "embeddings", "quarantine",
         ]
+
+    def test_check_quarantine_surfaces_corrupt_files(self, tmp_path):
+        from silica.onboarding.checks import check_quarantine
+
+        assert check_quarantine(_cfg(vault_path=str(tmp_path))).status == "ok"
+        (tmp_path / "provenance.json.corrupt.20260710T120000").write_text("junk")
+        result = check_quarantine(_cfg(vault_path=str(tmp_path)))
+        assert result.status == "warn"
+        assert "provenance.json.corrupt.20260710T120000" in result.detail
 
     def test_has_failures(self):
         from silica.onboarding.checks import CheckResult, has_failures

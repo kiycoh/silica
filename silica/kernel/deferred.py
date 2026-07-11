@@ -27,6 +27,8 @@ from typing import Any
 
 import orjson
 
+from silica.kernel.paths import atomic_write_bytes
+
 
 # Pre-C2 location: one global queue for every vault. Read once as a migration
 # source by get_deferred_store(), never written to again.
@@ -107,8 +109,9 @@ class DeferredStore:
             "rejected_ops": _dedup_ops(rejected_ops),
             "rejection_reasons": rejection_reasons or {},
         }
-        self._bundle_path(content_hash).write_bytes(
-            orjson.dumps(bundle, option=orjson.OPT_INDENT_2)
+        atomic_write_bytes(
+            self._bundle_path(content_hash),
+            orjson.dumps(bundle, option=orjson.OPT_INDENT_2),
         )
 
     def get(self, content_hash: str) -> dict[str, Any] | None:
@@ -159,8 +162,9 @@ class DeferredStore:
             k: v for k, v in bundle.get("rejection_reasons", {}).items()
             if k != heading and k not in removed_paths
         }
-        self._bundle_path(content_hash).write_bytes(
-            orjson.dumps(bundle, option=orjson.OPT_INDENT_2)
+        atomic_write_bytes(
+            self._bundle_path(content_hash),
+            orjson.dumps(bundle, option=orjson.OPT_INDENT_2),
         )
         return True
 
@@ -209,8 +213,9 @@ def _adopt_legacy(store: DeferredStore) -> None:
             bundle = orjson.loads(p.read_bytes())
             reasons = list((bundle.get("rejection_reasons") or {}).values())
             if not (reasons and all(r == _FIXTURE_REASON for r in reasons)):
-                store._bundle_path(bundle.get("content_hash", p.stem)).write_bytes(
-                    orjson.dumps(bundle, option=orjson.OPT_INDENT_2)
+                atomic_write_bytes(
+                    store._bundle_path(bundle.get("content_hash", p.stem)),
+                    orjson.dumps(bundle, option=orjson.OPT_INDENT_2),
                 )
             p.unlink()
         except Exception:

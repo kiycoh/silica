@@ -23,6 +23,8 @@ from typing import Any
 import numpy as np
 import orjson
 
+from silica.kernel.paths import atomic_write_bytes
+
 _LEGACY_INDEX_PATH = Path.home() / ".silica" / "index" / "embeddings.json"
 
 
@@ -246,8 +248,7 @@ class EmbedStore:
                 self._notes = {}
 
     def save(self) -> Path:
-        self._path.parent.mkdir(parents=True, exist_ok=True)
-        self._path.write_bytes(_serialize_notes(self._notes))
+        atomic_write_bytes(self._path, _serialize_notes(self._notes))
         return self._path
 
     # ------------------------------------------------------------------

@@ -14,10 +14,60 @@ This module is the single source of truth for that normalization.
 """
 from __future__ import annotations
 
+import contextlib
 import hashlib
+import os
+import tempfile
+from datetime import datetime
 from pathlib import Path
 
 from silica.config import CONFIG
+
+
+def atomic_write_bytes(path: Path, data: bytes) -> None:
+    """Torn-write-proof write: tmp file in the same dir, fsync, os.replace.
+
+    For derived indexes and bundles rewritten in place — a crash or full
+    disk mid-write must leave the previous file intact, not a truncated one.
+    """
+    path.parent.mkdir(parents=True, exist_ok=True)
+    fd, tmp = tempfile.mkstemp(dir=path.parent, prefix=path.name + ".")
+    try:
+        with os.fdopen(fd, "wb") as f:
+            f.write(data)
+            f.flush()
+            os.fsync(f.fileno())
+        os.replace(tmp, path)
+    except BaseException:
+        with contextlib.suppress(OSError):
+            os.unlink(tmp)
+        raise
+    # ponytail: no directory fsync — post-power-loss rename durability is
+    # filesystem-dependent, and every caller's file is rebuildable or
+    # re-produceable; upgrade if a real loss is ever traced here.
+
+
+def quarantine(path: Path) -> Path | None:
+    """Rename a corrupt state file aside — never clobbered, never deleted.
+
+    Derived stores rebuild from empty afterwards; authoritative stores keep
+    the bytes here for manual inspection. `silica doctor` surfaces any
+    `*.corrupt.*` file it finds. Returns the quarantine path, or None if the
+    rename itself failed (callers treat that as "proceed anyway": read paths
+    must not raise).
+    """
+    stamp = datetime.now().strftime("%Y%m%dT%H%M%S")
+    dest = path.with_name(f"{path.name}.corrupt.{stamp}")
+    n = 0
+    while dest.exists():  # same-second collision: bump, never overwrite
+        n += 1
+        dest = path.with_name(f"{path.name}.corrupt.{stamp}.{n}")
+    try:
+        path.rename(dest)
+        return dest
+    except OSError:
+        return None
+
 
 # ---------------------------------------------------------------------------
 # Silica runtime directory helpers

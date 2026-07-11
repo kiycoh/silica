@@ -22,6 +22,7 @@ from typing import Any
 import orjson
 
 from silica.kernel import language
+from silica.kernel.paths import atomic_write_bytes, quarantine
 
 # --- algorithm constants -------------------------------------
 NARRATIVE_WEIGHT = 3
@@ -248,14 +249,16 @@ class CooccurStore:
                 self._note_edges = data.get("note_edges", {})
                 self._prune_orphan_edges()
             except Exception:
+                # Derived index: quarantine for doctor visibility, then
+                # rebuild from empty (/cooccur restores it).
+                quarantine(src)
                 self._notes = {}
                 self._note_edges = {}
 
     def save(self) -> Path:
         # No OPT_INDENT_2: machine-only derived index, pretty-printing is pure
         # I/O tax (Fix 2A). orjson defaults to compact output.
-        self._path.parent.mkdir(parents=True, exist_ok=True)
-        self._path.write_bytes(orjson.dumps(
+        atomic_write_bytes(self._path, orjson.dumps(
             {"version": 1, "lang": self.lang, "notes": self._notes,
              "note_edges": self._note_edges},
         ))

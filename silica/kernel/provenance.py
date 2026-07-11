@@ -64,8 +64,12 @@ def read_records(
 ) -> list[dict[str, Any]]:
     """All provenance records, optionally filtered to one source basename.
 
-    Missing store, unreadable file, or corrupt JSON all degrade to []
-    (additive: absence of the store must look like today's behaviour).
+    Missing store or unreadable file degrade to [] (additive: absence of
+    the store must look like today's behaviour). Corrupt content is
+    quarantined first (*.corrupt.<stamp>, surfaced by doctor): this ledger
+    is authoritative — run_id/sha history is not reconstructible from the
+    vault — and a later append_record would otherwise clobber the corrupt
+    bytes with a fresh array.
     """
     path = _store_path(vault_path, filename)
     if not path or not path.exists():
@@ -73,9 +77,12 @@ def read_records(
     try:
         records = json.loads(path.read_text(encoding="utf-8"))
         if not isinstance(records, list):
-            return []
+            raise ValueError(f"expected JSON array, got {type(records).__name__}")
     except Exception as exc:
-        logger.debug("provenance: read failed (non-fatal): %s", exc)
+        from silica.kernel.paths import quarantine
+
+        dest = quarantine(path)
+        logger.warning("provenance: corrupt store quarantined to %s: %s", dest or path, exc)
         return []
     if source is not None:
         records = [r for r in records if isinstance(r, dict) and r.get("source") == source]

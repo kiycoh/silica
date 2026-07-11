@@ -330,6 +330,22 @@ def check_manifest(config: SilicaConfig) -> CheckResult:
     return CheckResult("vault manifest", "ok", detail)
 
 
+def check_quarantine(config: SilicaConfig) -> CheckResult:
+    """Corrupt state files quarantined as *.corrupt.* — preserved, not lost."""
+    from silica.kernel.paths import index_dir_for
+
+    roots = [Path(p) for p in (config.vault_path,) if p]
+    roots.append(index_dir_for(config.vault_path or ""))
+    found = [p.name for r in roots if r.exists() for p in sorted(r.glob("*.corrupt.*"))]
+    if found:
+        return CheckResult(
+            "quarantine", "warn",
+            f"{len(found)} corrupt state file(s) preserved: {', '.join(found)}",
+            "inspect or delete; derived indexes rebuild via /cooccur",
+        )
+    return CheckResult("quarantine", "ok", "no quarantined state")
+
+
 def run_checks(config: SilicaConfig) -> list[CheckResult]:
     return [
         check_chat_model(config),
@@ -339,6 +355,7 @@ def run_checks(config: SilicaConfig) -> list[CheckResult]:
         check_language(config),
         check_obsidian_backend(config),
         check_embeddings(config),
+        check_quarantine(config),
     ]
 
 
