@@ -31,7 +31,7 @@ def test_defaults_include_code_inside_git(tmp_path):
     subprocess.run(["git", "init", "-q"], cwd=tmp_path, check=True)
     vault = tmp_path / ".silica"
     vault.mkdir()
-    assert load_manifest(vault).sources == ("prose", "code")
+    assert load_manifest(vault).sources == ("prose", "code", "notebook")
 
 
 def test_manifest_file_overrides_defaults(tmp_path):

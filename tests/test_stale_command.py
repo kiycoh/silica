@@ -24,14 +24,14 @@ def _commit(path: Path, rel: str, text: str, msg: str) -> str:
 
 def test_stale_command_handled_and_reports(tmp_path, monkeypatch, capsys):
     _init_repo(tmp_path)
-    ref0 = _commit(tmp_path, "src/m.py", "v1\n", "c1")
+    ref0 = _commit(tmp_path, "src/m.py", "def f():\n    return 1\n", "c1")
     vault = tmp_path / "docs"
     vault.mkdir()
     (vault / "m.md").write_text(
         f"---\ndocuments:\n  - src/m.py\ncode_ref: {ref0}\n---\n\nbody\n",
         encoding="utf-8",
     )
-    _commit(tmp_path, "src/m.py", "v2\n", "c2")
+    _commit(tmp_path, "src/m.py", "def f(x):\n    return 1\n", "c2")  # structural: shown by default
 
     monkeypatch.setattr(CONFIG, "vault_path", str(vault))
     handled = _handle_direct_shortcut("/stale", [])
