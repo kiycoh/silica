@@ -50,17 +50,50 @@ _WEB_EXPANSIONS = {
 }
 
 
-def _reset_session() -> None:
-    from silica.cli import _fresh_messages, _update_context_tokens
+# Fresh-session seed, precomputed so /reset ("new chat") is instant instead of
+# rebuilding the vault map + token count on the click path (~seconds on a real
+# vault). Built at startup, refreshed in the background after each turn (the
+# turn may have written notes). (messages, their token count).
+_seed: tuple[list[dict], int] | None = None
 
+
+def _build_seed() -> None:
+    """Compute the fresh-session seed. Never touches the live session state:
+    uses the pure token counter so a background rebuild can't clobber the
+    context meter of the conversation in progress."""
+    global _seed
+    from silica.cli import _count_context_tokens, _inject_vault_map
+    from silica.prompts import SYSTEM_PROMPT
+
+    msgs: list[dict] = [{"role": "system", "content": SYSTEM_PROMPT}]
+    _inject_vault_map(msgs)
+    _seed = (msgs, _count_context_tokens(msgs))
+
+
+def _prewarm_seed() -> None:
+    """Refresh the seed off the request path; failures only cost freshness."""
+
+    def work():
+        try:
+            _build_seed()
+        except Exception:
+            logger.exception("seed prewarm failed")
+
+    threading.Thread(target=work, daemon=True).start()
+
+
+def _reset_session() -> None:
     global current_cancel, current_task, _busy, current_session_id
-    messages[:] = _fresh_messages()
+    if _seed is None:
+        _build_seed()
+    seed_msgs, seed_tokens = _seed
+    messages[:] = [dict(m) for m in seed_msgs]  # per-message copy; contents are never mutated
+    CONFIG.context_tokens = seed_tokens
     _collapsed.clear()
     current_cancel = None
     current_task = None
     _busy = False
     current_session_id = None  # next turn opens a new file
-    _update_context_tokens(messages)
 
 
 def _session_title(msgs: list[dict]) -> str:
@@ -134,11 +167,27 @@ def _agent_message_for(text: str) -> str | None:
 
 import html as _html
 import re
+from urllib.parse import quote as _quote
 
 # A whitespace-delimited path-like token: contains "/" or ends in ".md".
 _PATHLIKE = re.compile(r"[^\s\[\]]*(?:/[^\s\[\]]*|\.md)")
-_WIKILINK = re.compile(r"\[\[([^\]\[]+)\]\]")
+_WIKILINK = re.compile(r"(!?)\[\[([^\]\[]+)\]\]")  # optional ! marks an embed
 _TRAIL = ".,;:!?)"  # sentence punctuation to peel off a bare path token
+
+# Vault attachments the drawer may inline; served only through /asset, only as
+# <img> (so an SVG's scripts never execute — img context runs no JS).
+_ASSET_EXTS = {".png", ".jpg", ".jpeg", ".gif", ".webp", ".svg", ".bmp"}
+
+# --- OFM (Obsidian-flavored markdown) sugar ----------------------------------
+# ==highlight== | #tag (letter-first, so #123 and hex colors stay literal)
+_MARK_OR_TAG = re.compile(r"==([^=\n]+)==|(?<![\w#])#([A-Za-z_][\w/-]*)")
+# ponytail: regex-level strip of %%comments%% and trailing ^block-ids; move to
+# the token stream if a code-heavy vault ever gets bitten.
+_COMMENT = re.compile(r"%%.*?%%", re.S)
+_BLOCK_ID = re.compile(r"[ \t]+\^[\w-]+[ \t]*$", re.M)
+_CALLOUT_HEAD = re.compile(r"\[!(\w+)\][+-]?[ \t]*(.*)")  # first line of a callout quote
+_TASK_HEAD = re.compile(r"^\[([ xX])\][ \t]+")  # first inline text of a task list item
+_FRONTMATTER = re.compile(r"\A---\r?\n(.*?)\r?\n(?:---|\.\.\.)[ \t]*(?:\r?\n|\Z)", re.S)
 
 
 def _clean_name(ref: str) -> str:
@@ -153,13 +202,28 @@ def _anchor(path: str, display: str) -> str:
     )
 
 
+def _embed_img(target: str, alias: str) -> str:
+    """<img> for a `![[file.png]]` embed; a numeric alias is Obsidian's width.
+    ponytail: target is taken vault-root-relative — no shortest-name resolution
+    for attachments; index attachment names if that ever bites."""
+    src = "/asset?path=" + _quote(target)
+    width = f' width="{alias}"' if alias.isdigit() else ""
+    stem = target.rsplit("/", 1)[-1].rsplit(".", 1)[0]
+    alt = stem if alias.isdigit() or not alias else alias
+    return f'<img src="{_html.escape(src, quote=True)}" alt="{_html.escape(alt, quote=True)}"{width}>'
+
+
 def _linkify_text(text: str, resolve) -> str:
     """Turn resolvable note refs in one plain-text run into `.note-link` anchors.
 
     Two layers: wikilinks first (explicit `[[...]]` delimiters), then bare
-    path-like tokens in the surviving prose. Unresolved refs are left verbatim.
+    path-like tokens in the surviving prose. Unresolved wikilinks render like
+    resolved ones but tagged `.broken` (no data-path — the click is a no-op);
+    unresolved bare paths stay verbatim. `resolve=None` means plain escape.
     Returns an HTML fragment (safe parts escaped).
     """
+    if resolve is None:
+        return _html.escape(text)
 
     def link_paths(prose: str) -> str:
         out, pos = [], 0
@@ -180,41 +244,192 @@ def _linkify_text(text: str, resolve) -> str:
     out, pos = [], 0
     for m in _WIKILINK.finditer(text):
         out.append(link_paths(text[pos:m.start()]))
-        target, _, alias = m.group(1).partition("|")
-        hit = resolve(target.strip())
-        if hit:
-            out.append(_anchor(hit, (alias.strip() or _clean_name(target.strip()))))
+        bang, inner = m.group(1), m.group(2)
+        target, _, alias = inner.partition("|")
+        target, alias = target.strip(), alias.strip()
+        if bang and "." + target.rsplit(".", 1)[-1].lower() in _ASSET_EXTS:
+            out.append(_embed_img(target, alias))
         else:
-            out.append(_html.escape(m.group(0)))  # broken link stays literal
+            hit = resolve(target)
+            display = alias or _clean_name(target)
+            if hit:
+                out.append(_anchor(hit, display))
+            else:
+                out.append(f'<a class="note-link broken">{_html.escape(display)}</a>')
         pos = m.end()
     out.append(link_paths(text[pos:]))
     return "".join(out)
 
 
-def _linkify(text: str, resolve=None) -> str:
-    """Render markdown to HTML, linkifying resolvable note refs when `resolve`
-    is given. Works on the markdown-it token stream, so `code_inline`/`fence`
-    are separate token types and code is never linkified by construction."""
-    from markdown_it import MarkdownIt
+def _inline_ofm(text: str, resolve) -> str:
+    """OFM inline sugar over one plain-text run: ==highlight== -> <mark>,
+    #tag -> chip. Prose between matches still goes through note-ref linking."""
+    out, pos = [], 0
+    for m in _MARK_OR_TAG.finditer(text):
+        out.append(_linkify_text(text[pos:m.start()], resolve))
+        if m.group(1) is not None:
+            out.append(f"<mark>{_linkify_text(m.group(1), resolve)}</mark>")
+        else:
+            out.append(f'<span class="tag">#{_html.escape(m.group(2))}</span>')
+        pos = m.end()
+    out.append(_linkify_text(text[pos:], resolve))
+    return "".join(out)
+
+
+def _ofm_blocks(tokens) -> None:
+    """OFM block sugar, rewriting the token stream in place: ```mermaid fences
+    become client-rendered <pre class="mermaid">, `> [!kind] title` blockquotes
+    become callouts, and `- [ ]` list items become checkbox tasks."""
     from markdown_it.token import Token
 
-    md = MarkdownIt().enable("table")
-    tokens = md.parse(text or "")
-    if resolve is not None:
-        for tok in tokens:
-            if tok.type != "inline" or not tok.children:
+    i = 0
+    while i < len(tokens):
+        tok = tokens[i]
+        if tok.type == "fence" and tok.info.strip() == "mermaid":
+            raw = Token("html_block", "", 0)
+            raw.content = f'<pre class="mermaid">{_html.escape(tok.content)}</pre>\n'
+            tokens[i] = raw
+        elif tok.type == "math_block":
+            raw = Token("html_block", "", 0)
+            raw.content = f'<div class="math">{_mathml(tok.content, display=True)}</div>\n'
+            tokens[i] = raw
+        elif tok.type == "blockquote_open":
+            j = next((k for k in range(i + 1, len(tokens)) if tokens[k].type == "inline"), None)
+            kids = tokens[j].children if j is not None else None
+            first = kids[0] if kids else None
+            m = _CALLOUT_HEAD.match(first.content) if first is not None and first.type == "text" else None
+            if m:
+                kind = m.group(1).lower()
+                tok.attrJoin("class", f"callout callout-{kind}")
+                rest = kids[1:]
+                if rest and rest[0].type == "softbreak":
+                    rest = rest[1:]
+                tokens[j].children = rest
+                head = Token("html_block", "", 0)
+                title = m.group(2).strip() or kind
+                head.content = f'<p class="callout-title">{_html.escape(title)}</p>\n'
+                tokens.insert(i + 1, head)
+                i += 1  # skip the injected title
+        elif (
+            tok.type == "list_item_open"
+            and i + 2 < len(tokens)
+            and tokens[i + 1].type == "paragraph_open"
+            and tokens[i + 2].type == "inline"
+            and tokens[i + 2].children
+        ):
+            first = tokens[i + 2].children[0]
+            m = _TASK_HEAD.match(first.content) if first.type == "text" else None
+            if m:
+                tok.attrJoin("class", "task")
+                first.content = first.content[m.end():]
+                box = Token("html_inline", "", 0)
+                checked = " checked" if m.group(1) in "xX" else ""
+                box.content = f'<input type="checkbox" disabled{checked}> '
+                tokens[i + 2].children.insert(0, box)
+        i += 1
+
+
+def _mathml(tex: str, display: bool) -> str:
+    """LaTeX -> MathML, rendered natively by the browser (no client JS/fonts).
+    A failed conversion degrades to the escaped source in a code span."""
+    try:
+        from latex2mathml.converter import convert
+
+        return convert(tex, display="block" if display else "inline")
+    except Exception:
+        fence = "$$" if display else "$"
+        return f'<code class="math-err">{_html.escape(fence + tex + fence)}</code>'
+
+
+def _highlight(code: str, lang: str, _attrs: str) -> str:
+    """Pygments fence highlighting; empty string falls back to a plain fence.
+    Token colors live in app.css, mapped onto the site palette."""
+    try:
+        from pygments import highlight
+        from pygments.formatters import HtmlFormatter
+        from pygments.lexers import get_lexer_by_name
+
+        lexer = get_lexer_by_name(lang)
+    except Exception:  # no/unknown language — markdown-it escapes it plain
+        return ""
+    return highlight(code, lexer, HtmlFormatter(nowrap=True))
+
+
+def _linkify(text: str, resolve=None) -> str:
+    """Render markdown (+ OFM sugar) to HTML, linkifying resolvable note refs
+    when `resolve` is given. Works on the markdown-it token stream, so
+    `code_inline`/`fence` are separate token types and code is never linkified
+    or tag-ified by construction."""
+    from markdown_it import MarkdownIt
+    from markdown_it.token import Token
+    from mdit_py_plugins.dollarmath import dollarmath_plugin
+
+    text = _BLOCK_ID.sub("", _COMMENT.sub("", text or ""))
+    md = MarkdownIt(options_update={"highlight": _highlight}).enable("table").enable("strikethrough")
+    # allow_space=False keeps prose prices ("$5 and $10") out of math
+    md.use(dollarmath_plugin, allow_space=False, allow_digits=False)
+    tokens = md.parse(text)
+    _ofm_blocks(tokens)
+    for tok in tokens:
+        if tok.type != "inline" or not tok.children:
+            continue
+        new = []
+        for child in tok.children:
+            if child.type == "image":
+                # vault-relative image: route through /asset (absolute/external
+                # and data: URLs pass untouched)
+                src = child.attrGet("src") or ""
+                if src and not src.startswith(("http://", "https://", "data:", "/")):
+                    child.attrSet("src", "/asset?path=" + _quote(src))
+                new.append(child)
                 continue
-            new = []
-            for child in tok.children:
-                if child.type != "text":
-                    new.append(child)
-                    continue
-                frag = _linkify_text(child.content, resolve)
+            if child.type == "math_inline":
                 raw = Token("html_inline", "", 0)
-                raw.content = frag
+                raw.content = _mathml(child.content, display=False)
                 new.append(raw)
-            tok.children = new
+                continue
+            if child.type != "text":
+                new.append(child)
+                continue
+            frag = _inline_ofm(child.content, resolve)
+            raw = Token("html_inline", "", 0)
+            raw.content = frag
+            new.append(raw)
+        tok.children = new
     return md.renderer.render(tokens, md.options, {})
+
+
+def _split_frontmatter(text: str) -> tuple[dict | None, str]:
+    """Split a leading YAML frontmatter block. Returns (props, body); props is
+    None unless the block parses to a mapping."""
+    import yaml
+
+    m = _FRONTMATTER.match(text or "")
+    if not m:
+        return None, text
+    try:
+        props = yaml.safe_load(m.group(1))
+    except yaml.YAMLError:
+        return None, text
+    if not isinstance(props, dict):
+        return None, text
+    return props, text[m.end():]
+
+
+def _render_frontmatter(props: dict) -> str:
+    """Properties box for the note drawer: native <details>, one row per key,
+    list values as individual chips."""
+    rows = []
+    for key, val in props.items():
+        vals = val if isinstance(val, (list, tuple)) else [val]
+        chips = "".join(
+            f'<span class="fm-val">{_html.escape("" if v is None else str(v))}</span>'
+            for v in vals
+        )
+        rows.append(
+            f'<div class="fm-row"><span class="fm-key">{_html.escape(str(key))}</span>{chips}</div>'
+        )
+    return '<details class="fm" open><summary>properties</summary>' + "".join(rows) + "</details>"
 
 
 def _render_md(text: str) -> str:
@@ -324,6 +539,7 @@ async def run_turn(text: str) -> AsyncIterator[dict]:
         yield {"type": "error", "error": str(exc)}
     finally:
         _save_session()  # persist even on error so the user's turn isn't lost
+        _prewarm_seed()  # the turn may have written notes — refresh the new-chat seed
         if task is not None and not task.done():
             current_cancel.set()  # abandonment: stop the zombie...
             task.add_done_callback(lambda t: _end_turn())  # ...free the gate when it exits
@@ -468,7 +684,49 @@ def note(path: str = ""):
         content = get_driver().read_note(NoteRef(name=_clean_name(canon), path=canon)).content
     except Exception:
         return {"title": _clean_name(canon), "html": "<p>note unreadable.</p>"}
-    return {"title": _clean_name(canon), "html": _linkify(content, resolve)}
+    props, body = _split_frontmatter(content)
+    html = _linkify(body, resolve)
+    if props:
+        html = _render_frontmatter(props) + html
+    return {"title": _clean_name(canon), "html": html}
+
+
+@app.get("/asset")
+def asset(path: str = ""):
+    """Vault-relative attachment for the note drawer, `<img>`-only by contract.
+    Extension whitelist + resolved-inside-the-vault check close traversal."""
+    if not path or not CONFIG.vault_path:
+        raise HTTPException(status_code=404)
+    root = Path(CONFIG.vault_path).resolve()
+    target = (root / path).resolve()
+    if (
+        not target.is_relative_to(root)
+        or target.suffix.lower() not in _ASSET_EXTS
+        or not target.is_file()
+    ):
+        raise HTTPException(status_code=404)
+    return FileResponse(target)
+
+
+@app.get("/vault_info")
+def vault_info():
+    """Sidebar data: vault stats + file tree, from the same builders as the
+    graph view so the numbers can't disagree between the two surfaces."""
+    from silica.kernel.graph_export import build_graph_data, detect_communities
+    from silica.ui.web.graph_view import render_tree
+
+    try:
+        nodes, edges = build_graph_data(folder="")
+        communities = detect_communities(nodes, edges)
+    except Exception as exc:
+        return {"error": str(exc)}
+    return {
+        "notes": sum(1 for n in nodes if n.get("type") != "ghost"),
+        "links": sum(1 for e in edges if e.get("type") == "EXTRACTED"),
+        "clusters": len(communities),
+        "unresolved": sum(1 for n in nodes if n.get("type") == "ghost"),
+        "tree": render_tree(nodes),
+    }
 
 
 @app.get("/messages")
@@ -539,12 +797,12 @@ def serve(port: int = 8765) -> None:
     """Apply config, open the browser on startup, then block on uvicorn."""
     import uvicorn
 
+    from silica.ui.banner import print_banner
+    from silica.ui.console import CONSOLE
+
     _reset_session()
 
-    @app.on_event("startup")
-    async def _open_browser():  # fires once the server is actually listening
-        import webbrowser
-
-        webbrowser.open(f"http://127.0.0.1:{port}")
+    print_banner()
+    CONSOLE.print(f"  [dim]GUI live at[/] [cyan]http://127.0.0.1:{port}[/]\n")
 
     uvicorn.run(app, host="127.0.0.1", port=port)

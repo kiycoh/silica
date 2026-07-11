@@ -48,12 +48,12 @@ def _community_color(i: int) -> str:
 # Precomputed prefix for the legend default + tests; live code calls _community_color.
 COMMUNITY_COLORS = [_community_color(i) for i in range(12)]
 
-_EDGE_COLOR_EXTRACTED = "#22d3ee"   # cyan — resolved links
-_EDGE_COLOR_AMBIGUOUS = "#6366f1"   # indigo — unresolved (web/ uses indigo for ambiguous)
-_NODE_DEFAULT_COLOR = {"background": "#4d5575", "border": "#22d3ee",
-                       "highlight": {"background": "#5a6372", "border": "#e7ebf1"}}
-_NODE_GHOST_COLOR   = {"background": "#151a23", "border": "#6366f1",
-                       "highlight": {"background": "#1e2530", "border": "#8a93a3"}}
+_EDGE_COLOR_EXTRACTED = "#8f8f8f"   # phosphor gray — resolved links
+_EDGE_COLOR_AMBIGUOUS = "#ff2a2a"   # hazard red — unresolved (warning semantics)
+_NODE_DEFAULT_COLOR = {"background": "#5c5c5c", "border": "#8f8f8f",
+                       "highlight": {"background": "#8f8f8f", "border": "#eaeaea"}}
+_NODE_GHOST_COLOR   = {"background": "#161616", "border": "#5c5c5c",
+                       "highlight": {"background": "#262626", "border": "#8f8f8f"}}
 
 
 def _infer_type(path: str) -> str:

@@ -7,29 +7,51 @@
   <link rel="stylesheet" href="/static/app.css" />
 </head>
 <body>
-  <div id="drop-hint">drop to ingest → Inbox/</div>
+  <div id="drop-hint">[ DROP TO INGEST &rarr; INBOX/ ]</div>
 
   <header>
-    <button id="sidebar-toggle" class="ghost" title="toggle history">☰</button>
-    <div class="brand">silica</div>
-    <div class="vault" id="vault">—</div>
-    <div class="ctx-tokens" id="ctx-tokens" title="context window usage"></div>
-    <div class="spacer"></div>
+    <button id="sidebar-toggle" class="ghost" title="toggle sidebar">&#9776;</button>
+    <div class="brand">SILICA</div>
     <nav class="tabs">
       <button class="tab active" data-tab="chat">chat</button>
       <button class="tab" data-tab="graph">graph</button>
       <button class="tab" data-tab="map">map</button>
     </nav>
-    <button id="new-chat" class="ghost">new chat</button>
-    <button id="stop" class="ghost" hidden>stop</button>
+    <div class="spacer"></div>
+    <div class="ctx-tokens" id="ctx-tokens" title="context window usage"></div>
+    <button id="new-chat" class="ghost">+ new chat</button>
+    <button id="stop" class="ghost" hidden>&#9632; stop</button>
   </header>
 
   <main>
     <aside id="sidebar">
-      <div class="sidebar-head">history</div>
-      <input id="session-filter" type="text" placeholder="filter…" autocomplete="off" />
-      <div id="sessions"></div>
+      <div class="side-section">
+        <div class="side-title">Vault</div>
+        <div class="vault" id="vault">&mdash;</div>
+        <div class="stat-grid">
+          <div class="stat"><div class="val" id="stat-notes">&mdash;</div><div class="lbl">Notes</div></div>
+          <div class="stat"><div class="val" id="stat-links">&mdash;</div><div class="lbl">Links</div></div>
+          <div class="stat"><div class="val" id="stat-clusters">&mdash;</div><div class="lbl">Clusters</div></div>
+          <div class="stat"><div class="val warn" id="stat-unresolved">&mdash;</div><div class="lbl">Unresolved</div></div>
+        </div>
+      </div>
+
+      <div class="side-section">
+        <input id="side-search" type="text" placeholder="search notes + chats&hellip;" autocomplete="off" />
+      </div>
+
+      <details class="side-section" id="side-files" open>
+        <summary class="side-title">Files</summary>
+        <div id="tree"></div>
+      </details>
+
+      <details class="side-section" id="side-history" open>
+        <summary class="side-title">History</summary>
+        <div id="sessions"></div>
+        <button id="sessions-more" class="linklike" hidden></button>
+      </details>
     </aside>
+
     <section id="view-chat" class="view active">
       <div id="log" data-caption="vault ready · type below, or drop a file to ingest" data-intro="
               ▒▒▒                ░░                   ░░░░
@@ -90,19 +112,19 @@
     <section id="view-graph" class="view">
       <div id="graph-loading" class="frame-loading" hidden>
         <div class="spinner"></div>
-        <div>building graph… large vaults take a moment</div>
+        <div>[ BUILDING GRAPH&hellip; LARGE VAULTS TAKE A MOMENT ]</div>
       </div>
       <iframe id="graph-frame" title="vault graph"></iframe>
     </section>
 
     <section id="view-map" class="view">
       <form id="map-bar">
-        <input id="map-note" type="text" placeholder="note to map (e.g. concepts/mind-maps)…" autocomplete="off" />
+        <input id="map-note" type="text" placeholder="note to map — type a name, or pick one from FILES in the sidebar…" autocomplete="off" />
         <button type="submit">map</button>
       </form>
       <div id="map-loading" class="frame-loading" hidden>
         <div class="spinner"></div>
-        <div>building map…</div>
+        <div>[ BUILDING MAP&hellip; ]</div>
       </div>
       <iframe id="map-frame" title="radial map"></iframe>
     </section>
@@ -113,7 +135,7 @@
     <header>
       <span id="note-title"></span>
       <button id="note-map" class="ghost" title="open in map view">map</button>
-      <button id="note-close" class="ghost" title="close">✕</button>
+      <button id="note-close" class="ghost" title="close">&#10005;</button>
     </header>
     <details id="note-mini-map">
       <summary>map preview</summary>

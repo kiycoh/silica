@@ -287,7 +287,7 @@ class TestFocusDim:
         nodes, edges = small_graph
         html = render_html(nodes, edges, lib_js="// dummy")
         assert "_dim" in html
-        assert "#1a2030" in html
+        assert "#1c1c1c" in html
 
     def test_choose_node_applies_focus(self, small_graph):
         nodes, edges = small_graph

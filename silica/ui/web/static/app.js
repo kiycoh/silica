@@ -6,11 +6,12 @@ const input = $("#input");
 const stopBtn = $("#stop");
 
 let streaming = false;
+let activeTab = "chat";
 
 function bubble(role) {
   const el = document.createElement("div");
   el.className = "msg " + (role === "user" ? "user" : "silica");
-  el.innerHTML = `<div class="role">${role === "user" ? "you" : "⏺ silica"}</div><div class="body"></div>`;
+  el.innerHTML = `<div class="role">${role === "user" ? "you" : "silica"}</div><div class="body"></div>`;
   log.appendChild(el);
   log.scrollTop = log.scrollHeight;
   return el.querySelector(".body");
@@ -22,13 +23,74 @@ function escapeHtml(s) {
   return d.innerHTML;
 }
 
+// Hover-revealed "copy" button in a message body's corner. getText() is called
+// at click time so live turns can hand back their accumulated raw markdown.
+function addCopyBtn(bodyEl, getText) {
+  const b = document.createElement("button");
+  b.className = "copy-btn";
+  b.type = "button";
+  b.textContent = "copy";
+  b.addEventListener("click", async () => {
+    try { await navigator.clipboard.writeText(getText()); b.textContent = "copied"; }
+    catch { b.textContent = "failed"; }
+    setTimeout(() => (b.textContent = "copy"), 1200);
+  });
+  bodyEl.appendChild(b);
+}
+
+// ponytail: lazy live markdown for the streaming turn — headings, bold, italic,
+// inline + fenced code, bullet/ordered lists, links. Re-parses the whole segment
+// on every delta (O(n²) over the turn, fine at KB scale). The server re-renders
+// the canonical answer (wikilinks, callouts, mermaid) on `done` for uninterrupted
+// turns; swap in a vendored parser if full CommonMark is ever needed here.
+function mdLite(src) {
+  const esc = (s) => s.replace(/[&<>]/g, (c) => ({ "&": "&amp;", "<": "&lt;", ">": "&gt;" }[c]));
+  const inline = (t) =>
+    esc(t)
+      .replace(/`([^`]+)`/g, "<code>$1</code>")
+      .replace(/\*\*([^*]+?)\*\*/g, "<strong>$1</strong>")
+      .replace(/\*([^*\n]+?)\*/g, "<em>$1</em>")
+      .replace(/\[([^\]]+)\]\(([^)\s]+)\)/g, '<a href="$2">$1</a>');
+  const lines = src.split("\n");
+  const out = [];
+  let i = 0, list = null;
+  const closeList = () => { if (list) { out.push(`</${list}>`); list = null; } };
+  const isBlock = (l) => /^```|^#{1,6}\s|^\s*[-*]\s|^\s*\d+\.\s/.test(l);
+  while (i < lines.length) {
+    const line = lines[i];
+    if (!line.trim()) { closeList(); i++; continue; }
+    if (/^```/.test(line)) {
+      closeList();
+      const buf = []; i++;
+      while (i < lines.length && !/^```\s*$/.test(lines[i])) buf.push(lines[i++]);
+      i++; // closing fence (or EOF while still streaming)
+      out.push(`<pre><code>${esc(buf.join("\n"))}</code></pre>`);
+      continue;
+    }
+    const h = line.match(/^(#{1,6})\s+(.*)$/);
+    if (h) { closeList(); out.push(`<h${h[1].length}>${inline(h[2])}</h${h[1].length}>`); i++; continue; }
+    const item = line.match(/^\s*(?:[-*]|\d+\.)\s+(.*)$/);
+    if (item) {
+      const want = /^\s*\d/.test(line) ? "ol" : "ul";
+      if (list !== want) { closeList(); out.push(`<${want}>`); list = want; }
+      out.push(`<li>${inline(item[1])}</li>`); i++; continue;
+    }
+    closeList();
+    const para = [];
+    while (i < lines.length && lines[i].trim() && !isBlock(lines[i])) para.push(lines[i++]);
+    out.push(`<p>${para.map(inline).join("<br>")}</p>`);
+  }
+  closeList();
+  return out.join("");
+}
+
 function fmtTokens(n) {
   n = Number(n) || 0;
   return n >= 1000 ? (n / 1000).toFixed(1) + "k" : String(n);
 }
 function setCtxTokens(used, max) {
   max = Number(max) || 0;
-  $("#ctx-tokens").textContent = max ? `${fmtTokens(used)}/${fmtTokens(max)} tok` : "";
+  $("#ctx-tokens").textContent = max ? `CTX ${fmtTokens(used)}/${fmtTokens(max)}` : "";
 }
 
 async function runTurn(fetchPromise) {
@@ -36,25 +98,68 @@ async function runTurn(fetchPromise) {
   streaming = true;
   stopBtn.hidden = false;
   const body = bubble("silica");
-  const thinking = document.createElement("details");
-  thinking.className = "thinking";
-  thinking.hidden = true;
-  thinking.innerHTML = `<summary>✦ thinking</summary><div class="thinking-body"></div>`;
-  body.appendChild(thinking);
-  const thinkBody = thinking.querySelector(".thinking-body");
-  const tools = document.createElement("div");
-  tools.className = "tools";
-  body.appendChild(tools);
-  const text = document.createElement("div");
-  text.className = "stream-text streaming";
-  body.appendChild(text);
+  // flow = thinking blocks, tool groups and text segments interleaved in arrival
+  // order, so the transcript reads chronologically: think, tools, think, tools,
+  // text… (Claude-style). In this agent the connective tissue between tool calls
+  // is *thinking*, so it must interleave too or tools pile into one group.
+  const flow = document.createElement("div");
+  body.appendChild(flow);
+
+  // The live iridescent caret is ONE physical element, re-parented onto
+  // whatever is streaming right now (thinking body / tool group / text tail).
+  const caret = document.createElement("span");
+  caret.className = "caret";
+  caret.textContent = "▍";
+
   const toolEls = {};
-  let raw = "";
-  let thinkRaw = "";
+  const texts = [];    // every text segment { el, raw }, for the copy button
+  const touched = new Set(); // notes referenced by tools this turn → sources footer
+  let curText = null;   // open markdown segment { el, raw }
+  let curTools = null;  // open group of consecutive tools
+  let curThink = null;  // open thinking block { details, body, raw }
+  let segments = 0;     // text runs so far; an uninterrupted one upgrades to server html
+
+  // Opening one segment kind closes the other two; a thinking block collapses
+  // as it closes (it stays open only while it is the live tail).
+  function close(keep) {
+    if (keep !== "text") curText = null;
+    if (keep !== "tools") curTools = null;
+    if (keep !== "think" && curThink) { curThink.details.open = false; curThink = null; }
+  }
+  function thinkSeg() {
+    if (curThink) return curThink;
+    close("think");
+    const details = document.createElement("details");
+    details.className = "thinking";
+    details.open = true;
+    details.innerHTML = `<summary>thinking</summary><div class="thinking-body"></div>`;
+    flow.appendChild(details);
+    return (curThink = { details, body: details.querySelector(".thinking-body"), raw: "" });
+  }
+  function textSeg() {
+    if (curText) return curText;
+    close("text");
+    const el = document.createElement("div");
+    el.className = "stream-text";
+    flow.appendChild(el);
+    curText = { el, raw: "" };
+    texts.push(curText);
+    segments++;
+    return curText;
+  }
+  function toolsGroup() {
+    if (curTools) return curTools;
+    close("tools");
+    const g = document.createElement("div");
+    g.className = "tools";
+    flow.appendChild(g);
+    return (curTools = g);
+  }
+  const flowMsg = (s) => { const d = document.createElement("div"); d.className = "stream-text"; d.textContent = s; flow.appendChild(d); };
 
   try {
     const resp = await fetchPromise;
-    if (resp.status === 409) { text.textContent = "(a turn is already in progress)"; return; }
+    if (resp.status === 409) { flowMsg("(a turn is already in progress)"); return; }
     const reader = resp.body.getReader();
     const dec = new TextDecoder();
     let buf = "";
@@ -71,31 +176,52 @@ async function runTurn(fetchPromise) {
       }
     }
   } catch (e) {
-    text.textContent = "error: " + e;
+    flowMsg("error: " + e);
   } finally {
     streaming = false;
     stopBtn.hidden = true;
-    text.classList.remove("streaming");
+    caret.remove(); // no-op if a rerender already detached it
+    if (curThink) curThink.details.open = false; // aborted mid-thought — still collapse
+    if (touched.size) {
+      const s = document.createElement("div");
+      s.className = "sources";
+      s.innerHTML = '<span class="sources-label">sources</span>';
+      for (const ref of touched) {
+        const c = document.createElement("span");
+        c.className = "note-link"; // reuses the delegated click → note drawer
+        c.dataset.path = ref;
+        c.textContent = ref.split("/").pop().replace(/\.md$/, "");
+        s.appendChild(c);
+      }
+      flow.appendChild(s);
+    }
+    const answer = texts.map((t) => t.raw).join("\n\n").trim();
+    if (answer) addCopyBtn(body, () => answer);
     loadSessions(); // turn saved server-side — refresh titles/order
+    loadVaultInfo(); // a turn may have written notes — refresh stats + tree
     graphStale = true; // a turn may have written notes — rebuild next graph view
   }
 
   function handle(ev) {
     if (ev.type === "delta" && ev.kind === "reasoning") {
-      thinkRaw += ev.text;
-      thinkBody.textContent = thinkRaw;
-      thinking.hidden = false;
-      thinking.open = true;
+      const th = thinkSeg();
+      th.raw += ev.text;
+      th.body.textContent = th.raw;
+      th.body.appendChild(caret);
+      th.body.scrollTop = th.body.scrollHeight; // follow the caret in the capped box
     } else if (ev.type === "delta" && ev.kind === "text") {
-      thinking.open = false; // real answer started — collapse the thinking block
-      raw += ev.text;
-      text.textContent = raw;
+      const seg = textSeg();
+      seg.raw += ev.text;
+      seg.el.innerHTML = mdLite(seg.raw);
+      (seg.el.lastElementChild || seg.el).appendChild(caret); // inline at the text tail
     } else if (ev.type === "tool_start") {
       const t = document.createElement("div");
       t.className = "tool";
-      t.textContent = "⏺ " + ev.name + " …";
-      tools.appendChild(t);
+      t.textContent = "» " + ev.name + " …";
+      toolsGroup().appendChild(t);
+      curTools.appendChild(caret);
       toolEls[ev.id] = t;
+      (ev.notes || []).forEach((n) => touched.add(n));
     } else if (ev.type === "tool_done") {
       const t = toolEls[ev.id];
       if (t) { t.className = "tool done"; t.textContent = "✓ " + ev.name; }
@@ -105,15 +231,28 @@ async function runTurn(fetchPromise) {
     } else if (ev.type === "batch") {
       const t = document.createElement("div");
       t.className = "tool";
-      t.textContent = "⏺ " + ev.kind + " · " + ev.label;
-      tools.appendChild(t);
+      t.textContent = "» " + ev.kind + " · " + ev.label;
+      toolsGroup().appendChild(t);
+      curTools.appendChild(caret);
     } else if (ev.type === "done") {
-      thinking.open = false;
-      text.innerHTML = ev.html || escapeHtml(ev.answer || "");
+      // Uninterrupted answer (no tool split the text) → upgrade the live md to the
+      // canonical server render (wikilinks, callouts, mermaid). Interleaved turns
+      // keep their live segments; they render canonically on the next reload.
+      if (segments === 0 && (ev.html || ev.answer)) {
+        const seg = textSeg();
+        seg.raw = ev.answer || ""; // keep the copy button fed on no-delta turns
+        seg.el.innerHTML = ev.html || escapeHtml(ev.answer || "");
+      } else if (segments === 1 && curText && (ev.html || ev.answer)) {
+        curText.el.innerHTML = ev.html || escapeHtml(ev.answer || "");
+      }
+      close(""); // collapse any open thinking, end all segments
       setCtxTokens(ev.context_tokens, ev.max_context_tokens);
     } else if (ev.type === "error") {
-      text.className = "tool error";
-      text.textContent = "error: " + ev.error;
+      close("");
+      const t = document.createElement("div");
+      t.className = "tool error";
+      t.textContent = "error: " + ev.error;
+      flow.appendChild(t);
     }
     log.scrollTop = log.scrollHeight;
   }
@@ -180,14 +319,17 @@ $("#commands").addEventListener("click", (e) => {
   send(cmd);
 });
 stopBtn.addEventListener("click", () => fetch("/stop", { method: "POST" }));
+// Optimistic: clear the transcript at once (the reset itself is a cached-seed
+// copy server-side, but never make the click wait on the network).
 $("#new-chat").addEventListener("click", async () => {
-  await fetch("/reset", { method: "POST" });
+  if (streaming) return;
   log.innerHTML = "";
+  await fetch("/reset", { method: "POST" });
   loadVault();
   loadSessions();
 });
 
-// --- history sidebar --------------------------------------------------------
+// --- unified sidebar (stats · search · files · history) ----------------------
 if (localStorage.getItem("sidebar-collapsed") === "1")
   document.body.classList.add("sidebar-collapsed");
 $("#sidebar-toggle").addEventListener("click", () => {
@@ -195,13 +337,68 @@ $("#sidebar-toggle").addEventListener("click", () => {
   localStorage.setItem("sidebar-collapsed", collapsed ? "1" : "0");
 });
 
-function applySessionFilter() {
-  const q = $("#session-filter").value.trim().toLowerCase();
-  $("#sessions").querySelectorAll(".session").forEach((el) => {
-    el.hidden = !!q && !el.textContent.toLowerCase().includes(q);
-  });
+// Vault stats + file tree, from /vault_info. Best-effort: on error the placeholders stay.
+async function loadVaultInfo() {
+  try {
+    const r = await fetch("/vault_info");
+    const data = await r.json();
+    if (data.error) return;
+    $("#stat-notes").textContent = data.notes;
+    $("#stat-links").textContent = data.links;
+    $("#stat-clusters").textContent = data.clusters;
+    $("#stat-unresolved").textContent = data.unresolved;
+    $("#tree").innerHTML = data.tree || "";
+    applySidebarFilter();
+  } catch (_) {}
 }
-$("#session-filter").addEventListener("input", applySessionFilter);
+
+// Tree click routing follows the active tab: map roots the radial map on the
+// note; chat/graph open the note drawer (which also mirrors focus into the
+// graph iframe via focusGraphNode).
+$("#tree").addEventListener("click", (e) => {
+  const leaf = e.target.closest(".tree-note");
+  if (!leaf) return;
+  const path = leaf.dataset.id;
+  if (activeTab === "map") {
+    $("#map-note").value = path;
+    $("#map-bar").requestSubmit();
+  } else {
+    openNote(path);
+  }
+});
+
+// One search box filters both the file tree and the chat history.
+function applySidebarFilter() {
+  const q = $("#side-search").value.trim().toLowerCase();
+  // notes: substring on name or full path
+  $("#tree").querySelectorAll(".tree-note").forEach((el) => {
+    el.hidden = !!q && !el.textContent.toLowerCase().includes(q) &&
+                !(el.dataset.id || "").toLowerCase().includes(q);
+  });
+  // folders: hide if nothing visible remains inside; reveal matches while searching
+  $("#tree").querySelectorAll("details").forEach((d) => {
+    const any = Array.from(d.querySelectorAll(".tree-note")).some((n) => !n.hidden);
+    d.hidden = !!q && !any;
+    if (q && any) d.open = true;
+  });
+  // sessions: substring on title; while searching, the expand cap is lifted
+  $("#sessions").querySelectorAll(".session").forEach((el) => {
+    el.hidden = (!!q && !el.textContent.toLowerCase().includes(q)) ||
+                (!q && !sessionsExpanded && +el.dataset.idx >= SESSION_CAP);
+  });
+  $("#sessions-more").hidden = !!q || sessionsExpanded || sessionCount <= SESSION_CAP;
+}
+$("#side-search").addEventListener("input", applySidebarFilter);
+
+// --- history (last sidebar section; capped, "expand" reveals the rest) -------
+const SESSION_CAP = 8;
+let sessionsExpanded = false;
+let sessionCount = 0;
+
+$("#sessions-more").addEventListener("click", () => {
+  sessionsExpanded = true;
+  applySidebarFilter();
+});
 
 async function loadSessions() {
   try {
@@ -209,15 +406,19 @@ async function loadSessions() {
     const current = r.headers.get("X-Silica-Session") || "";
     const box = $("#sessions");
     box.innerHTML = "";
-    for (const s of await r.json()) {
+    const sessions = await r.json();
+    sessionCount = sessions.length;
+    sessions.forEach((s, i) => {
       const el = document.createElement("div");
       el.className = "session" + (s.id === current ? " active" : "");
+      el.dataset.idx = i;
       el.textContent = s.title || "untitled";
       el.title = s.title || "";
       el.addEventListener("click", () => openSession(s.id));
       box.appendChild(el);
-    }
-    applySessionFilter();
+    });
+    $("#sessions-more").textContent = "+ " + Math.max(0, sessionCount - SESSION_CAP) + " more";
+    applySidebarFilter();
   } catch (_) {}
 }
 
@@ -242,6 +443,7 @@ let graphStale = true;
 $(".tabs").addEventListener("click", (e) => {
   const tab = e.target.dataset.tab;
   if (!tab) return;
+  activeTab = tab;
   document.querySelectorAll(".tab").forEach((b) => b.classList.toggle("active", b.dataset.tab === tab));
   $("#view-chat").classList.toggle("active", tab === "chat");
   $("#view-graph").classList.toggle("active", tab === "graph");
@@ -299,6 +501,33 @@ function focusGraphNode(path) {
   }
 }
 
+// Mermaid is a 3.5MB vendored bundle, so it loads on demand — only the first
+// time an opened note actually contains a ```mermaid fence. Render failures
+// leave the fence as plain text (suppressErrorRendering).
+let mermaidLoad = null;
+function renderMermaid(root) {
+  const blocks = root.querySelectorAll("pre.mermaid");
+  if (!blocks.length) return;
+  mermaidLoad ||= new Promise((resolve) => {
+    const s = document.createElement("script");
+    s.src = "/static/mermaid.min.js";
+    s.onload = () => {
+      mermaid.initialize({
+        startOnLoad: false, theme: "dark", suppressErrorRendering: true,
+        fontFamily: "Martian Mono, ui-monospace, monospace",
+        themeVariables: {
+          darkMode: true, background: "#0A0D14",
+          primaryColor: "#161B27", primaryTextColor: "#E8ECF5",
+          primaryBorderColor: "#38425A", lineColor: "#8B95AC",
+        },
+      });
+      resolve();
+    };
+    document.head.appendChild(s);
+  });
+  mermaidLoad.then(() => mermaid.run({ nodes: blocks }).catch(() => {}));
+}
+
 async function openNote(path) {
   if (!path) return;
   lastNotePath = path;
@@ -310,6 +539,7 @@ async function openNote(path) {
     const data = await r.json();
     $("#note-title").textContent = data.title || "";
     $("#note-body").innerHTML = data.html || "";
+    renderMermaid($("#note-body"));
     $("#note-body").scrollTop = 0;
     notePanel.classList.add("open");
     notePanel.setAttribute("aria-hidden", "false");
@@ -363,12 +593,15 @@ $("#note-resize").addEventListener("mousedown", (e) => {
   document.addEventListener("mouseup", onUp);
 });
 // One delegated handler: .note-link (chat OR in-panel → in-place nav) opens the
-// drawer; a click outside an open drawer closes it.
+// drawer; a click outside an open drawer closes it. The sidebar is persistent
+// nav — clicking it (pick a note, toggle a folder) must not close the drawer or
+// reset the graph focus, so it never counts as "outside".
 document.addEventListener("click", (e) => {
   if (resizingNote) return;
   const link = e.target.closest(".note-link");
   if (link) { e.preventDefault(); openNote(link.dataset.path); return; }
-  if (notePanel.classList.contains("open") && !e.target.closest("#note-panel")) closeNote();
+  if (notePanel.classList.contains("open") &&
+      !e.target.closest("#note-panel") && !e.target.closest("#sidebar")) closeNote();
 });
 $("#note-close").addEventListener("click", closeNote);
 document.addEventListener("keydown", (e) => { if (e.key === "Escape") closeNote(); });
@@ -388,9 +621,10 @@ async function loadVault() {
     for (const m of msgs) {
       const b = bubble(m.role === "user" ? "user" : "silica");
       if (m.role === "user") b.textContent = m.content;
-      else b.innerHTML = m.html || escapeHtml(m.content);
+      else { b.innerHTML = m.html || escapeHtml(m.content); addCopyBtn(b, () => m.content); }
     }
   } catch (_) {}
 }
 loadVault();
 loadSessions();
+loadVaultInfo();

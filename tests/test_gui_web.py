@@ -336,12 +336,13 @@ def test_linkify_wikilink_alias_shows_alias_but_resolves_target():
     assert ">Bar</a>" in html
 
 
-def test_linkify_unresolved_wikilink_stays_literal():
+def test_linkify_unresolved_wikilink_renders_as_broken_anchor():
     from silica.ui.web.server import _linkify
 
     html = _linkify("a [[nope]] ref", _fake_resolve)
-    assert "[[nope]]" in html
-    assert "note-link" not in html
+    assert '<a class="note-link broken">nope</a>' in html
+    assert "data-path" not in html  # click is a no-op by construction
+    assert "[[" not in html
 
 
 def test_linkify_pathlike_md_token_becomes_link_with_clean_name():
@@ -373,6 +374,155 @@ def test_linkify_without_resolver_is_plain_render():
     from silica.ui.web.server import _linkify
 
     assert _linkify("see [[Foo]] here").strip() == "<p>see [[Foo]] here</p>"
+
+
+# ---------------------------------------------------------------------------
+# OFM sugar — highlights, tags, callouts, tasks, mermaid, comments/block-ids,
+# frontmatter. Same pure-resolver setup as the _linkify tests above.
+# ---------------------------------------------------------------------------
+
+def test_ofm_highlight_and_tag_render():
+    from silica.ui.web.server import _linkify
+
+    html = _linkify("a ==hot== take on #graph/theory", _fake_resolve)
+    assert "<mark>hot</mark>" in html
+    assert '<span class="tag">#graph/theory</span>' in html
+
+
+def test_ofm_sugar_never_fires_in_code():
+    from silica.ui.web.server import _linkify
+
+    html = _linkify("run `#foo` now\n\n```\n#bar\n==nope==\n```", _fake_resolve)
+    assert 'class="tag"' not in html
+    assert "<mark>" not in html
+
+
+def test_ofm_callout_gets_class_and_title():
+    from silica.ui.web.server import _linkify
+
+    html = _linkify("> [!warning] Watch out\n> the body", _fake_resolve)
+    assert 'class="callout callout-warning"' in html
+    assert '<p class="callout-title">Watch out</p>' in html
+    assert "the body" in html
+    assert "[!warning]" not in html
+
+
+def test_ofm_plain_blockquote_is_untouched():
+    from silica.ui.web.server import _linkify
+
+    html = _linkify("> just a quote", _fake_resolve)
+    assert "callout" not in html
+
+
+def test_ofm_task_items_become_checkboxes():
+    from silica.ui.web.server import _linkify
+
+    html = _linkify("- [ ] open\n- [x] done", _fake_resolve)
+    assert html.count('<input type="checkbox" disabled') == 2
+    assert 'disabled checked' in html
+    assert "[ ]" not in html and "[x]" not in html
+
+
+def test_ofm_mermaid_fence_becomes_client_hook():
+    from silica.ui.web.server import _linkify
+
+    html = _linkify("```mermaid\ngraph TD; A-->B;\n```", _fake_resolve)
+    assert '<pre class="mermaid">' in html
+    assert "A--&gt;B" in html  # content is escaped, mermaid.js reads textContent
+    assert "mermaid" not in _linkify("```python\nx = 1\n```", _fake_resolve)
+
+
+def test_ofm_comments_and_block_ids_stripped():
+    from silica.ui.web.server import _linkify
+
+    html = _linkify("keep %%hidden%% this ^anchor-id\nnext line", _fake_resolve)
+    assert "hidden" not in html
+    assert "anchor-id" not in html
+    assert "keep" in html and "next line" in html
+
+
+def test_ofm_image_embed_becomes_img_via_asset():
+    from silica.ui.web.server import _linkify
+
+    html = _linkify("see ![[img/pic 1.png]] and ![[shot.jpg|300]]", _fake_resolve)
+    assert '<img src="/asset?path=img/pic%201.png" alt="pic 1">' in html
+    assert '<img src="/asset?path=shot.jpg" alt="shot" width="300">' in html
+
+
+def test_markdown_relative_image_src_routes_through_asset():
+    from silica.ui.web.server import _linkify
+
+    html = _linkify("![alt](img/pic.png) ![ext](https://x.io/p.png)", _fake_resolve)
+    assert 'src="/asset?path=img/pic.png"' in html
+    assert 'src="https://x.io/p.png"' in html
+
+
+def test_fence_gets_pygments_spans():
+    from silica.ui.web.server import _linkify
+
+    html = _linkify('```python\ndef f():\n    return "x"\n```', _fake_resolve)
+    assert '<span class="k">def</span>' in html
+    assert 'language-python' in html
+    # unknown language degrades to a plain escaped fence
+    assert "<span" not in _linkify("```nolang\nx\n```", _fake_resolve)
+
+
+def test_asset_endpoint_serves_vault_images_and_closes_traversal(client, tmp_vault):
+    tc, _server = client
+    tmp_vault.note("img/pic.png", "fake-bytes")
+    tmp_vault.note("secret.txt", "no")
+
+    assert tc.get("/asset", params={"path": "img/pic.png"}).status_code == 200
+    assert tc.get("/asset", params={"path": "../pic.png"}).status_code == 404
+    assert tc.get("/asset", params={"path": "secret.txt"}).status_code == 404  # not whitelisted
+    assert tc.get("/asset", params={"path": "missing.png"}).status_code == 404
+
+
+def test_latex_inline_and_block_become_mathml():
+    from silica.ui.web.server import _linkify
+
+    html = _linkify("energy $E=mc^2$ here", _fake_resolve)
+    assert "<math" in html and "$" not in html
+
+    html = _linkify("$$\n\\frac{a}{b}\n$$", _fake_resolve)
+    assert '<div class="math">' in html
+    assert 'display="block"' in html
+
+
+def test_latex_prose_dollars_and_code_stay_literal():
+    from silica.ui.web.server import _linkify
+
+    html = _linkify("costs $5 and $10 today", _fake_resolve)
+    assert "<math" not in html
+    html = _linkify("run `$x^2$` inline", _fake_resolve)
+    assert "<math" not in html and "$x^2$" in html
+
+
+def test_split_frontmatter_returns_props_and_body():
+    from silica.ui.web.server import _split_frontmatter
+
+    props, body = _split_frontmatter("---\ntags: [a, b]\nstatus: seed\n---\n# Title\n")
+    assert props == {"tags": ["a", "b"], "status": "seed"}
+    assert body == "# Title\n"
+
+
+def test_split_frontmatter_absent_or_non_mapping_is_none():
+    from silica.ui.web.server import _split_frontmatter
+
+    assert _split_frontmatter("# no fm")[0] is None
+    assert _split_frontmatter("---\n- just\n- a list\n---\nbody")[0] is None
+
+
+def test_note_endpoint_renders_frontmatter_properties_box(client, tmp_vault):
+    tc, _server = client
+    tmp_vault.note("Foo.md", "---\ntags: [x]\nstatus: seed\n---\nbody ==lit==")
+
+    html = tc.get("/note", params={"path": "Foo.md"}).json()["html"]
+    assert '<details class="fm"' in html
+    assert '<span class="fm-key">tags</span>' in html
+    assert '<span class="fm-val">x</span>' in html
+    assert "<mark>lit</mark>" in html
+    assert "<hr" not in html  # the --- fences never reach the markdown renderer
 
 
 # ---------------------------------------------------------------------------

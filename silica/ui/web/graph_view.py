@@ -46,6 +46,23 @@ def _vendored_lib_js() -> str:
     return res.read_text(encoding="utf-8")
 
 
+def _vendored_font_face() -> str:
+    """@font-face rule with the Lexend woff2 inlined as a data: URI, so the
+    exported HTML stays fully self-contained (it is opened from file:// too).
+    Cosmetic asset: if missing, degrade to the system-ui fallback, not a raise."""
+    import base64
+
+    res = importlib.resources.files("silica.ui.web") / "static" / "lexend-latin.woff2"
+    if not res.is_file():
+        return ""
+    b64 = base64.b64encode(res.read_bytes()).decode("ascii")
+    return (
+        '@font-face{font-family:"Lexend";'
+        f'src:url("data:font/woff2;base64,{b64}") format("woff2");'
+        "font-weight:100 900;font-style:normal;font-display:swap}"
+    )
+
+
 def render_tree(nodes: list[dict]) -> str:
     """Build a collapsible <details> file tree from real note paths.
 
@@ -129,69 +146,90 @@ def render_html(
   <title>{title}</title>
   {f'<script>{lib_js}</script>' if lib_js else '<script src="' + _VIS_JS_URL + '"></script>'}
   <style>
+    /* Silicon-carbide iridescence: blue-black crystal substrate, cool-white
+       foreground, one azure accent (exact pixel samples from the SiC macro).
+       Gold flags caution. Community hues stay data-driven. Type: Lexend,
+       matching the app shell (inlined data: URI — this file must stay
+       self-contained for file:// use). */
+    {_vendored_font_face()}
     :root{{
-      --void:#0B0D12;--slate:#10141B;--slate-2:#151A23;
-      --line:#1E2530;--line-2:#2B3442;
-      --frost:#E7EBF1;--ash:#8A93A3;--ash-dim:#5A6372;
-      --cyan:#22D3EE;--indigo:#6366F1;--edge:#4D5575;
-      --grad:linear-gradient(100deg,var(--cyan),var(--indigo));
-      --mono:ui-monospace,"Cascadia Code","SF Mono",Menlo,Consolas,"DejaVu Sans Mono",monospace;
+      --void:#0A0D14;--slate:#0F131C;--slate-2:#161B27;
+      --line:#232A3A;--line-2:#38425A;
+      --frost:#E8ECF5;--ash:#8B95AC;--ash-dim:#566076;
+      --accent:#00A5E1;--gold:#C69700;
+      --grad:linear-gradient(115deg,#00CEEA 0%,#0068B8 42%,#9D00B6 100%);
+      --sans:"Lexend",system-ui,sans-serif;
     }}
-    *{{box-sizing:border-box;margin:0;padding:0}}
-    body{{display:flex;height:100vh;font-family:var(--mono);font-weight:300;letter-spacing:-.01em;
+    *{{box-sizing:border-box;margin:0;padding:0;border-radius:0}}
+    html{{scrollbar-width:thin;scrollbar-color:var(--line-2) transparent}}
+    ::-webkit-scrollbar{{width:8px;height:8px}}
+    ::-webkit-scrollbar-track{{background:transparent}}
+    ::-webkit-scrollbar-thumb{{background:var(--line-2);border:2px solid var(--void)}}
+    ::-webkit-scrollbar-thumb:hover{{background:var(--ash-dim)}}
+    body{{display:flex;height:100vh;font-family:var(--sans);font-weight:400;
           background:var(--void);color:var(--frost);overflow:hidden;-webkit-font-smoothing:antialiased}}
+    /* CRT scanlines — decorative only, clicks pass through */
+    body::after{{content:"";position:fixed;inset:0;z-index:99;pointer-events:none;
+      background:repeating-linear-gradient(0deg,transparent,transparent 3px,rgba(0,0,0,.07) 3px,rgba(0,0,0,.07) 4px)}}
     #sidebar{{width:240px;flex-shrink:0;background:var(--slate);border-right:1px solid var(--line);
-              display:flex;flex-direction:column;padding:16px 14px;gap:16px;overflow-y:auto;
-              background-image:radial-gradient(circle at 1px 1px,rgba(34,211,238,.05) 1px,transparent 0);
-              background-size:34px 34px}}
-    #sidebar h1{{font-size:.82rem;font-weight:700;letter-spacing:.28em;text-transform:uppercase;
-                 background:var(--grad);-webkit-background-clip:text;background-clip:text;color:transparent}}
-    .stat-grid{{display:grid;grid-template-columns:1fr 1fr;gap:6px}}
-    .stat{{background:var(--slate-2);border:1px solid var(--line);border-radius:3px;padding:9px;text-align:center}}
-    .stat .val{{font-size:20px;font-weight:700;color:var(--cyan)}}
-    .stat .lbl{{font-size:10px;color:var(--ash-dim);margin-top:2px;letter-spacing:.04em}}
+              display:flex;flex-direction:column;padding:14px 12px;gap:14px;overflow-y:auto}}
+    #sidebar h1{{font-size:.82rem;font-weight:800;letter-spacing:.28em;text-transform:uppercase;background:var(--grad);-webkit-background-clip:text;background-clip:text;color:transparent}}
+    body.embedded #sidebar{{display:none}}
+    .stat-grid{{display:grid;grid-template-columns:1fr 1fr;gap:1px;background:var(--line);border:1px solid var(--line)}}
+    .stat{{background:var(--slate-2);padding:9px;text-align:center}}
+    .stat .val{{font-size:20px;font-weight:700;color:var(--frost)}}
+    .stat .val.warn{{color:var(--gold)}}
+    .stat .lbl{{font-size:10px;color:var(--ash-dim);margin-top:2px;letter-spacing:.08em;text-transform:uppercase}}
     #search{{width:100%;padding:8px 10px;background:var(--slate-2);border:1px solid var(--line-2);
-             border-radius:3px;color:var(--frost);font-family:var(--mono);font-size:13px;outline:none}}
-    #search:focus{{border-color:var(--cyan)}}
+             color:var(--frost);font-family:var(--sans);font-size:13px;outline:none}}
+    #search:focus{{border-color:var(--frost)}}
     .section-title{{font-size:10px;color:var(--ash-dim);text-transform:uppercase;letter-spacing:.18em}}
+    .section-title::before{{content:"// ";color:var(--accent)}}
     .filter-row{{display:flex;align-items:center;gap:7px;font-size:12px;color:var(--ash);cursor:pointer;
                  padding:3px 0;user-select:none}}
-    .filter-row input{{cursor:pointer;accent-color:var(--cyan)}}
-    .dot-edge{{width:24px;height:3px;border-radius:2px;flex-shrink:0}}
-    #sort-communities:hover{{color:var(--cyan)}}
+    .filter-row input{{cursor:pointer;accent-color:var(--accent)}}
+    .dot-edge{{width:24px;height:3px;flex-shrink:0}}
+    #sort-communities:hover{{color:var(--frost)}}
     #legend-box{{display:flex;flex-direction:column;gap:2px;max-height:200px;overflow-y:auto}}
     .legend-item{{display:flex;align-items:center;gap:6px;font-size:12px;color:var(--ash);cursor:pointer;
-                  padding:3px 6px;border-radius:3px}}
+                  padding:3px 6px}}
     .legend-item:hover{{background:var(--slate-2);color:var(--frost)}}
-    .legend-item.active{{background:var(--slate-2);outline:1px solid var(--cyan);color:var(--frost)}}
-    .dot{{width:10px;height:10px;border-radius:50%;flex-shrink:0}}
-    .btn{{padding:8px 10px;background:var(--slate-2);border:1px solid var(--line-2);border-radius:3px;
-           color:var(--ash);font-family:var(--mono);font-size:12px;cursor:pointer;text-align:center}}
-    .btn:hover{{border-color:var(--cyan);color:var(--cyan)}}
-    #graph-wrap{{flex:1;position:relative}}
+    .legend-item.active{{background:var(--slate-2);outline:1px solid var(--frost);color:var(--frost)}}
+    .dot{{width:9px;height:9px;flex-shrink:0}}
+    .btn{{padding:8px 10px;background:var(--slate-2);border:1px solid var(--line-2);
+           color:var(--ash);font-family:var(--sans);font-size:12px;cursor:pointer;text-align:center;
+           text-transform:uppercase;letter-spacing:.06em}}
+    .btn:hover{{border-color:var(--frost);color:var(--frost)}}
+    /* min-width:0 + overflow:hidden: the WebGL canvas must never force the flex
+       item wider than the viewport (it pushes the absolute HUD off-screen) */
+    #graph-wrap{{flex:1;min-width:0;position:relative;overflow:hidden}}
     #graph{{width:100%;height:100%}}
+    /* HUD — floating legend/filter panel anchored to the graph itself */
+    #hud{{position:absolute;top:10px;right:10px;z-index:5;width:216px;max-height:calc(100% - 20px);
+          display:flex;flex-direction:column;gap:12px;padding:12px;overflow-y:auto;
+          background:rgba(10,13,20,.92);border:1px solid var(--line-2)}}
     #drawer{{width:260px;flex-shrink:0;background:var(--slate);border-left:1px solid var(--line);
              padding:18px 16px;overflow-y:auto;display:none;flex-direction:column;gap:12px}}
     #drawer.open{{display:flex}}
     #drawer-title{{font-size:15px;font-weight:600;color:var(--frost);word-break:break-word}}
     #drawer-path{{font-size:11px;color:var(--ash-dim);word-break:break-all}}
-    #drawer-meta{{font-size:12px;color:var(--cyan)}}
+    #drawer-meta{{font-size:12px;color:var(--ash)}}
     .drawer-section{{display:flex;flex-direction:column;gap:4px}}
     .drawer-label{{font-size:10px;color:var(--ash-dim);text-transform:uppercase;letter-spacing:.18em}}
     .drawer-val{{font-size:13px;color:var(--frost)}}
     .tag{{display:inline-block;padding:2px 7px;background:var(--slate-2);border:1px solid var(--line);
-           border-radius:10px;font-size:11px;color:var(--cyan);margin:2px}}
+           font-size:11px;color:var(--ash);margin:2px}}
     #close-drawer{{align-self:flex-end;cursor:pointer;color:var(--ash-dim);font-size:18px;line-height:1}}
     #close-drawer:hover{{color:var(--frost)}}
     #search-results{{display:none;flex-direction:column;gap:1px;max-height:260px;overflow-y:auto;
-                     margin-top:6px;border:1px solid var(--line);border-radius:3px;background:var(--slate-2)}}
+                     margin-top:6px;border:1px solid var(--line);background:var(--slate-2)}}
     #search-results.open{{display:flex}}
     #search-count{{font-size:10px;color:var(--ash-dim);letter-spacing:.04em;padding:6px 8px 2px}}
     .result-item{{display:flex;flex-direction:column;gap:1px;padding:6px 8px;cursor:pointer;border-left:2px solid transparent}}
-    .result-item:hover,.result-item.sel{{background:var(--slate);border-left-color:var(--cyan)}}
+    .result-item:hover,.result-item.sel{{background:var(--slate);border-left-color:var(--accent)}}
     .result-name{{font-size:12px;color:var(--frost);white-space:nowrap;overflow:hidden;text-overflow:ellipsis}}
     .result-sub{{font-size:10px;color:var(--ash-dim);white-space:nowrap;overflow:hidden;text-overflow:ellipsis}}
-    .result-sub em{{color:var(--cyan);font-style:normal}}
+    .result-sub em{{color:var(--frost);font-style:normal}}
     #file-tree{{display:flex;flex-direction:column;max-height:260px;overflow-y:auto;font-size:12px}}
     #file-tree summary{{cursor:pointer;color:var(--ash);padding:2px 0;user-select:none;
                         white-space:nowrap;overflow:hidden;text-overflow:ellipsis}}
@@ -199,7 +237,7 @@ def render_html(
     #file-tree details details,#file-tree .tree-note{{margin-left:12px}}
     .tree-note{{color:var(--ash);cursor:pointer;padding:2px 6px;border-left:2px solid transparent;
                white-space:nowrap;overflow:hidden;text-overflow:ellipsis}}
-    .tree-note:hover{{background:var(--slate-2);border-left-color:var(--cyan);color:var(--frost)}}
+    .tree-note:hover{{background:var(--slate-2);border-left-color:var(--accent);color:var(--frost)}}
   </style>
 </head>
 <body>
@@ -222,44 +260,47 @@ def render_html(
     <div class="section-title" style="margin-bottom:6px">Files</div>
     {tree_html}
   </div>
-
-  <div>
-    <div class="section-title" style="margin-bottom:8px">Edge types</div>
-    <label class="filter-row">
-      <input type="checkbox" id="cb-extracted" checked onchange="updateEdgeFilter()">
-      <div class="dot-edge" style="background:#22d3ee"></div>
-      Resolved
-      <span style="color:#5a6372;font-size:11px;margin-left:auto">{n_extracted}</span>
-    </label>
-    <label class="filter-row" style="margin-top:4px">
-      <input type="checkbox" id="cb-ambiguous" onchange="updateEdgeFilter()">
-      <div class="dot-edge" style="background:#6366f1"></div>
-      Unresolved
-      <span style="color:#5a6372;font-size:11px;margin-left:auto">{n_ambiguous}</span>
-    </label>
-  </div>
-
-  <div>
-    <div class="section-title" style="margin-bottom:6px;display:flex;align-items:center;justify-content:space-between">
-      Communities
-      <span id="sort-communities" style="color:#8a93a3;cursor:pointer;font-size:11px;letter-spacing:0;text-transform:none"
-            onclick="toggleCommunitySort()" title="sort by size">size &#8597;</span>
-    </div>
-    <div id="legend-box">
-{legend_items}      <div class="legend-item active" id="legend-all" onclick="filterCommunity(-2)">
-        <span class="dot" style="background:#4d5575"></span>Show all
-      </div>
-    </div>
-  </div>
-
-  <div style="display:flex;gap:6px">
-    <div class="btn" style="flex:1" onclick="Graph.zoomToFit(400)">&#8862; Fit graph</div>
-    <div class="btn" title="rebuild from the vault (e.g. after editing notes outside silica)"
-         onclick="location.reload()">&#8635;</div>
-  </div>
 </div>
 
-<div id="graph-wrap"><div id="graph"></div></div>
+<div id="graph-wrap">
+  <div id="graph"></div>
+  <div id="hud">
+    <div>
+      <div class="section-title" style="margin-bottom:8px">Edge types</div>
+      <label class="filter-row">
+        <input type="checkbox" id="cb-extracted" checked onchange="updateEdgeFilter()">
+        <div class="dot-edge" style="background:#8f8f8f"></div>
+        Resolved
+        <span style="color:#5c5c5c;font-size:11px;margin-left:auto">{n_extracted}</span>
+      </label>
+      <label class="filter-row" style="margin-top:4px">
+        <input type="checkbox" id="cb-ambiguous" onchange="updateEdgeFilter()">
+        <div class="dot-edge" style="background:#ff2a2a"></div>
+        Unresolved
+        <span style="color:#5c5c5c;font-size:11px;margin-left:auto">{n_ambiguous}</span>
+      </label>
+    </div>
+
+    <div>
+      <div class="section-title" style="margin-bottom:6px;display:flex;align-items:center;justify-content:space-between">
+        Communities
+        <span id="sort-communities" style="color:#8f8f8f;cursor:pointer;font-size:11px;letter-spacing:0;text-transform:none"
+              onclick="toggleCommunitySort()" title="sort by size">size &#8597;</span>
+      </div>
+      <div id="legend-box">
+{legend_items}      <div class="legend-item active" id="legend-all" onclick="filterCommunity(-2)">
+          <span class="dot" style="background:#5c5c5c"></span>Show all
+        </div>
+      </div>
+    </div>
+
+    <div style="display:flex;gap:6px">
+      <div class="btn" style="flex:1" onclick="Graph.zoomToFit(400)">&#8862; Fit graph</div>
+      <div class="btn" title="rebuild from the vault (e.g. after editing notes outside silica)"
+           onclick="location.reload()">&#8635;</div>
+    </div>
+  </div>
+</div>
 
 <div id="drawer">
   <span id="close-drawer" onclick="closeDrawer()">&#10005;</span>
@@ -281,6 +322,10 @@ def render_html(
 </div>
 
 <script>
+// Embedded in the web app's iframe: the app's own sidebar (stats/search/tree)
+// replaces the internal one; only the graph + HUD legend remain.
+if (window.parent !== window) document.body.classList.add("embedded");
+
 const RAW_NODES = {nodes_json};
 const RAW_EDGES = {edges_json};
 const COMM_LABELS = {comm_labels_json};
@@ -333,18 +378,18 @@ let showAmbiguous = false;
 function nodeColor(n) {{
   // ponytail: solid darken-to-background dim; switch to rgba() only if visual
   // verification shows 3d-force-graph honours per-node alpha.
-  if (n._dim) return '#1a2030';
-  if (n.type === 'ghost') return '#4a5468';   // muted slate — dimmed, never black
-  return (n.color && n.color.background) || '#5a6372';
+  if (n._dim) return '#1c1c1c';
+  if (n.type === 'ghost') return '#4a4a4a';   // muted gray — dimmed, never black
+  return (n.color && n.color.background) || '#566076';
 }}
 
 const Graph = new ForceGraph3D(document.getElementById("graph"))
-  .backgroundColor("#0B0D12")
+  .backgroundColor("#0A0D14")
   .graphData({{ nodes: RAW_NODES, links: RAW_EDGES }})
   .linkSource("from").linkTarget("to")
   .nodeLabel("label").nodeVal("size")
   .nodeColor(nodeColor)
-  .linkColor(l => l._dim ? '#161b24' : ((l.color && l.color.color) || "#22d3ee"))
+  .linkColor(l => l._dim ? '#141414' : ((l.color && l.color.color) || "#8f8f8f"))
   // Perf on big vaults (1200+ notes): linkWidth>0 makes every edge a cylinder
   // mesh and arrows add a cone per edge — thousands of meshes. Width 0 ⇒ cheap
   // GL lines; no arrows; fewer sphere segments; finite cooldown so the sim

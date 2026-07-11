@@ -478,8 +478,8 @@ def render_map_svg(mv: MapView, title: str = "Mindmap") -> str:
 <title>{html.escape(title)}</title>
 <style>
   :root{{
-    --void:#0B0D12;--slate-2:#151A23;--line:#1E2530;--line-2:#2B3442;
-    --frost:#E7EBF1;--ash:#8A93A3;--ash-dim:#5A6372;--cyan:#22D3EE;
+    --void:#0A0A0A;--slate-2:#161616;--line:#262626;--line-2:#3A3A3A;
+    --frost:#EAEAEA;--ash:#8F8F8F;--ash-dim:#5C5C5C;--cyan:#EAEAEA;
     --mono:ui-monospace,"Cascadia Code","SF Mono",Menlo,Consolas,"DejaVu Sans Mono",monospace;
   }}
   *{{box-sizing:border-box}}
@@ -511,10 +511,10 @@ def render_map_svg(mv: MapView, title: str = "Mindmap") -> str:
   #hud{{position:fixed;top:14px;right:14px;display:flex;flex-direction:column;
         align-items:flex-end;gap:8px;font-family:var(--mono);z-index:2}}
   #fit-btn{{padding:7px 10px;background:var(--slate-2);border:1px solid var(--line-2);
-            color:var(--ash);font-family:var(--mono);font-size:12px;cursor:pointer;border-radius:3px}}
+            color:var(--ash);font-family:var(--mono);font-size:12px;cursor:pointer;border-radius:0}}
   #fit-btn:hover{{border-color:var(--cyan);color:var(--cyan)}}
   #legend{{display:flex;flex-direction:column;gap:5px;background:var(--slate-2);
-           border:1px solid var(--line);border-radius:3px;padding:8px 10px;
+           border:1px solid var(--line);border-radius:0;padding:8px 10px;
            font-size:11px;color:var(--ash)}}
   .legend-row{{display:flex;align-items:center;gap:7px}}
   .swatch{{width:20px;height:0;border-top:2px solid var(--cyan)}}
