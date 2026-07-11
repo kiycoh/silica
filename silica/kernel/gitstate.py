@@ -131,6 +131,42 @@ def commits_since(root: Path | str, since_ref: str, path: str) -> list[CommitInf
     return _parse_log(proc.stdout)
 
 
+def list_files(root: Path | str) -> list[str] | None:
+    """Repo-relative POSIX paths git knows about: tracked plus
+    untracked-but-not-ignored (`ls-files --cached --others --exclude-standard`).
+    This is the codegraph's file universe — git-native, so .venv/node_modules
+    never enter the walk and uncommitted adds/deletes are visible.
+    None on any git failure (caller treats as "no repo")."""
+    proc = _run(["ls-files", "--cached", "--others", "--exclude-standard"], root)
+    if proc is None or proc.returncode != 0:
+        return None
+    return [ln for ln in proc.stdout.splitlines() if ln.strip()]
+
+
+def show_file(root: Path | str, ref: str, path: str) -> str | None:
+    """Content of `path` at `ref` (`git show ref:path`), or None when the ref
+    or path is unknown (shallow clone, deleted file, bad ref). The git-native
+    staleness baseline: no fingerprint store, git already has the bytes."""
+    if not ref:
+        return None
+    proc = _run(["show", f"{ref}:{path}"], root)
+    if proc is None or proc.returncode != 0:
+        return None
+    return proc.stdout
+
+
+def changed_paths(root: Path | str, range_spec: str | None = None) -> list[str] | None:
+    """Paths changed in `range_spec` (`git diff --name-only <range>`), or the
+    working tree vs HEAD when range_spec is None (uncommitted changes).
+    Untracked new files are not diffs and do not appear — a brand-new file has
+    no documenting note nor importers yet, so /impact loses nothing.
+    None on any git failure."""
+    proc = _run(["diff", "--name-only", range_spec if range_spec else "HEAD"], root)
+    if proc is None or proc.returncode != 0:
+        return None
+    return [ln for ln in proc.stdout.splitlines() if ln.strip()]
+
+
 def commit_docs(
     root: Path | str,
     vault: Path | str,
