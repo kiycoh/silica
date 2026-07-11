@@ -14,6 +14,14 @@ def _fresh_bus(monkeypatch: pytest.MonkeyPatch) -> None:
 
 
 @pytest.fixture(autouse=True)
+def _reset_run_cooldown(monkeypatch: pytest.MonkeyPatch) -> None:
+    """Reset the process-wide 429 pacing floor so it can't leak between tests
+    (a leaked cooldown would make a later real retry sleep for seconds)."""
+    import silica.agent.llm as llm_mod
+    monkeypatch.setattr(llm_mod, "_run_cooldown", 0.0)
+
+
+@pytest.fixture(autouse=True)
 def _no_recon_embedder(monkeypatch: pytest.MonkeyPatch) -> None:
     """Disable silica_recon's network embedder by default: recon falls back to the
     deterministic YAKE rank. Keeps the suite fast and offline; the rerank path is

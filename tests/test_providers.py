@@ -295,16 +295,18 @@ def test_call_llm_structured_rate_limit_propagates_without_fallback(mock_sleep, 
 
     provider = OpenAICompatibleProvider(base_url="http://dummy", api_key="dummy", model="test-model")
     
-    # We expect the RateLimitError to propagate out of call_llm because it is raised on all 3 attempts
+    # We expect the RateLimitError to propagate out of call_llm once the 429 retry
+    # budget (_RATE_LIMIT_ATTEMPTS) is exhausted.
     import pytest
+    from silica.agent.llm import _RATE_LIMIT_ATTEMPTS
     with pytest.raises(openai.RateLimitError):
         provider.call_llm(
             messages=[{"role": "user", "content": "hi"}],
             response_schema=SchemaModel
         )
 
-    # Verifies it tried 3 times (with sleep) and never called chat.completions.create (non-structured fallback)
-    assert mock_client.beta.chat.completions.parse.call_count == 3
+    # Verifies it exhausted the 429 budget and never fell back to chat.completions.create.
+    assert mock_client.beta.chat.completions.parse.call_count == _RATE_LIMIT_ATTEMPTS
     assert mock_client.chat.completions.create.call_count == 0
-    assert mock_sleep.call_count == 2
+    assert mock_sleep.call_count == _RATE_LIMIT_ATTEMPTS - 1  # backoff between attempts
 

@@ -31,24 +31,48 @@ litellm.suppress_debug_info = True
 litellm.drop_params = True
 
 
+# Run-wide adaptive pacing. A 429 anywhere lifts a floor delay that is slept
+# before the *first* attempt of every later call this process makes, so we back
+# off an upstream rate limit instead of hammering it. Per-process = per-run for
+# the CLI; the interactive TUI keeps it for the session.
+# ponytail: no decay — one 429 slows the rest of the run. Add exponential decay
+# on clean calls if a recovered session feeling sluggish ever matters.
+_run_cooldown = 0.0
+_COOLDOWN_STEP = 2.0   # seconds added to the floor per 429
+_COOLDOWN_CAP = 20.0   # ceiling on the floor delay
+_RATE_LIMIT_ATTEMPTS = 6  # 429s get more tries than other transients (backoff to ~1min)
+
+
 def retry_transient(fn, exceptions: tuple, attempts: int = 3, base_delay: float = 1.0, jitter: float = 0.0):
     """Call fn(), retrying on transient exceptions with exponential backoff.
 
     Sleeps base_delay * 2**attempt (+ uniform jitter) between attempts and
     re-raises the last exception once attempts are exhausted. The single
     retry policy for every LLM call site (litellm and openai SDK alike).
+
+    Rate limits (HTTP 429) are treated specially: they get _RATE_LIMIT_ATTEMPTS
+    tries (an upstream limit clears on the order of seconds), and each one lifts
+    a run-wide cooldown paced before the next call so the whole run slows down
+    rather than repeatedly re-hitting the limit.
     """
-    for attempt in range(1, attempts + 1):
+    global _run_cooldown
+    ceiling = attempts
+    for attempt in range(1, max(attempts, _RATE_LIMIT_ATTEMPTS) + 1):
+        if attempt == 1 and _run_cooldown:
+            time.sleep(_run_cooldown)  # pace the start of every call once a 429 was seen
         try:
             return fn()
         except exceptions as e:
-            if attempt == attempts:
-                logger.error("Transient error, %d attempts exhausted: %s", attempts, e)
+            if getattr(e, "status_code", None) == 429:
+                _run_cooldown = min(_run_cooldown + _COOLDOWN_STEP, _COOLDOWN_CAP)
+                ceiling = _RATE_LIMIT_ATTEMPTS
+            if attempt >= ceiling:
+                logger.error("Transient error, %d attempts exhausted: %s", attempt, e)
                 raise
             delay = base_delay * (2 ** attempt) + (random.uniform(0, jitter) if jitter else 0.0)
             logger.warning(
                 "Transient error (attempt %d/%d): %s. Retrying in %.1fs...",
-                attempt, attempts, e, delay,
+                attempt, ceiling, e, delay,
             )
             time.sleep(delay)
 
