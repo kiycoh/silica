@@ -308,6 +308,8 @@ def _handle_direct_shortcut(raw_input: str, messages: list[dict]) -> bool:
         /map <nota> [--force]
         /find <query> [--k=N]
         /impact [<git-range>]
+        /path <noteA> <noteB>
+        /contested
         /undo [note-path]
     """
     from silica.tools import TOOLS
@@ -594,6 +596,68 @@ def _handle_direct_shortcut(raw_input: str, messages: list[dict]) -> bool:
             # escape() keeps the literal [status] bracket from being parsed as
             # rich markup (otherwise [todo] is swallowed as an unknown tag).
             CONSOLE.print(f"    {escape(f'[{status}] {note_path.stem}')}")
+        return True
+
+    if cmd == "/path":
+        from silica.kernel.mindmap import note_resolver, reading_path
+        try:
+            toks = shlex.split(raw_input.strip())[1:]  # honours quoted titles with spaces
+        except ValueError:
+            CONSOLE.print('  Unbalanced quotes. Usage: /path "<note A>" "<note B>"')
+            return True
+        endpoints = [t for t in toks if not t.startswith("-")]
+        if len(endpoints) != 2:
+            CONSOLE.print("  Usage: /path <noteA> <noteB>")
+            return True
+        resolve = note_resolver()
+        src, dst = resolve(endpoints[0]), resolve(endpoints[1])
+        for given, got in zip(endpoints, (src, dst)):
+            if got is None:
+                CONSOLE.print(f"  Note not found: '{given}'")
+        if src is None or dst is None:
+            return True
+        if src == dst:
+            CONSOLE.print("  Both resolve to the same note — nothing to walk.")
+            return True
+        path = reading_path(src, dst)
+        if path is None:
+            CONSOLE.print(
+                f"  No path between [bold]{src}[/] and [bold]{dst}[/] — "
+                "not connected (try /map on each to see its neighborhood)."
+            )
+            return True
+        CONSOLE.print(f"  Reading path — {len(path) - 1} step(s):")
+        for i, (node, leg) in enumerate(path):
+            if leg != "start":
+                CONSOLE.print(f"        [dim]↓ {leg}[/]")
+            CONSOLE.print(f"    {i + 1}. [bold]{node}[/]")
+        return True
+
+    if cmd == "/contested":
+        from silica.driver import DRIVER
+        from silica.kernel.contested import CONTESTED_KEY, CONTRADICTIONS_KEY
+        # ponytail: frontmatter scan of every note per call; index it if a
+        # 10k-note vault ever makes this command feel slow.
+        found: list[tuple[str, list[str]]] = []
+        for ref in DRIVER.list_files(""):
+            try:
+                props = DRIVER.props_of(ref.path)
+            except Exception:
+                continue  # attachments / unreadable frontmatter — not contested
+            if props and props.get(CONTESTED_KEY):
+                contras = [str(c) for c in (props.get(CONTRADICTIONS_KEY) or [])]
+                found.append((ref.path, contras))
+        if not found:
+            CONSOLE.print("  No contested notes — no unresolved contradictions.")
+            return True
+        CONSOLE.print(f"  {len(found)} contested note(s):")
+        for note_path, contras in sorted(found):
+            CONSOLE.print(f"  · [bold]{note_path}[/]")
+            for c in contras:
+                CONSOLE.print(f"      conflicts with: {c}")
+        CONSOLE.print(
+            "  Resolve by editing the note, then remove `contested: true` and its callout."
+        )
         return True
 
     if cmd == "/undo":

@@ -677,6 +677,66 @@ def resolve_note_path(note: str) -> str | None:
     return note_resolver()(note)
 
 
+def reading_path(
+    src: str, dst: str, *, graph: object = None, cooccur_store: object = None
+) -> list[tuple[str, str]] | None:
+    """Shortest reading path src → dst: BFS over wikilinks + latent cooccur edges.
+
+    Endpoints are resolved graph keys (vault-relative, with .md). Returns
+    [(path, leg), ...] where leg says how the node was reached from the
+    previous one ("start" | "wikilink" | "cooccur"); None when the two notes
+    are not connected. Read-only. Pass graph/cooccur_store to skip loading
+    the live vault (tests).
+    """
+    if graph is None:
+        from silica.driver import get_driver
+
+        _notes, _unresolved, g = get_driver().graph_data("")
+        graph = g.to_undirected(as_view=True) if hasattr(g, "to_undirected") else g
+    if cooccur_store is None:  # embed leg unused here — load only the cooccur half
+        try:
+            from silica.config import CONFIG
+            from silica.kernel.cooccurrence import get_cooccur_store
+
+            cs = get_cooccur_store(lang=CONFIG.cooccurrence_lang)
+            cooccur_store = cs if len(cs) > 0 else None
+        except Exception:
+            cooccur_store = None
+
+    def neighbors(u: str) -> list[tuple[str, str]]:
+        out: dict[str, str] = {}
+        if cooccur_store is not None:
+            # ponytail: note_edges_for is O(E) per node → BFS worst case O(V·E);
+            # fine at vault scale, precompute a two-way adjacency if it drags.
+            for nb in cooccur_store.note_edges_for(u):
+                out[nb + ".md"] = "cooccur"
+        if u in graph:
+            for nb in graph.neighbors(u):
+                out[nb] = "wikilink"  # wikilink wins when both legs share an edge
+        return sorted(out.items())
+
+    prev: dict[str, tuple[str | None, str]] = {src: (None, "start")}
+    q: deque[str] = deque([src])
+    while q:
+        u = q.popleft()
+        if u == dst:
+            break
+        for v, leg in neighbors(u):
+            if v not in prev:
+                prev[v] = (u, leg)
+                q.append(v)
+    if dst not in prev:
+        return None
+    steps: list[tuple[str, str]] = []
+    node: str | None = dst
+    while node is not None:
+        parent, leg = prev[node]
+        steps.append((node, leg))
+        node = parent
+    steps.reverse()
+    return steps
+
+
 def gather_materials(root: str, *, latent_k: int = 10) -> MapMaterials:
     """Collect wikilink graph, titles, global communities, and the latent leg."""
     from silica.driver import get_driver

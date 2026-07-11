@@ -204,6 +204,8 @@ The vault resolves like the REPL: `SILICA_VAULT` if set (add `-e SILICA_VAULT=/p
 | `/stale [--all]` | | List notes whose `documents:` sources changed structurally since `code_ref` (`--all` includes cosmetic body-only changes) |
 | `/impact [<range>]` | | Changed files → affected notes (documenting + 1-hop import neighbors); no range = uncommitted changes |
 | `/plans` | | List `plans/` notes grouped by `status:` |
+| `/path` | `<noteA> <noteB>` | Shortest reading path between two notes (wikilinks + co-occurrence) |
+| `/contested` | | List notes flagged `contested: true` with their unresolved contradictions |
 
 **System:** `/help` · `/model` · `/tools` · `/clear` · `/verbose` · `/thinking` · `/vault [path]` (show or switch the active vault for this session) · `/exit`
 
