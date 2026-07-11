@@ -50,8 +50,10 @@ def _render_skeleton(sk: codeast.ModuleSkeleton, root: Path) -> str:
             pkg = _package_of(mod, root)
             if pkg not in first_party:
                 first_party.append(pkg)
-        elif mod not in external:
-            external.append(mod)
+        else:
+            top = mod.split(".")[0].split("/")[0]
+            if top and top not in external:
+                external.append(top)
 
     lines: list[str] = ["## Imports", ""]
     if first_party:

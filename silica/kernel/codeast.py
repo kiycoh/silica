@@ -46,6 +46,7 @@ class ModuleSkeleton:
     language: str              # EXTENSION_MAP value
     imports: list[str] = field(default_factory=list)   # module strings, duplicates possible
     symbols: list[Symbol] = field(default_factory=list)  # document order
+    parse_error: bool = False  # tree-sitter setup failed — consumers must not read "empty" as "no structure"
 
 
 def language_for(path: str | Path) -> str | None:
@@ -61,7 +62,7 @@ def extract_skeleton(source: str, language: str, path: str = "") -> ModuleSkelet
         from tree_sitter_language_pack import get_parser
         tree = get_parser(language).parse_bytes(source.encode("utf-8"))
     except Exception:
-        return ModuleSkeleton(path=path, language=language)
+        return ModuleSkeleton(path=path, language=language, parse_error=True)
 
     src = source.encode("utf-8")
     imports: list[str] = []
@@ -135,8 +136,26 @@ def _py_extract(node, src: bytes, imports: list[str], symbols: list[Symbol]) -> 
         return
     if node.kind() == "import_from_statement":
         module = node.child_by_field_name("module_name")
-        if module is not None:
-            imports.append(_text(module, src))
+        if module is None:
+            return
+        base = _text(module, src)
+        names: list[str] = []
+        mstart = module.start_byte()
+        for i in range(node.named_child_count()):
+            child = node.named_child(i)
+            if child.start_byte() == mstart:
+                continue  # the module_name node itself
+            if child.kind() == "dotted_name":
+                names.append(_text(child, src))
+            elif child.kind() == "aliased_import":
+                name = child.child_by_field_name("name")
+                if name is not None:
+                    names.append(_text(name, src))
+        if names:
+            sep = "" if base.endswith(".") else "."
+            imports.extend(f"{base}{sep}{n}" for n in names)
+        else:
+            imports.append(base)  # `from X import *` — bare module
         return
     if node.kind() == "function_definition":
         name = node.child_by_field_name("name")
@@ -211,3 +230,38 @@ def _ts_extract(node, src: bytes, imports: list[str], symbols: list[Symbol]) -> 
                     signature=_signature(child, src),
                     parent=cls_name,
                 ))
+
+
+# ---------------------------------------------------------------------------
+# structural diff (COSMETIC vs STRUCTURAL, spec-code-lane §2)
+# ---------------------------------------------------------------------------
+
+def diff_skeletons(old: ModuleSkeleton, new: ModuleSkeleton) -> list[str]:
+    """Structural differences old→new, one human-readable line each; empty
+    list = same shape. Compares import sets, symbol sets (kind, name, parent)
+    and whitespace-collapsed signatures — the COSMETIC/STRUCTURAL verdict
+    for git-native staleness classification."""
+    out: list[str] = []
+    old_imp, new_imp = set(old.imports), set(new.imports)
+    out.extend(f"+ import {m}" for m in sorted(new_imp - old_imp))
+    out.extend(f"- import {m}" for m in sorted(old_imp - new_imp))
+
+    def _key(s: Symbol) -> tuple[str, str, str]:
+        return (s.kind, s.name, s.parent)
+
+    def _label(k: tuple[str, str, str]) -> str:
+        kind, name, parent = k
+        return f"{kind} {parent + '.' if parent else ''}{name}"
+
+    def _qual(k: tuple[str, str, str]) -> str:
+        _, name, parent = k
+        return f"{parent + '.' if parent else ''}{name}"
+
+    old_syms = {_key(s): s for s in old.symbols}
+    new_syms = {_key(s): s for s in new.symbols}
+    out.extend(f"+ {_label(k)}" for k in sorted(new_syms.keys() - old_syms.keys()))
+    out.extend(f"- {_label(k)}" for k in sorted(old_syms.keys() - new_syms.keys()))
+    for k in sorted(old_syms.keys() & new_syms.keys()):
+        if old_syms[k].signature != new_syms[k].signature:
+            out.append(f"signature changed: {_qual(k)}")
+    return out

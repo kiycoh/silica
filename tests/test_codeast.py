@@ -61,8 +61,8 @@ def test_python_imports():
     assert isinstance(sk, ModuleSkeleton)
     assert "os" in sk.imports
     assert "silica.kernel.gitstate" in sk.imports
-    assert "pathlib" in sk.imports
-    assert "silica.kernel" in sk.imports
+    assert "pathlib.Path" in sk.imports               # was: "pathlib"
+    assert "silica.kernel.frontmatter" in sk.imports  # was: "silica.kernel"
 
 
 def test_python_symbols_signatures_and_docstrings():
@@ -133,3 +133,50 @@ def test_javascript_smoke():
     sk = extract_skeleton('import x from "./x";\nfunction go(a) {\n  return a;\n}\n', "javascript", path="a.js")
     assert "./x" in sk.imports
     assert any(s.name == "go" and s.kind == "function" for s in sk.symbols)
+
+
+FROM_IMPORTS = '''\
+from silica.kernel import frontmatter, gitstate
+from pathlib import Path
+from .paths import atomic_write_bytes
+from . import helpers
+from os import *
+'''
+
+
+def test_from_import_records_module_dot_name():
+    sk = extract_skeleton(FROM_IMPORTS, "python", path="src/m.py")
+    assert "silica.kernel.frontmatter" in sk.imports
+    assert "silica.kernel.gitstate" in sk.imports
+    assert "pathlib.Path" in sk.imports
+    assert ".paths.atomic_write_bytes" in sk.imports
+    assert ".helpers" in sk.imports        # `from . import helpers`
+    assert "os" in sk.imports              # wildcard falls back to bare module
+
+
+def test_parse_error_flag():
+    ok = extract_skeleton("def hi(): pass", "python", path="x.py")
+    assert ok.parse_error is False
+    bad = extract_skeleton("def hi(): pass", "not-a-language", path="x.py")
+    assert bad.parse_error is True
+
+
+def test_diff_skeletons_empty_for_body_only_change():
+    old = extract_skeleton("def hi(name: str) -> str:\n    return name\n", "python")
+    new = extract_skeleton("def hi(name: str) -> str:\n    x = name.upper()\n    return x\n", "python")
+    from silica.kernel.codeast import diff_skeletons
+    assert diff_skeletons(old, new) == []
+
+
+def test_diff_skeletons_reports_structure():
+    from silica.kernel.codeast import diff_skeletons
+    old = extract_skeleton(
+        "import os\n\nclass A:\n    def run(self) -> None: ...\n\ndef gone(): ...\n", "python")
+    new = extract_skeleton(
+        "import sys\n\nclass A:\n    def run(self, fast: bool) -> None: ...\n\ndef added(): ...\n", "python")
+    diff = diff_skeletons(old, new)
+    assert "+ import sys" in diff
+    assert "- import os" in diff
+    assert "+ function added" in diff
+    assert "- function gone" in diff
+    assert "signature changed: A.run" in diff
