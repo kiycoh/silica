@@ -39,6 +39,46 @@ def test_last_active_run_ignores_reverted(tmp_path):
     assert store.last_active_run() is None
 
 
+def test_write_over_existing_note_yields_restore_inverse(tmp_vault):
+    """A write op whose path already holds a note must undo by RESTORING it,
+    not deleting it — else /revert turns an accidental clobber into data loss."""
+    from silica.tools.wrapped import build_txn
+    from silica.kernel.ops import Op, OpType
+
+    path = tmp_vault.note("Ideas/Note.md", "PRE-EXISTING body")
+    op = Op(op=OpType.write, heading="Note", source_basename="s.md",
+            path=path, hub="Hub", snippet="new body")
+    invs = [i for i in build_txn([op]).inverses if i.path == path]
+    assert len(invs) == 1
+    assert invs[0].kind == InverseOpKind.restore_version
+    assert invs[0].prior_content == "PRE-EXISTING body"
+
+
+def test_write_new_note_yields_delete_inverse(tmp_vault):
+    """A write to a genuinely new path still undoes by deletion (unchanged)."""
+    import os
+    from silica.tools.wrapped import build_txn
+    from silica.kernel.ops import Op, OpType
+
+    seed = tmp_vault.note("seed.md", "seed")            # materialise the vault
+    new_path = os.path.join(os.path.dirname(seed), "Fresh.md")  # not created
+    op = Op(op=OpType.write, heading="Fresh", source_basename="s.md",
+            path=new_path, hub="Hub", snippet="body")
+    invs = [i for i in build_txn([op]).inverses if i.path == new_path]
+    assert len(invs) == 1
+    assert invs[0].kind == InverseOpKind.delete_created
+
+
+def test_corrupt_journal_is_quarantined_and_usable(tmp_path):
+    """A corrupt db must not brick startup: quarantine it and start fresh."""
+    dbpath = tmp_path / "j.db"
+    dbpath.write_bytes(b"not a sqlite database at all -- garbage bytes")
+    store = UndoJournalStore(dbpath)          # must not raise
+    run_id = store.start_run("inbox/x.md")    # must be usable
+    assert run_id
+    assert dbpath.with_suffix(".corrupt").exists()
+
+
 def test_revert_restores_unmodified_notes_and_skips_modified(tmp_vault, tmp_path):
     ada = tmp_vault.note("People/Ada.md", "PATCHED ada")
     grace = tmp_vault.note("People/Grace.md", "PATCHED grace")

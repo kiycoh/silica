@@ -4,12 +4,16 @@
 # silica/kernel/undo_journal.py
 from __future__ import annotations
 
+import logging
 import sqlite3
+import threading
 import time
 import uuid
 from pathlib import Path
 
 from silica.kernel.ops import InverseOp, InverseOpKind
+
+logger = logging.getLogger(__name__)
 
 _DEFAULT_JOURNAL_PATH = Path.home() / ".silica" / "undo_journal.db"
 
@@ -18,6 +22,27 @@ class UndoJournalStore:
     def __init__(self, path: Path | str | None = None):
         self._path = Path(path) if path else _DEFAULT_JOURNAL_PATH
         self._path.parent.mkdir(parents=True, exist_ok=True)
+        # ponytail: one lock over the shared sqlite conn (check_same_thread=False).
+        # Journal writes are rare, so serialising them is free and stops the GUI's
+        # to_thread worker from corrupting the db on a concurrent write.
+        self._lock = threading.Lock()
+        try:
+            self._connect()
+        except sqlite3.DatabaseError as e:
+            # A corrupt journal must not brick startup or the /revert of future
+            # runs. Quarantine it and start fresh; the durable backstop for older
+            # history is git (SILICA_GIT_COMMIT=auto), not this file.
+            logger.warning(
+                "undo journal at %s is corrupt (%s); quarantining and starting fresh",
+                self._path, e,
+            )
+            try:
+                self._path.replace(self._path.with_suffix(".corrupt"))
+            except OSError:
+                pass
+            self._connect()
+
+    def _connect(self) -> None:
         self._conn = sqlite3.connect(str(self._path), check_same_thread=False)
         self._conn.row_factory = sqlite3.Row
         self._init_schema()
@@ -47,38 +72,42 @@ class UndoJournalStore:
 
     def start_run(self, source: str | None = None) -> str:
         run_id = uuid.uuid4().hex
-        self._conn.execute(
-            "INSERT INTO runs (run_id, source, started_at) VALUES (?, ?, ?)",
-            (run_id, source, time.time()),
-        )
-        self._conn.commit()
+        with self._lock:
+            self._conn.execute(
+                "INSERT INTO runs (run_id, source, started_at) VALUES (?, ?, ?)",
+                (run_id, source, time.time()),
+            )
+            self._conn.commit()
         return run_id
 
     def record(self, run_id: str, inverse: InverseOp, post_hash: str | None) -> None:
-        self._conn.execute(
-            "INSERT INTO inverses (run_id, path, kind, version, prior_content, post_hash) "
-            "VALUES (?, ?, ?, ?, ?, ?)",
-            (run_id, inverse.path, inverse.kind.value, inverse.version,
-             inverse.prior_content, post_hash),
-        )
-        self._conn.commit()
+        with self._lock:
+            self._conn.execute(
+                "INSERT INTO inverses (run_id, path, kind, version, prior_content, post_hash) "
+                "VALUES (?, ?, ?, ?, ?, ?)",
+                (run_id, inverse.path, inverse.kind.value, inverse.version,
+                 inverse.prior_content, post_hash),
+            )
+            self._conn.commit()
 
     def last_active_run(self) -> str | None:
-        row = self._conn.execute(
-            """
-            SELECT r.run_id FROM runs r WHERE r.reverted_at IS NULL
-            AND EXISTS (SELECT 1 FROM inverses i WHERE i.run_id = r.run_id)
-            ORDER BY r.started_at DESC, r.rowid DESC LIMIT 1
-            """
-        ).fetchone()
+        with self._lock:
+            row = self._conn.execute(
+                """
+                SELECT r.run_id FROM runs r WHERE r.reverted_at IS NULL
+                AND EXISTS (SELECT 1 FROM inverses i WHERE i.run_id = r.run_id)
+                ORDER BY r.started_at DESC, r.rowid DESC LIMIT 1
+                """
+            ).fetchone()
         return row["run_id"] if row else None
 
     def inverses_for(self, run_id: str) -> list[tuple[InverseOp, str | None]]:
-        rows = self._conn.execute(
-            "SELECT path, kind, version, prior_content, post_hash "
-            "FROM inverses WHERE run_id = ? ORDER BY id DESC",
-            (run_id,),
-        ).fetchall()
+        with self._lock:
+            rows = self._conn.execute(
+                "SELECT path, kind, version, prior_content, post_hash "
+                "FROM inverses WHERE run_id = ? ORDER BY id DESC",
+                (run_id,),
+            ).fetchall()
         out: list[tuple[InverseOp, str | None]] = []
         for r in rows:
             inv = InverseOp(
@@ -89,10 +118,11 @@ class UndoJournalStore:
         return out
 
     def mark_reverted(self, run_id: str) -> None:
-        self._conn.execute(
-            "UPDATE runs SET reverted_at = ? WHERE run_id = ?", (time.time(), run_id)
-        )
-        self._conn.commit()
+        with self._lock:
+            self._conn.execute(
+                "UPDATE runs SET reverted_at = ? WHERE run_id = ?", (time.time(), run_id)
+            )
+            self._conn.commit()
 
 
 _store: UndoJournalStore | None = None

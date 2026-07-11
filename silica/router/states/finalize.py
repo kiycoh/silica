@@ -285,6 +285,7 @@ def handle_cleanup(fsm: "InjectorFSM") -> None:
     # Persist this run's inverses for /revert, with final content hash.
     if fsm._undo_run_id and fsm._run_inverses:
         import hashlib
+        from silica.kernel.ops import InverseOpKind
         from silica.kernel.undo_journal import get_undo_journal
         journal = get_undo_journal()
         for path, inv, _ in fsm._run_inverses:
@@ -293,6 +294,12 @@ def handle_cleanup(fsm: "InjectorFSM") -> None:
                 post_hash = hashlib.sha256((post or "").encode("utf-8")).hexdigest()
             except Exception:
                 post_hash = None
+                if inv.kind != InverseOpKind.recreate_deleted:
+                    # Note should exist after this write; without its hash the
+                    # /revert "modified since inject" guard can't protect it.
+                    logger.warning(
+                        "finalize: could not hash %s post-write; /revert guard "
+                        "disabled for it", path)
             journal.record(fsm._undo_run_id, inv, post_hash)
         fsm._run_inverses.clear()
 

@@ -100,7 +100,21 @@ def build_txn(ops_data: list[Op] | list[dict]) -> Txn:
             continue
 
         if op_type == OpType.write:
-            inverses.append(InverseOp(kind=InverseOpKind.delete_created, path=path))
+            # write's contract is "path MUST NOT exist", but nothing enforces it
+            # at the FS boundary (DRIVER.create overwrites verbatim). If the path
+            # already holds a note, undo must RESTORE it, not delete it — else
+            # /revert turns an accidental clobber into data loss. Snapshot the
+            # prior body and pick the inverse accordingly.
+            try:
+                prior = DRIVER.read_note(path).content
+            except Exception:
+                prior = None
+            if prior:
+                inverses.append(InverseOp(
+                    kind=InverseOpKind.restore_version, path=path, prior_content=prior,
+                ))
+            else:
+                inverses.append(InverseOp(kind=InverseOpKind.delete_created, path=path))
         elif op_type in (OpType.patch, OpType.overwrite):
             name = path.rsplit("/", 1)[-1].removesuffix(".md")
             ref = NoteRef(name=name, path=path)
@@ -120,7 +134,12 @@ def build_txn(ops_data: list[Op] | list[dict]) -> Txn:
             try:
                 nc = DRIVER.read_note(ref)
                 prior_content = nc.content
-            except Exception:
+            except Exception as e:
+                # Can't snapshot the body we're about to delete → /revert will be
+                # unable to recreate it. Surface it now, not silently at revert.
+                logger.warning(
+                    "build_txn: cannot snapshot %s before delete; /revert won't "
+                    "recreate it: %s", path, e)
                 prior_content = None
             inverses.append(InverseOp(
                 kind=InverseOpKind.recreate_deleted,
