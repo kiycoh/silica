@@ -164,6 +164,12 @@ COMMANDS: tuple[Command, ...] = (
         summary="list notes whose documents: sources changed structurally (--all includes cosmetic)",
     ),
     Command(
+        name="/impact",
+        group="direct",
+        usage="[<git-range>]",
+        summary="changed files → affected notes (documenting + 1-hop import neighbors); no range = uncommitted changes",
+    ),
+    Command(
         name="/plans",
         group="direct",
         usage="",

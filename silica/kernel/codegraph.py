@@ -280,3 +280,55 @@ def code_vocabulary(graph: CodeGraph, cap: int = 30) -> list[str]:
             if n and not n.startswith("_"):
                 names.append(n)
     return list(dict.fromkeys(names))
+
+
+@dataclass(frozen=True)
+class ImpactEntry:
+    path: str
+    change_level: str
+    details: list[str]
+    fan_in: int
+    notes: list[str]            # notes documenting `path`
+    neighbor_notes: list[str]   # notes documenting 1-hop import neighbors
+
+
+def compute_impact(vault: Path | str, range_spec: str | None = None) -> list[ImpactEntry] | None:
+    """Changed supported files → change_level + documenting notes + 1-hop
+    import-neighbor notes. None when the vault is not in a git repo (the
+    consumer reports "no repo"). Zero LLM; sorted (structural, fan-in desc)."""
+    from silica.kernel import codedocs
+
+    root = gitstate.find_repo_root(Path(vault))
+    if root is None:
+        return None
+    changed = gitstate.changed_paths(root, range_spec) or []
+    graph = load_codegraph(vault)
+    docmap: dict[str, list[str]] = {}
+    for note_path, data, _ in codedocs.iter_documenting_notes(vault):
+        for p in codedocs.documents_of(data):
+            docmap.setdefault(p, []).append(note_path)
+
+    if range_spec and ".." in range_spec:
+        base_ref, _, new_ref = range_spec.partition("..")
+        new_ref = new_ref.lstrip(".") or None   # tolerate A...B
+    else:
+        base_ref, new_ref = (range_spec or gitstate.head_ref(root) or ""), None
+
+    entries: list[ImpactEntry] = []
+    for path in changed:
+        if codeast.language_for(path) is None and not path.lower().endswith(".ipynb"):
+            continue  # non-code files are outside the code lane
+        level, details = codedocs.classify_change(root, base_ref, path, new_ref=new_ref)
+        neighbors: set[str] = set()
+        fan = 0
+        if graph is not None:
+            entry = graph.files.get(path, {})
+            neighbors = set(entry.get("imports", [])) | set(graph.importers(path))
+            fan = graph.fan_in(path)
+        neighbor_notes = sorted({n for nb in neighbors for n in docmap.get(nb, [])})
+        entries.append(ImpactEntry(
+            path=path, change_level=level, details=details, fan_in=fan,
+            notes=sorted(docmap.get(path, [])), neighbor_notes=neighbor_notes,
+        ))
+    entries.sort(key=lambda e: (0 if e.change_level == "structural" else 1, -e.fan_in, e.path))
+    return entries

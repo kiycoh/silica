@@ -307,6 +307,7 @@ def _handle_direct_shortcut(raw_input: str, messages: list[dict]) -> bool:
         /graph [output.html] [folder]
         /map <nota> [--force]
         /find <query> [--k=N]
+        /impact [<git-range>]
         /undo [note-path]
     """
     from silica.tools import TOOLS
@@ -544,6 +545,32 @@ def _handle_direct_shortcut(raw_input: str, messages: list[dict]) -> bool:
                 CONSOLE.print("  No stale docs — every documents: note matches its code_ref.")
             return True
         CONSOLE.print("  Run [bold]/ingest <path>[/] to regenerate, or edit and re-badge.")
+        return True
+
+    if cmd == "/impact":
+        from pathlib import Path
+        from silica.kernel.codegraph import compute_impact
+        vault = CONFIG.vault_path
+        if not vault:
+            CONSOLE.print("  No vault configured; /impact needs a vault inside a git repo.")
+            return True
+        range_spec = parts[1] if len(parts) > 1 else None
+        entries = compute_impact(Path(vault), range_spec)
+        if entries is None:
+            CONSOLE.print("  No git repo — impact analysis unavailable.")
+            return True
+        if not entries:
+            scope = range_spec or "working tree vs HEAD"
+            CONSOLE.print(f"  No supported source files changed ({scope}).")
+            return True
+        for e in entries:
+            CONSOLE.print(f"  · [bold]{e.path}[/] — {e.change_level} (fan-in {e.fan_in})")
+            for d in e.details[:4]:
+                CONSOLE.print(f"      {d}")
+            if e.notes:
+                CONSOLE.print(f"      documents: {', '.join(e.notes)}")
+            if e.neighbor_notes:
+                CONSOLE.print(f"      1-hop neighbors documented by: {', '.join(e.neighbor_notes)}")
         return True
 
     if cmd == "/plans":

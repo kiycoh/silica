@@ -202,6 +202,7 @@ The vault resolves like the REPL: `SILICA_VAULT` if set (add `-e SILICA_VAULT=/p
 | `/refine` | `[folder]` | Enrich and normalize notes (sub-agent) |
 | `/enrich` | `[folder]` | Enrich note semantics (sub-agent) |
 | `/stale [--all]` | | List notes whose `documents:` sources changed structurally since `code_ref` (`--all` includes cosmetic body-only changes) |
+| `/impact [<range>]` | | Changed files → affected notes (documenting + 1-hop import neighbors); no range = uncommitted changes |
 | `/plans` | | List `plans/` notes grouped by `status:` |
 
 **System:** `/help` · `/model` · `/tools` · `/clear` · `/verbose` · `/thinking` · `/vault [path]` (show or switch the active vault for this session) · `/exit`
