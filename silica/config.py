@@ -66,7 +66,7 @@ class SilicaConfig:
             return self._provider
         if self.model and "/" in self.model:
             prefix = self.model.split("/", 1)[0]
-            if prefix in ("openrouter", "lmstudio"):
+            if prefix in ("openrouter", "lmstudio", "ollama"):
                 return prefix
         return "lmstudio"
 

@@ -1108,12 +1108,15 @@ def _model_configured() -> bool:
 def _resolve_context_budget() -> None:
     """Size the REPL context meter to the live model's window.
 
-    SILICA_MAX_CONTEXT, when set, is an explicit operator pin and wins;
-    otherwise ask the provider (LM Studio reports the loaded window, OpenRouter
-    the model's context_length) and fall back to the static default when
-    unreachable.
+    SILICA_MAX_CONTEXT pins the window for LOCAL providers (LM Studio, Ollama),
+    whose served window silica can't reliably introspect. Hosted providers
+    (OpenRouter) report their own context_length, so the pin is ignored there
+    and the provider's value always wins. Falls back to the static default when
+    the provider is unreachable.
     """
-    if os.getenv("SILICA_MAX_CONTEXT") or not _model_configured():
+    if not _model_configured():
+        return
+    if os.getenv("SILICA_MAX_CONTEXT") and CONFIG.provider != "openrouter":
         return
     from silica.agent.providers import model_limits
     window, _ = model_limits(CONFIG.provider, CONFIG.model)

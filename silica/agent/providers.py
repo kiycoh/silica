@@ -21,6 +21,10 @@ PROVIDER_PRESETS = {
         "base_url": "http://localhost:1234/v1",
         "api_key": "lm-studio"
     },
+    "ollama": {
+        "base_url": "http://localhost:11434/v1",
+        "api_key": "ollama"  # Ollama ignores it; the OpenAI SDK demands non-empty.
+    },
     "openrouter": {
         "base_url": "https://openrouter.ai/api/v1",
         "api_key_env": "OPENROUTER_API_KEY"
@@ -41,6 +45,9 @@ def model_limits(provider: str, model: str) -> tuple[int, int]:
     lmstudio   → GET {base}/api/v0/models: `loaded_context_length` (the window
                  the model is loaded with RIGHT NOW, often below its max) with
                  `max_context_length` as fallback. No output cap.
+    ollama     → POST {base}/api/show: `num_ctx` from the Modelfile parameters
+                 (the loaded window) if pinned, else the trained max from
+                 `model_info["<arch>.context_length"]`. No output cap.
     openrouter → GET /api/v1/models: `context_length` plus the top provider's
                  `max_completion_tokens` (often far below the window — e.g.
                  qwen3-8b: 131k ctx, 8k out).
@@ -48,6 +55,22 @@ def model_limits(provider: str, model: str) -> tuple[int, int]:
     (0, 0) means unknown/unreachable: callers keep their static defaults.
     """
     try:
+        if provider == "ollama":
+            base = PROVIDER_PRESETS["ollama"]["base_url"].removesuffix("/v1")
+            wanted = model.removeprefix("ollama/")
+            info = httpx.post(f"{base}/api/show", json={"model": wanted}, timeout=5.0).json()
+            # Prefer num_ctx if the Modelfile pins it (the window actually loaded).
+            # ponytail: Ollama's *default* num_ctx (~4096) isn't reported in /api/show,
+            # so an unpinned model reports its trained max here — cap it with
+            # SILICA_MAX_CONTEXT or `PARAMETER num_ctx` if that overshoots the load.
+            params = info.get("parameters") or ""
+            num_ctx = next((int(f[1]) for p in params.splitlines()
+                            if (f := p.split())[:1] == ["num_ctx"] and len(f) > 1), 0)
+            mi = info.get("model_info") or {}
+            arch = mi.get("general.architecture", "")
+            max_ctx = mi.get(f"{arch}.context_length") or next(
+                (v for k, v in mi.items() if k.endswith(".context_length")), 0)
+            return int(num_ctx or max_ctx or 0), 0
         if provider == "lmstudio":
             base = PROVIDER_PRESETS["lmstudio"]["base_url"].removesuffix("/v1")
             data = httpx.get(f"{base}/api/v0/models", timeout=5.0).json()["data"]
@@ -395,9 +418,9 @@ def get_provider(config: Any, role: str = "router") -> OpenAICompatibleProvider:
     if role == "worker":
         api_key = getattr(config, "worker_api_key", None) or api_key
 
-    if provider_name == "openrouter" and model_name.startswith("openrouter/"):
-        model_name = model_name.removeprefix("openrouter/")
-    elif provider_name == "lmstudio" and model_name.startswith("lmstudio/"):
-        model_name = model_name.removeprefix("lmstudio/")
+    # Strip the preset prefix (openrouter/lmstudio/ollama) — the OpenAI-compatible
+    # endpoint wants the bare model id. No-op when the model carries no prefix.
+    # For openrouter this drops only the leading "openrouter/", keeping "vendor/model".
+    model_name = model_name.removeprefix(f"{provider_name}/")
 
     return OpenAICompatibleProvider(base_url=base_url, api_key=api_key, model=model_name)
