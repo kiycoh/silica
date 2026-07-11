@@ -31,6 +31,8 @@ dependencies = [
   "tree-sitter-language-pack",
   "yake>=0.7.3",
   "scipy>=1.17.1",
+  "mdit-py-plugins>=0.6.1",
+  "latex2mathml>=3.81.0",
 ]
 
 [project.optional-dependencies]
@@ -42,6 +44,8 @@ dev = ["pytest>=8.0", "mypy>=1.10", "import-linter>=2.0"]
 connect = [
     "websockets>=16.0",
 ]
+# Opt-in stdio MCP server (`silica mcp`) — Silica as vault memory for MCP clients:
+mcp = ["mcp>=1.0"]
 
 [project.scripts]
 silica = "silica.cli:main"
