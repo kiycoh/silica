@@ -95,6 +95,28 @@ def test_empty_index_returns_refresh_hint(tmp_path, monkeypatch):
     assert "error" in out and "refresh" in out["error"].lower()
 
 
+def test_unresolved_note_with_no_neighbors_hints_resolution(tmp_path, monkeypatch):
+    # Name doesn't resolve AND the raw string isn't a store key -> empty results.
+    # The hint must point at resolution, not the index.
+    from silica.tools.graph import silica_related
+    _wire(monkeypatch, tmp_path, names={})       # nothing resolves
+
+    out = silica_related("Zzz", k=5)
+    assert out["results"] == []
+    assert "did not resolve" in out["hint"]
+
+
+def test_empty_embed_but_isolated_note_hints_embed_refresh(tmp_path, monkeypatch):
+    # Embed index empty (co-occurrence only); the resolved note has no cooccur
+    # neighbors -> empty results with a hint to build the embedding index.
+    from silica.tools.graph import silica_related
+    _wire(monkeypatch, tmp_path, names={"Gamma": "C"}, embed=False)  # C is cooccur-disjoint
+
+    out = silica_related("Gamma", k=5)
+    assert out["results"] == []
+    assert "embedding index empty" in out["hint"]
+
+
 if __name__ == "__main__":
     import sys
     import pytest

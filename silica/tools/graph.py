@@ -369,8 +369,10 @@ def silica_related(note: str, k: int = 5) -> dict[str, Any]:
     # _norm_path here — its lowercasing misses the case-preserving stored keys.
     try:
         query_path = DRIVER.read_note(note).ref.path
+        resolved = True
     except Exception:
         query_path = note  # unresolved: treat the input itself as a path
+        resolved = False
     query_path = cooccur_key(query_path)
 
     embed_store = get_store()
@@ -384,13 +386,20 @@ def silica_related(note: str, k: int = 5) -> dict[str, Any]:
         return {"note": note, "error": "No index available. Run silica_embed_refresh or silica_cooccurrence_refresh first."}
 
     results = related_notes(query_path, embed_store=embed_store, cooccur_store=cooccur_store, k=k)
-    return {
+    out: dict[str, Any] = {
         "note": note,
         "results": [
             {"path": r.path, "name": r.name, "score": round(r.score, 4), "evidence": r.evidence}
             for r in results
         ],
     }
+    if not results:
+        # Empty is ambiguous — say why so the caller acts instead of guessing.
+        if not resolved:
+            out["hint"] = f"note '{note}' did not resolve to a vault note — check the name/path."
+        elif len(embed_store) == 0:
+            out["hint"] = "embedding index empty — co-occurrence only. Run silica_embed_refresh for semantic neighbors."
+    return out
 
 
 class EmbedRefreshArgs(BaseModel):
