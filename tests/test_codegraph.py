@@ -167,3 +167,15 @@ def test_malformed_notebook_gets_parse_error_entry(tmp_path):
     g = codegraph.build_codegraph(tmp_path)  # build never aborts (spec §1)
     assert g.files["bad.ipynb"]["parse_error"] is True
     assert g.files["bad.ipynb"]["symbols"] == []
+
+
+def test_code_vocabulary_top_fan_in(tmp_path):
+    _init_repo(tmp_path)
+    _seed_mini_repo(tmp_path)
+    g = codegraph.build_codegraph(tmp_path)
+    vocab = codegraph.code_vocabulary(g, cap=2)
+    # top-2 by fan-in: pkg/paths.py and pkg/embed.py (1 importer each, path tiebreak)
+    assert "paths" in vocab and "norm" in vocab        # module stem + symbol
+    assert "embed" in vocab and "Embedder" in vocab
+    assert "__init__" not in vocab                      # noise stems excluded
+    assert vocab == list(dict.fromkeys(vocab))          # deduped, stable order

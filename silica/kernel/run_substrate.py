@@ -171,7 +171,17 @@ def build_substrate(
         try:
             vocab_store = cooccur_store or get_cooccur_store(lang=CONFIG.cooccurrence_lang)
             stems = vocab_store.top_stems(20) if len(vocab_store) else []
-            if stems or hub_names:
+            # Code names (spec-code-lane §4a): canonical spellings from the
+            # codegraph, read directly at build time — no store of their own.
+            code_names: list[str] = []
+            try:
+                from silica.kernel.codegraph import code_vocabulary, load_codegraph
+                cg = load_codegraph(CONFIG.vault_path) if CONFIG.vault_path else None
+                if cg is not None:
+                    code_names = code_vocabulary(cg)
+            except Exception as _cg_e:
+                logger.debug("build_substrate: code vocabulary failed (non-fatal): %s", _cg_e)
+            if stems or hub_names or code_names:
                 vocab_lines.append("## Vault vocabulary")
                 vocab_lines.append(
                     "Preferred existing terms (reuse these instead of coining synonyms):"
@@ -180,6 +190,8 @@ def build_substrate(
                     vocab_lines.append(", ".join(stems)[:600])  # hard token-budget cap
                 if hub_names:
                     vocab_lines.append("Hub notes: " + ", ".join(sorted(set(hub_names))))
+                if code_names:
+                    vocab_lines.append("Code names: " + ", ".join(code_names)[:600])
         except Exception as _voc_e:
             logger.debug("build_substrate: vocabulary failed (non-fatal): %s", _voc_e)
             vocab_lines = []

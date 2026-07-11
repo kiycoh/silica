@@ -254,3 +254,29 @@ def load_codegraph(vault: Path | str) -> CodeGraph | None:
     graph = build_codegraph(root)
     _paths.atomic_write_bytes(sp, _serialize(graph))
     return graph
+
+
+def code_vocabulary(graph: CodeGraph, cap: int = 30) -> list[str]:
+    """Canonical code spellings for the 'Vault vocabulary' substrate section:
+    module stems + public symbol names from the top-`cap` files by fan-in.
+    Names only, never edges — the vocabulary channel is one of the two
+    sanctioned structural→semantic contact points (spec §4a). The effect:
+    the distiller reuses the canonical grafia (InjectorFSM, not injector-fsm)
+    so co-occurrence latches onto it."""
+    from collections import Counter
+
+    fan: Counter[str] = Counter()
+    for entry in graph.files.values():
+        for target in entry.get("imports", []):
+            fan[target] += 1
+    top = sorted(graph.files.keys(), key=lambda p: (-fan[p], p))[:cap]
+    names: list[str] = []
+    for p in top:
+        stem = p.rsplit("/", 1)[-1].rsplit(".", 1)[0]
+        if stem and stem != "__init__":
+            names.append(stem)
+        for s in graph.files[p].get("symbols", []):
+            n = s.get("name", "")
+            if n and not n.startswith("_"):
+                names.append(n)
+    return list(dict.fromkeys(names))
