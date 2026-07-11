@@ -105,6 +105,13 @@ class SourceDrift:         # AUTHORITATIVE — derived from <vault>/provenance.j
 
 
 @dataclass
+class CodeCoverage:        # AUTHORITATIVE — derived codegraph vs documents: frontmatter
+    documented: int        # supported files documented by at least one note
+    total: int             # supported files in the codegraph index
+    undocumented: list[list] = field(default_factory=list)  # [path, fan_in], fan-in desc
+
+
+@dataclass
 class VaultReport:
     generated_at: str
     scope: str
@@ -126,3 +133,4 @@ class VaultReport:
     contested: list[ContestedNote] = field(default_factory=list)
     source_drift: list[SourceDrift] = field(default_factory=list)
     pagerank_map: dict[str, float] = field(default_factory=dict)  # all nodes: vault-relative path (no .md) → pagerank
+    code_coverage: CodeCoverage | None = None

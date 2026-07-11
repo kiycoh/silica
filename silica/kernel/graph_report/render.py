@@ -257,6 +257,16 @@ def to_markdown(r: VaultReport, title: str = "Silica Vault Report") -> str:
         for h in r.missing_hubs:
             lines.append(f"| {h.concept} | {h.centrality} |")
 
+    if r.code_coverage:
+        cc = r.code_coverage
+        add("\n## Code Coverage _(codegraph — supported files documented by a note)_")
+        add(f"**{cc.documented}/{cc.total}** supported source files are documented.")
+        if cc.undocumented:
+            _fold(add, "todo", f"{len(cc.undocumented)} undocumented files (by fan-in)",
+                  cc.undocumented, lambda u: f"`{u[0]}` — {u[1]} importer(s)")
+        else:
+            add("")
+
     if r.attention_candidates:
         add("\n## Attention Candidates _(idle × weakly-linked — not authoritative)_")
         lines.append("| Note | Idle (days) | Links | Score |")

@@ -146,6 +146,7 @@ source_modules = [
   "silica.kernel.graph_report.cooccur_delta",
   "silica.kernel.graph_report.models",
   "silica.kernel.graph_report.render",
+  "silica.kernel.graph_report.code_signals",
   "silica.kernel.codegraph",
 ]
 forbidden_modules = ["silica.agent"]

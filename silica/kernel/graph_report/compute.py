@@ -333,6 +333,20 @@ def compute_report(
         report.stale_links = stale
         report.missing_hubs = hubs
 
+    if analytics:
+        try:
+            from silica.config import CONFIG as _CFG
+            from silica.kernel.graph_report.code_signals import _compute_code_signals
+            vault_path = getattr(_CFG, "vault_path", "") or ""
+            if vault_path:
+                wl = {(min(u, v), max(u, v)) for u, v in G_und.edges()}
+                cov, import_autolinks = _compute_code_signals(vault_path, wl)
+                report.code_coverage = cov
+                if import_autolinks:
+                    report.autolink_candidates = list(report.autolink_candidates) + import_autolinks
+        except Exception as exc:
+            logger.warning("graph_report: code signals skipped — %s", exc)
+
     totals = {
         "notes": len(real_ids),
         "links": n_links,
@@ -350,6 +364,8 @@ def compute_report(
         "source_drift": len(source_drift),
         "orphans": len(orphans),
         "clusters": len(clusters),
+        "code_files_documented": (report.code_coverage.documented if report.code_coverage else 0),
+        "code_files_total": (report.code_coverage.total if report.code_coverage else 0),
     }
     report.totals = totals
 

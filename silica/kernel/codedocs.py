@@ -34,13 +34,16 @@ class StaleDoc:
     details: list[str] = field(default_factory=list)
 
 
-def _documents_of(data: dict) -> list[str]:
+def documents_of(data: dict) -> list[str]:
     raw = (data or {}).get("documents")
     if not raw:
         return []
     if isinstance(raw, str):
         return [raw]
     return [str(x) for x in raw if x]
+
+
+_documents_of = documents_of  # internal alias (pre-rename call sites)
 
 
 def iter_documenting_notes(vault: Path | str):
