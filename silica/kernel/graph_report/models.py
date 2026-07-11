@@ -5,8 +5,8 @@
 
 Pure data containers — no I/O, no graph computation. Authoritative
 structures (NodeStat … VaultReport) and PROPOSED-signal records
-(MissingLink, DuplicatePair, AutolinkCandidate, StaleLink, MissingHub)
-live together because they all describe one VaultReport payload.
+(MissingLink, DuplicatePair, AutolinkCandidate, StaleLink, MissingHub,
+AttentionCandidate) live together because they all describe one VaultReport payload.
 """
 from __future__ import annotations
 
@@ -85,6 +85,14 @@ class MissingHub:          # central concept in the discourse with no hub note
 
 
 @dataclass
+class AttentionCandidate:   # PROPOSED — spaced-repetition, idle-time × weak-linkage decay
+    path: str              # node id
+    days_idle: int         # days since last file mtime (ANY touch, not just human review — see ceiling in compute.py)
+    degree: int            # wikilink degree: integration proxy standing in for a per-note "confidence"
+    score: float           # (days_idle + 1) / (1 + degree) — higher = more neglected
+
+
+@dataclass
 class ContestedNote:       # AUTHORITATIVE — frontmatter `contested: true`
     path: str              # node id
     refs: list[str]        # `contradictions:` entries (sources / notes in conflict)
@@ -112,6 +120,7 @@ class VaultReport:
     autolink_candidates: list[AutolinkCandidate] = field(default_factory=list)
     stale_links: list[StaleLink] = field(default_factory=list)
     missing_hubs: list[MissingHub] = field(default_factory=list)
+    attention_candidates: list[AttentionCandidate] = field(default_factory=list)
     lean_notes: list[str] = field(default_factory=list)
     reformat_notes: list[str] = field(default_factory=list)
     contested: list[ContestedNote] = field(default_factory=list)

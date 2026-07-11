@@ -29,6 +29,7 @@ from typing import Any
 import networkx as nx
 from silica.config import CONFIG
 from silica.kernel.ast import extract_links
+from silica.kernel.graph_export import is_vault_artifact, _VAULT_ROOT_ARTIFACT_STEMS
 
 from silica.driver.base import (
     GraphIndexMixin,
@@ -918,10 +919,17 @@ class ObsidianCLIBackend(GraphIndexMixin):
             ref.name.lower() for ref in self._notes.values()
             if len(ref.name) >= 2
         ])
+        # Silica's own vault-root files must not register as mentioners either
+        # (the occurrence metric). Titles are already artifact-free via _notes;
+        # this drops their bodies from the scan. Stems injected from the single
+        # Python source of truth.
+        artifact_stems_json = json.dumps(sorted(_VAULT_ROOT_ARTIFACT_STEMS))
 
         js_code = (
             "(async () => {\n"
             f"  const titles = {titles_json};\n"
+            f"  const artifactStems = new Set({artifact_stems_json});\n"
+            "  const isArtifact = (p) => { const s = p.replace(/\\.md$/, ''); return !s.includes('/') && artifactStems.has(s); };\n"
             "  const TERM = '\\u0000';\n"
             "  const trie = {};\n"  # char trie; TERM node holds the full title
             "  for (const t of titles) {\n"
@@ -933,6 +941,7 @@ class ObsidianCLIBackend(GraphIndexMixin):
             "  const files = app.vault.getMarkdownFiles();\n"
             "  const mentions = {};\n"
             "  await Promise.all(files.map(async (file) => {\n"
+            "    if (isArtifact(file.path)) return;\n"
             "    try {\n"
             "      const s = (await app.vault.cachedRead(file)).toLowerCase();\n"
             "      const n = s.length;\n"
@@ -1182,6 +1191,12 @@ class ObsidianCLIBackend(GraphIndexMixin):
                     line_norm = os.path.normcase(line.replace("\\", "/").strip("/"))
                     if line_norm == inbox_norm or line_norm.startswith(inbox_norm + "/"):
                         continue
+                # Silica's own vault-root output (log.md, GRAPH_REPORT.md) is not a
+                # knowledge note: excluded here so it reaches no metric that reads
+                # list_files — embed + cooccurrence builds and the CLI graph index
+                # (nodes/edges gate on self._notes) — nor the mention titles.
+                if is_vault_artifact(line):
+                    continue
                 name = line.rsplit("/", 1)[-1].removesuffix(".md")
                 results.append(NoteRef(name=name, path=line))
         return results

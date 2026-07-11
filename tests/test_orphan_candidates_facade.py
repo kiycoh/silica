@@ -30,21 +30,25 @@ def isolated_indexes(tmp_path, monkeypatch):
 
 
 def test_orphan_candidates_fuses_both_legs(isolated_indexes):
+    # Keys are CASE-PRESERVING (real vault paths, .md stripped at index time) and
+    # the query arrives as ref.path WITH .md — the realistic shapes. cooccur_key
+    # reconciles them; a lowercasing key (the old _norm_path bug) would miss every
+    # stored key and silently return [].
     es = EmbedStore()
-    es.upsert("orphan", "Orphan", [1.0, 0.0])
-    es.upsert("near", "Near", [0.95, 0.05])   # embed-close to orphan
-    es.upsert("far", "Far", [0.0, 1.0])
+    es.upsert("Notes/Orphan", "Orphan", [1.0, 0.0])
+    es.upsert("Notes/Near", "Near", [0.95, 0.05])   # embed-close to orphan
+    es.upsert("Notes/Far", "Far", [0.0, 1.0])
     es.save()
 
     cs = CooccurStore(lang="english")          # default path -> isolated tmp
-    cs.upsert_note("orphan", build_contribution("Orphan", "neural network model"))
-    cs.upsert_note("near", build_contribution("Near", "neural network training"))
+    cs.upsert_note("Notes/Orphan", build_contribution("Orphan", "neural network model"))
+    cs.upsert_note("Notes/Near", build_contribution("Near", "neural network training"))
     cs.save()
 
-    out = _bare_coordinator()._orphan_candidates("Orphan", k=3)
+    out = _bare_coordinator()._orphan_candidates("Notes/Orphan.md", k=3)
     paths = [c["path"] for c in out]
-    assert "near" in paths
-    assert "orphan" not in paths                # never the query itself
+    assert "Notes/Near" in paths
+    assert "Notes/Orphan" not in paths          # never the query itself (self-exclusion)
     assert all("name" in c and "path" in c for c in out)
 
 

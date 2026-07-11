@@ -257,6 +257,13 @@ def to_markdown(r: VaultReport, title: str = "Silica Vault Report") -> str:
         for h in r.missing_hubs:
             lines.append(f"| {h.concept} | {h.centrality} |")
 
+    if r.attention_candidates:
+        add("\n## Attention Candidates _(idle × weakly-linked — not authoritative)_")
+        lines.append("| Note | Idle (days) | Links | Score |")
+        lines.append("|---|---|---|---|")
+        for ac in r.attention_candidates:
+            lines.append(f"| [[{_short(ac.path)}]] | {ac.days_idle} | {ac.degree} | {ac.score} |")
+
     if r.lean_notes:
         add(f"\n### Lean Notes (Enrichment Candidates) ({len(r.lean_notes)})")
         _fold(add, "todo", "Enrichment candidates", r.lean_notes,
@@ -337,6 +344,13 @@ def to_digest(report: VaultReport, *, max_items: int = 8) -> str:
             for d in report.source_drift[:max_items]
         )
         lines.append(f"SOURCE DRIFT  {sd}")
+
+    if report.attention_candidates:
+        att = ", ".join(
+            f"{a.path.rsplit('/',1)[-1].removesuffix('.md')}(idle={a.days_idle}d,deg={a.degree})"
+            for a in report.attention_candidates[:max_items]
+        )
+        lines.append(f"ATTENTION  {att}")
 
     if report.clusters:
         clist = ", ".join(

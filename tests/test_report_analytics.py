@@ -118,3 +118,51 @@ def test_vault_graph_ctx_has_no_pagerank_field(monkeypatch):
     for entry in ctx.values():
         assert set(entry) == {"cluster_id", "hub", "is_hub"}  # no 'pagerank'
     assert "Z" in ctx  # isolated node still enumerated
+
+
+def test_attention_ranks_idle_and_weakly_linked_first():
+    """learn-anything's time-decay surfacing: score = (days_idle+1)/(1+degree).
+    An old leaf outranks a fresh hub; a note with no mtime abstains.
+    """
+    import time
+
+    nodes = [
+        {"id": "hub.md", "label": "Hub", "group": 0, "type": "note"},
+        {"id": "old.md", "label": "Old", "group": 0, "type": "note"},
+        {"id": "fresh.md", "label": "Fresh", "group": 0, "type": "note"},
+        {"id": "nomt.md", "label": "NoMtime", "group": 0, "type": "note"},
+    ]
+    edges = [  # all three leaves point at the hub → hub degree 3, leaves degree 1
+        {"id": "e0", "from": "old.md", "to": "hub.md", "type": "EXTRACTED"},
+        {"id": "e1", "from": "fresh.md", "to": "hub.md", "type": "EXTRACTED"},
+        {"id": "e2", "from": "nomt.md", "to": "hub.md", "type": "EXTRACTED"},
+    ]
+    now = time.time()
+    mtimes = {
+        "hub.md": now,                 # fresh, deg 3 → 1/4  = 0.25
+        "old.md": now - 100 * 86400,   # 100d idle, deg 1 → 101/2 = 50.5
+        "fresh.md": now,               # fresh, deg 1 → 1/2  = 0.5
+        # nomt.md absent → abstains
+    }
+    r = compute_report(
+        _nodes_edges_override=(nodes, edges), analytics=True, _mtimes_override=mtimes
+    )
+
+    paths = [a.path for a in r.attention_candidates]
+    assert paths[0] == "old.md"            # most neglected floats up
+    assert paths.index("old.md") < paths.index("hub.md")  # idle beats fresh hub
+    assert "nomt.md" not in paths          # no recency signal → abstains
+    assert r.totals["attention_candidates"] == 3
+
+
+def test_attention_is_analytics_only():
+    """Cheap structural core (ingest) never computes attention."""
+    nodes = [
+        {"id": "a.md", "label": "A", "group": 0, "type": "note"},
+        {"id": "b.md", "label": "B", "group": 0, "type": "note"},
+    ]
+    edges = [{"id": "e0", "from": "a.md", "to": "b.md", "type": "EXTRACTED"}]
+    r = compute_report(
+        _nodes_edges_override=(nodes, edges), _mtimes_override={"a.md": 0.0, "b.md": 0.0}
+    )  # analytics=False
+    assert r.attention_candidates == []

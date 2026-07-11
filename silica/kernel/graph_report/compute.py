@@ -20,6 +20,7 @@ from silica.kernel.graph_report.embed_signals import (
     _compute_missing_links,
 )
 from silica.kernel.graph_report.models import (
+    AttentionCandidate,
     BridgeStat,
     ClusterStat,
     ContestedNote,
@@ -40,6 +41,7 @@ def compute_report(
     with_cooccurrence: bool = False,
     _nodes_edges_override: tuple[list[dict], list[dict]] | None = None,
     _cooccur_store_override: Any | None = None,
+    _mtimes_override: dict[str, float] | None = None,
 ) -> VaultReport:
     """Build a VaultReport from the driver's wikilink graph.
 
@@ -156,6 +158,49 @@ def compute_report(
         except Exception:
             pr = {}
 
+    # ------------------------------------------------------------------
+    # Attention candidates — analytics-only. Spaced-repetition
+    # surfacing, embedder-free: a note untouched for long AND weakly linked
+    # floats up.  score = (days_idle + 1) / (1 + degree)  — pure ranking, no
+    # weights, no config.  degree stands in for a per-note "confidence" (a
+    # well-integrated note is trusted); adding a real confidence field would be
+    # new source of truth to maintain — out of charter (derived data only).
+    #
+    # ponytail: mtime = "last touch by ANYONE", not "last human review" — a bulk
+    # op (AI:true stamps, autolink) resets it and the list starts blind, then
+    # repopulates over time.  Upgrade path if it misranks in practice: git
+    # last-commit-per-file (SILICA_GIT_COMMIT vaults) or a last_reviewed stamp.
+    attention: list[AttentionCandidate] = []
+    if analytics:
+        mtimes = _mtimes_override
+        if mtimes is None:
+            mtimes = {}
+            from silica.driver import DRIVER
+
+            mtime_of = getattr(DRIVER, "mtime_of", None)
+            if mtime_of is not None:
+                for nid in real_ids:
+                    try:
+                        ts = mtime_of(nid)
+                    except Exception:
+                        ts = None
+                    if ts is not None:
+                        mtimes[nid] = ts
+        if mtimes:
+            now_ts = datetime.now(timezone.utc).timestamp()
+            for nid in real_ids:
+                ts = mtimes.get(nid)
+                if ts is None:
+                    continue  # abstain: no recency signal for this note
+                days_idle = max(0, int((now_ts - ts) // 86400))
+                d = deg.get(nid, 0)
+                attention.append(AttentionCandidate(
+                    path=nid, days_idle=days_idle, degree=d,
+                    score=round((days_idle + 1) / (1 + d), 3),
+                ))
+            attention.sort(key=lambda a: (-a.score, a.path))
+            attention = attention[:top_k]
+
     # Cluster map from detect_communities output
     cluster_map: dict[str, int] = {n["id"]: n.get("group", -1) for n in real_nodes}
     node_label: dict[str, str] = {n["id"]: n.get("label", n["id"]) for n in real_nodes}
@@ -268,6 +313,7 @@ def compute_report(
         dangling=dangling,
         clusters=clusters,
         pagerank_map={nid: round(pr.get(nid, 0.0), 5) for nid in real_ids},
+        attention_candidates=attention,
         lean_notes=lean_notes,
         reformat_notes=reformat_notes,
         contested=contested,
@@ -297,6 +343,7 @@ def compute_report(
         "autolink_candidates": len(report.autolink_candidates),
         "stale_links": len(report.stale_links),
         "missing_hubs": len(report.missing_hubs),
+        "attention_candidates": len(attention),
         "lean_notes": len(lean_notes),
         "reformat_notes": len(reformat_notes),
         "contested": len(contested),

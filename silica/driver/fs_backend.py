@@ -36,6 +36,7 @@ from silica.driver.base import (
 )
 from silica.kernel import frontmatter as fm
 from silica.kernel import ofm
+from silica.kernel.graph_export import is_vault_artifact
 logger = logging.getLogger(__name__)
 
 
@@ -180,6 +181,14 @@ class ObsidianFSBackend(GraphIndexMixin):
                 path = Path(root) / file
                 rel_path_file = path.relative_to(self.vault_path).as_posix()
 
+                # Silica's own generated vault-root files (log.md, GRAPH_REPORT.md)
+                # are tooling output, not knowledge notes. Keeping them out of the
+                # index here excludes them from every metric that reads it —
+                # list_files (embed + cooccurrence builds), _mention_index
+                # (occurrence), and graph_data (mindmap) — in one place.
+                if is_vault_artifact(rel_path_file):
+                    continue
+
                 # Double safety check: skip if rel_path_file is in inbox
                 if inbox_norm:
                     rel_path_norm = os.path.normcase(rel_path_file.replace("\\", "/").strip("/"))
@@ -241,7 +250,7 @@ class ObsidianFSBackend(GraphIndexMixin):
         # Inbox notes are never indexed (_rebuild_index skips the whole
         # directory), so a write/move into the inbox must degrade to a
         # removal — otherwise it strands an entry the next rebuild drops.
-        if content is not None and self._is_inbox_path(rel_path):
+        if content is not None and (self._is_inbox_path(rel_path) or is_vault_artifact(rel_path)):
             content = None
 
         # --- remove stale data for this path ---
@@ -389,6 +398,18 @@ class ObsidianFSBackend(GraphIndexMixin):
             content=content,
             size=len(content)
         )
+
+    def mtime_of(self, ref: NoteRef | str) -> float | None:
+        """Last-modified epoch seconds of a note, or None if it can't be stat'd.
+
+        Recency proxy for the report's attention signal. Returns None (abstain)
+        rather than raising when the file is absent — a new/unresolved ref has
+        no recency to report.
+        """
+        try:
+            return self._resolve_path(ref).stat().st_mtime
+        except (OSError, RuntimeError):
+            return None
 
     def props_of(self, ref: NoteRef | str) -> dict:
         """Read frontmatter properties."""

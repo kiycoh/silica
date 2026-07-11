@@ -269,3 +269,22 @@ def test_cli_graph_reads_resolved_links(tmp_path):
     assert ("Concepts/Alpha.md", "GhostNote") in backend._unresolved_links, (
         "Expected unresolved link Alpha→GhostNote"
     )
+
+
+def test_cli_list_files_excludes_vault_artifacts():
+    """CLI list_files must drop Silica's own vault-root output (log/GRAPH_REPORT).
+
+    Mirrors the FS backend: keeps them out of embed + cooccurrence builds and the
+    CLI graph index. A subfolder note named log.md must survive.
+    """
+    from silica.driver.cli_backend import ObsidianCLIBackend
+
+    backend = ObsidianCLIBackend()
+    fake_listing = "GRAPH_REPORT.md\nlog.md\nNote.md\nnotes/log.md\n"
+    with patch.object(backend, "_run_cli", return_value=fake_listing):
+        paths = {r.path for r in backend.list_files()}
+
+    assert "GRAPH_REPORT.md" not in paths
+    assert "log.md" not in paths
+    assert "notes/log.md" in paths  # genuine subfolder note survives
+    assert "Note.md" in paths

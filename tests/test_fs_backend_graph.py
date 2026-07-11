@@ -129,3 +129,31 @@ def test_fs_backend_duplicate_basename_snapshot(tmp_path):
     orphan_paths = {o.path for o in snap.orphans}
     assert "folder_a/Note.md" in orphan_paths
     assert "folder_b/Note.md" in orphan_paths
+
+
+def test_vault_root_artifacts_excluded_from_index(tmp_path):
+    """GRAPH_REPORT.md / log.md are Silica's own output, not knowledge notes.
+
+    They must stay out of the driver index so they never reach any metric
+    (list_files → embed + cooccurrence, _mention_index → occurrence, graph).
+    A real note in a subfolder named log.md must NOT be excluded.
+    """
+    vault = tmp_path / "vault"
+    vault.mkdir()
+    (vault / "Real.md").write_text("# Real\n\nabout apples", encoding="utf-8")
+    (vault / "GRAPH_REPORT.md").write_text("# Graph report\n\n[[Real]] apples", encoding="utf-8")
+    (vault / "log.md").write_text("# Log\n\n[[Real]] apples", encoding="utf-8")
+    (vault / "notes").mkdir()
+    (vault / "notes" / "log.md").write_text("# genuine log note\n\napples", encoding="utf-8")
+
+    backend = ObsidianFSBackend(str(vault))
+    paths = {r.path for r in backend.list_files()}
+    assert "GRAPH_REPORT.md" not in paths
+    assert "log.md" not in paths
+    assert "notes/log.md" in paths  # subfolder note survives
+    assert "Real.md" in paths
+
+    # Occurrence: the artifacts must not register as mentioners of "Real".
+    mentioners = backend._mention_index.get("real", set())
+    assert "GRAPH_REPORT.md" not in mentioners
+    assert "log.md" not in mentioners
