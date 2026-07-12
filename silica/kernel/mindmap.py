@@ -25,8 +25,12 @@ from dataclasses import dataclass, field
 
 # Fixed node-box size in canvas units. The non-overlap guarantee is stated in
 # terms of these: distance ≥ hypot(W, H) ⇒ the two boxes' AABBs are disjoint.
-BOX_W = 260.0
-BOX_H = 80.0
+BOX_W = 220.0
+BOX_H = 64.0
+# ponytail: shrinking these is the ONLY compactness knob. _DIAG is the spacing
+# unit every ring radius is a multiple of, so smaller boxes scale the whole
+# layout tighter with wedge angles and ring count untouched; non-overlap still
+# holds by construction (distance >= hypot(W,H), recomputed from the new size).
 _DIAG = math.hypot(BOX_W, BOX_H)
 
 # Muted slate for community-less nodes (group == -1) — never black/white.
@@ -398,7 +402,8 @@ def render_map_svg(mv: MapView, title: str = "Mindmap") -> str:
     """Render a MapView as a self-contained, interactive SVG page.
 
     Consumes the precomputed positions (no force layout ⇒ cannot diverge from the
-    canvas). Cards carry a community wash + accent bar; wikilink edges are solid
+    canvas). Cards carry a community wash + full-strength community border;
+    wikilink edges are solid
     curves with an arrowhead on true parent→child hops (same-ring wikilinks and
     all latent edges stay arrowless — they aren't "downstream" relationships).
     Pan/zoom/click-to-focus are plain SVG + vanilla JS (no new dependency),
@@ -465,8 +470,7 @@ def render_map_svg(mv: MapView, title: str = "Mindmap") -> str:
             f'transform="translate({rx:.1f},{ry:.1f})">'
             f'<rect class="frame" width="{BOX_W}" height="{BOX_H}" rx="10" '
             f'fill="{color}" stroke="{color}"/>'
-            f'<rect class="accent" width="4" height="{BOX_H}" rx="2" fill="{color}"/>'
-            f'<foreignObject x="16" y="0" width="{BOX_W - 28}" height="{BOX_H}">'
+            f'<foreignObject x="14" y="0" width="{BOX_W - 28}" height="{BOX_H}">'
             f'<div xmlns="http://www.w3.org/1999/xhtml" class="card-body">'
             f'<div class="card-title">{title_esc}</div>{sub_html}</div>'
             f'</foreignObject></g>'
@@ -498,9 +502,9 @@ def render_map_svg(mv: MapView, title: str = "Mindmap") -> str:
   .edge.dim{{opacity:.1}}
   .card{{cursor:pointer;transition:opacity .15s ease}}
   .card.dim{{opacity:.3}}
-  .card .frame{{fill-opacity:.12;stroke-opacity:.6;stroke-width:1;
+  .card .frame{{fill-opacity:.15;stroke-opacity:1;stroke-width:1.5;
                 filter:drop-shadow(0 2px 6px rgba(0,0,0,.55))}}
-  .card:hover .frame{{fill-opacity:.2;stroke-opacity:1}}
+  .card:hover .frame{{fill-opacity:.24}}
   .card.root .frame{{stroke:var(--cyan);stroke-opacity:1;stroke-width:2.5}}
   .card-body{{font-family:var(--mono);height:100%;display:flex;flex-direction:column;
               justify-content:center;gap:3px;pointer-events:none;overflow:hidden}}
