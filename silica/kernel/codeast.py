@@ -38,6 +38,7 @@ class Symbol:
     signature: str   # declaration line, whitespace-collapsed
     doc: str = ""    # first docstring line ("" when absent)
     parent: str = "" # enclosing class name for methods
+    doc_full: str = ""  # whole docstring, per-line stripped ("" when absent)
 
 
 @dataclass(frozen=True)
@@ -47,6 +48,8 @@ class ModuleSkeleton:
     imports: list[str] = field(default_factory=list)   # module strings, duplicates possible
     symbols: list[Symbol] = field(default_factory=list)  # document order
     parse_error: bool = False  # tree-sitter setup failed — consumers must not read "empty" as "no structure"
+    module_doc: str = ""                                   # module-level docstring, whole
+    module_comments: list[str] = field(default_factory=list)  # top-level comment blocks
 
 
 def language_for(path: str | Path) -> str | None:
@@ -71,7 +74,13 @@ def extract_skeleton(source: str, language: str, path: str = "") -> ModuleSkelet
     extract = _py_extract if language == "python" else _ts_extract
     for i in range(root.named_child_count()):
         extract(root.named_child(i), src, imports, symbols)
-    return ModuleSkeleton(path=path, language=language, imports=imports, symbols=symbols)
+    module_doc, module_comments = ("", [])
+    if language == "python":
+        module_doc, module_comments = _py_module_docs(root, src)
+    # ponytail: TS doc/comment capture deferred; Python-first wiki
+    return ModuleSkeleton(path=path, language=language, imports=imports,
+                          symbols=symbols, module_doc=module_doc,
+                          module_comments=module_comments)
 
 
 # ---------------------------------------------------------------------------
@@ -90,28 +99,75 @@ def _signature(node, src: bytes) -> str:
     return " ".join(sig.split()).rstrip(":")
 
 
-def _py_docstring(node, src: bytes) -> str:
-    """First line of the body's leading string node, quotes stripped."""
+def _py_doc_node(node):
+    """Bare string node of a body's leading docstring, or None."""
     body = node.child_by_field_name("body")
     if body is None or body.named_child_count() == 0:
-        return ""
+        return None
     first = body.named_child(0)
     # In tree-sitter >= 0.23 the docstring is a bare 'string' node as first
-    # child of the block (no wrapping expression_statement).
-    if first.kind() != "string":
-        # Fallback: may be wrapped in expression_statement in some grammar versions
-        if first.kind() == "expression_statement" and first.named_child_count() > 0:
-            first = first.named_child(0)
-            if first.kind() != "string":
-                return ""
-        else:
-            return ""
-    text = _text(first, src).strip()
+    # child of the block; older grammars wrap it in expression_statement.
+    if first.kind() == "expression_statement" and first.named_child_count() > 0:
+        first = first.named_child(0)
+    return first if first.kind() == "string" else None
+
+
+def _strip_quotes(text: str) -> str:
     for q in ('"""', "'''", '"', "'"):
         if text.startswith(q) and text.endswith(q) and len(text) >= 2 * len(q):
-            text = text[len(q):-len(q)]
-            break
-    return text.strip().splitlines()[0].strip() if text.strip() else ""
+            return text[len(q):-len(q)]
+    return text
+
+
+def _doc_text(string_node, src: bytes) -> str:
+    """Whole docstring, quotes stripped, each line stripped, blank edges gone."""
+    text = _strip_quotes(_text(string_node, src).strip())
+    return "\n".join(line.strip() for line in text.strip().splitlines()).strip()
+
+
+def _py_docstring_full(node, src: bytes) -> str:
+    doc = _py_doc_node(node)
+    return _doc_text(doc, src) if doc is not None else ""
+
+
+def _py_docstring(node, src: bytes) -> str:
+    """First line of the body's leading docstring, quotes stripped."""
+    full = _py_docstring_full(node, src)
+    return full.splitlines()[0].strip() if full else ""
+
+
+_COMMENT_CAP_LINES = 40  # per file: keeps the digest bounded
+
+
+def _py_module_docs(root, src: bytes) -> tuple[str, list[str]]:
+    """Module-level docstring (whole) and top-level comment blocks. Comments
+    group by consecutive source rows; capped at _COMMENT_CAP_LINES per file."""
+    module_doc = ""
+    if root.named_child_count() > 0:
+        first = root.named_child(0)
+        if first.kind() == "expression_statement" and first.named_child_count() > 0:
+            first = first.named_child(0)
+        if first.kind() == "string":
+            module_doc = _doc_text(first, src)
+    blocks: list[str] = []
+    current: list[str] = []
+    last_row = None
+    total = 0
+    for i in range(root.child_count()):
+        child = root.child(i)
+        if child.kind() != "comment":
+            continue
+        row = child.start_position().row
+        if last_row is not None and row != last_row + 1 and current:
+            blocks.append("\n".join(current))
+            current = []
+        if total < _COMMENT_CAP_LINES:
+            current.append(_text(child, src).lstrip("#").strip())
+            total += 1
+        last_row = row
+    if current:
+        blocks.append("\n".join(current))
+    return module_doc, blocks
 
 
 # ---------------------------------------------------------------------------
@@ -164,6 +220,7 @@ def _py_extract(node, src: bytes, imports: list[str], symbols: list[Symbol]) -> 
             name=_text(name, src) if name is not None else "?",
             signature=_signature(node, src),
             doc=_py_docstring(node, src),
+            doc_full=_py_docstring_full(node, src),
         ))
         return
     if node.kind() == "class_definition":
@@ -174,6 +231,7 @@ def _py_extract(node, src: bytes, imports: list[str], symbols: list[Symbol]) -> 
             name=cls_name,
             signature=_signature(node, src),
             doc=_py_docstring(node, src),
+            doc_full=_py_docstring_full(node, src),
         ))
         body = node.child_by_field_name("body")
         for i in range(body.named_child_count() if body is not None else 0):
@@ -188,6 +246,7 @@ def _py_extract(node, src: bytes, imports: list[str], symbols: list[Symbol]) -> 
                     name=_text(mname, src) if mname is not None else "?",
                     signature=_signature(target, src),
                     doc=_py_docstring(target, src),
+                    doc_full=_py_docstring_full(target, src),
                     parent=cls_name,
                 ))
 

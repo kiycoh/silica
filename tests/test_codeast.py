@@ -180,3 +180,41 @@ def test_diff_skeletons_reports_structure():
     assert "+ function added" in diff
     assert "- function gone" in diff
     assert "signature changed: A.run" in diff
+
+
+# ---------------------------------------------------------------------------
+# Task 1: full docstrings + module doc + module comments
+# ---------------------------------------------------------------------------
+
+PY_DOCFULL = '''"""Module doc line one.
+
+Second paragraph."""
+# top comment A
+# top comment B
+
+import os
+
+
+def f():
+    """First line.
+
+    More detail here.
+    """
+    return 1
+'''
+
+
+def test_doc_full_module_doc_and_comments():
+    sk = extract_skeleton(PY_DOCFULL, "python", path="m.py")
+    assert sk.module_doc.startswith("Module doc line one.")
+    assert "Second paragraph." in sk.module_doc
+    assert sk.module_comments == ["top comment A\ntop comment B"]
+    f = next(s for s in sk.symbols if s.name == "f")
+    assert f.doc == "First line."
+    assert "More detail here." in f.doc_full
+
+
+def test_no_doc_no_comments_yield_empty_fields():
+    sk = extract_skeleton("x = 1\n", "python", path="m.py")
+    assert sk.module_doc == ""
+    assert sk.module_comments == []
