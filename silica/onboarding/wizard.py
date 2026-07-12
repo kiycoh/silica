@@ -13,7 +13,11 @@ from silica.config import SilicaConfig
 from silica.kernel import gitstate
 from silica.kernel.vault_manifest import MANIFEST_REL
 from silica.onboarding.checks import has_failures, render_report, run_checks
+from silica.ui.banner import print_banner
 from silica.ui.console import CONSOLE
+from silica.ui.style import GLYPHS
+
+_STEPS = 5
 
 _KEY_RE = re.compile(r"^\s*(?:export\s+)?([A-Za-z_][A-Za-z0-9_]*)\s*=")
 
@@ -59,11 +63,20 @@ def _ask(
     shown = f"…{default[-4:]}" if (secret and default) else default
     suffix = f" [{shown}]" if default else ""
     try:
-        raw = input_fn(f"  {prompt}{suffix}: ").strip()
+        # `→` gutter marks every question with the TUI's arrow glyph (same one
+        # render_report uses for hints). Plain text: input() ignores markup.
+        raw = input_fn(f"  {GLYPHS['arrow']} {prompt}{suffix}: ").strip()
     except (EOFError, StopIteration):
         # EOF (Ctrl+D) or an exhausted scripted input — treat like Ctrl+C.
         raise KeyboardInterrupt
     return raw or default
+
+
+def _section(glyph_key: str, title: str, n: int) -> None:
+    """Flat-gutter step header in the TUI's brand vocabulary: glyph + title in
+    bold brand cyan, a dim `· n/N` counter riding after it."""
+    CONSOLE.print()
+    CONSOLE.print(f"  [bold brand.cyan]{GLYPHS[glyph_key]} {title}[/]  [dim]· {n}/{_STEPS}[/]")
 
 
 def _ask_language(input_fn: Callable[[str], str]) -> str:
@@ -99,10 +112,15 @@ def _run_wizard_inner(
     updates: dict[str, str] = {}
     repo_root = gitstate.find_repo_root(env_path.parent)
 
-    CONSOLE.print("\n  [bold]silica init[/] — interactive setup\n")
+    print_banner()
+    CONSOLE.print()
+    CONSOLE.print(
+        "  [bold]Interactive setup[/]  [dim]· press Enter to accept a shown default[/]"
+    )
 
     # 1. Vault — repo mode (docs/silica/) when inside a git repo, else explicit
     # path. An Obsidian-vault repo (.obsidian/) is adopted verbatim instead.
+    _section("vault", "Vault", 1)
     use_repo_mode = False
     if repo_root is not None:
         from silica.kernel.paths import is_obsidian_vault, repo_mode_vault
@@ -138,7 +156,7 @@ def _run_wizard_inner(
             if resolved is not None and resolved.is_dir():
                 updates["SILICA_VAULT"] = str(resolved)
                 break
-            CONSOLE.print("  [red]Not a directory — try again.[/]")
+            CONSOLE.print(f"  [red]{GLYPHS['err']} Not a directory — try again.[/]")
         # The design's language question is unscoped to repo mode ("init asks
         # whether to force a language"): an explicit-path vault with no
         # vault.yaml yet must be asked too. Unlike repo mode there is no other
@@ -161,6 +179,7 @@ def _run_wizard_inner(
     # 2. Backend — fs is the default (filesystem-native, headless, no Obsidian required).
     # cli is an opt-in enhancement: adds version-history rollback, live metadata-cache
     # reads, and user link-format preference in autolink (requires Obsidian desktop).
+    _section("gear", "Backend", 2)
     backend = ""
     while backend not in ("cli", "fs"):
         backend = _ask(
@@ -171,6 +190,7 @@ def _run_wizard_inner(
     updates["SILICA_BACKEND"] = backend
 
     # 3. Chat provider — only the two PROVIDER_PRESETS entries exist.
+    _section("model", "Chat provider", 3)
     provider = ""
     while provider not in ("lmstudio", "openrouter"):
         provider = _ask(
@@ -196,6 +216,7 @@ def _run_wizard_inner(
     updates["SILICA_MODEL"] = model
 
     # 4. Embeddings — optional; skipping degrades gracefully.
+    _section("think", "Embeddings", 4)
     defaults = SilicaConfig()
     answer = _ask(
         input_fn,
@@ -219,19 +240,22 @@ def _run_wizard_inner(
         )
 
     # 5. Confirm and write.
+    _section("arrow", "Write configuration", 5)
     CONSOLE.print(
-        f"\n  Will write {len(updates)} key(s) to [bold]{env_path}[/]: "
-        f"{', '.join(sorted(updates))}"
+        f"  {len(updates)} key(s) → [bold]{env_path}[/]: "
+        f"[dim]{', '.join(sorted(updates))}[/]"
     )
     answer = _ask(input_fn, "Write? [y/n]", "y")
     if answer.lower() not in ("y", "yes"):
-        CONSOLE.print("  Aborted — nothing written.")
+        CONSOLE.print(f"  [dim]{GLYPHS['err']} Aborted — nothing written.[/]")
         return 1
     existing = env_path.read_text() if env_path.exists() else ""
     env_path.write_text(merge_env(existing, updates))
-    CONSOLE.print(f"  [green]Wrote {env_path}[/]")
+    CONSOLE.print(f"  [green]{GLYPHS['ok']} Wrote {env_path}[/]")
 
     # 6. Doctor checks against the values just chosen.
+    CONSOLE.print()
+    CONSOLE.print(f"  [bold brand.cyan]{GLYPHS['run']} Checking your setup[/]")
     os.environ.update(updates)
     results = run_checks(SilicaConfig())
     render_report(results)
@@ -249,5 +273,7 @@ def run_wizard(
     try:
         return _run_wizard_inner(input_fn, env_path)
     except KeyboardInterrupt:
-        CONSOLE.print("\n  Aborted — nothing written beyond what was already confirmed.")
+        CONSOLE.print(
+            f"\n  [dim]{GLYPHS['err']} Aborted — nothing written beyond what was already confirmed.[/]"
+        )
         return 1
