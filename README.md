@@ -274,6 +274,7 @@ The full schematic (interfaces, agent loop, ingress adapters, the Injector FSM s
 | `/web-search` | `"<concept>" [--max-searches=N]` | Research a concept on the web → cited findings note in the Inbox (then `/ingest`) |
 | `/embed` | `[folder] [--force]` | Build/update the embedding index |
 | `/cooccur` | `[folder] [--force]` | Build/update the co-occurrence index (no embedder needed) |
+| `/wiki` | `[folder] [--overview-only] [--force]` | Behavioral code wiki: `ARCHITECTURE.md` + one note per subsystem |
 | `/graph` | `[out.html] [folder]` | Export the knowledge graph |
 | `/map` | `<nota> [--force]` | Radial mind-map rooted on a note → `maps/<stem>.canvas` |
 | `/find` | `<query> [--k=N]` | Semantic search |

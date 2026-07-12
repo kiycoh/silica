@@ -449,6 +449,26 @@ def _handle_direct_shortcut(raw_input: str, messages: list[dict]) -> bool:
             CONSOLE.print(result)
         return True
 
+    if cmd == "/wiki":
+        args = parts[1:]
+        folder = next((a for a in args if not a.startswith("-")), "") or None
+        overview_only = "--overview-only" in args
+        force = "--force" in args
+        from silica.capabilities.codewiki import run_wiki
+        result = run_wiki(CONFIG.vault_path, CONFIG, folder=folder,
+                          overview_only=overview_only, force=force)
+        if result["status"] == "no_repo":
+            CONSOLE.print("  [yellow]wiki: vault is not inside a git repo — nothing to describe.[/]")
+        elif result["status"] == "error":
+            CONSOLE.print(f"  [yellow]wiki: {result.get('reason', 'error')}[/]")
+        else:
+            CONSOLE.print(
+                f"  wiki: {len(result['written'])} note(s) written, "
+                f"{len(result['skipped'])} up-to-date"
+                + (f", {result['parse_errors']} file(s) not analyzable" if result["parse_errors"] else "")
+            )
+        return True
+
     if cmd == "/graph":
         output_path = "graph.html"
         folder = ""

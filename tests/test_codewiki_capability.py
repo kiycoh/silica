@@ -186,3 +186,13 @@ def test_no_repo_degrades_soft(tmp_path, monkeypatch):
     from silica.kernel import paths as kpaths
     monkeypatch.setattr(kpaths, "repo_root_for", lambda v: None)
     assert run_wiki(tmp_path, config=None)["status"] == "no_repo"
+
+
+# ---------------------------------------------------------------------------
+# Task 10: conventions.wiki_dir
+# ---------------------------------------------------------------------------
+
+def test_conventions_wiki_dir_parsed(tmp_path):
+    from silica.kernel.vault_manifest import _parse_conventions
+    assert _parse_conventions({"conventions": {"wiki_dir": "docs/wiki"}}).wiki_dir == "docs/wiki"
+    assert _parse_conventions({}).wiki_dir == ""

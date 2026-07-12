@@ -50,6 +50,7 @@ class VaultConventions:
     reply_language: str | None = None
     max_tags: int = 3
     extra_callouts: tuple[str, ...] = ()
+    wiki_dir: str = ""  # landing dir for /wiki notes; "" ⇒ vault root
 
 
 DEFAULT_CONVENTIONS = VaultConventions()
@@ -107,11 +108,15 @@ def _parse_conventions(raw: dict) -> VaultConventions:
     else:
         extra_callouts = DEFAULT_CONVENTIONS.extra_callouts
 
+    wiki_dir = conv_raw.get("wiki_dir")
+    wiki_dir = wiki_dir.strip() if isinstance(wiki_dir, str) else ""
+
     return VaultConventions(
         language=language,
         reply_language=reply_language,
         max_tags=max_tags,
         extra_callouts=extra_callouts,
+        wiki_dir=wiki_dir,
     )
 
 

@@ -137,6 +137,13 @@ COMMANDS: tuple[Command, ...] = (
         summary="build/update co-occurrence index (without embedder)",
     ),
     Command(
+        name="/wiki",
+        group="direct",
+        usage="[folder] [--overview-only] [--force]",
+        summary="behavioral code wiki: ARCHITECTURE.md + one note per subsystem",
+        examples=("/wiki", "/wiki kernel", "/wiki --overview-only", "/wiki --force"),
+    ),
+    Command(
         name="/graph",
         group="direct",
         usage="[out.html] [folder]",
