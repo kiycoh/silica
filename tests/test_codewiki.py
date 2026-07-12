@@ -121,3 +121,33 @@ def test_cross_edges_and_ref(tmp_path):
     # weight-only change must NOT move the ref
     bumped = [(a, b, iw + 5, cw) for (a, b, iw, cw) in edges]
     assert edges_ref(bumped) == ref
+
+
+# ---------------------------------------------------------------------------
+# Task 7: flow sketches + deterministic mermaid
+# ---------------------------------------------------------------------------
+
+from silica.kernel.codewiki import call_adjacency, flow_sketches, render_mermaid
+
+
+def test_flow_sketches_deterministic_and_capped():
+    adj = {"a.py": ["b.py", "c.py"], "b.py": ["d.py"], "c.py": [], "d.py": []}
+    flows = flow_sketches(adj, ["a.py"])
+    assert flows == flow_sketches(adj, ["a.py"])          # stable
+    assert ["a.py", "b.py", "d.py"] in flows
+    assert all(len(f) <= 6 for f in flows)
+    assert len(flows) <= 3
+
+
+def test_flow_sketches_cycle_safe():
+    adj = {"a.py": ["b.py"], "b.py": ["a.py"]}
+    flows = flow_sketches(adj, ["a.py"])
+    assert flows == [["a.py", "b.py"]]
+
+
+def test_render_mermaid_byte_stable():
+    edges = [("router", "kernel", 2, 1), ("core", "kernel", 1, 1)]
+    block = render_mermaid(edges)
+    assert block.startswith("```mermaid\ngraph LR")
+    assert block == render_mermaid(list(reversed(edges)))  # order-insensitive
+    assert "core --> kernel" in block and "router --> kernel" in block

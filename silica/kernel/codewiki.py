@@ -182,6 +182,7 @@ def build_digests(graph: CodeGraph, subsystems: list[Subsystem],
             call_out[src] += 1
             call_in[tgt] += 1
     scripts = _pyproject_script_files(root, set(graph.files))
+    adj = call_adjacency(graph)
 
     digests: list[SubsystemDigest] = []
     for sub in subsystems:
@@ -226,6 +227,7 @@ def build_digests(graph: CodeGraph, subsystems: list[Subsystem],
 
         hubs = sorted(((p, graph.fan_in(p)) for p in sub.members),
                       key=lambda t: (-t[1], t[0]))[:_HUB_CAP]
+        eps = _entry_points(graph, sub, scripts, call_in, call_out)
         digests.append(SubsystemDigest(
             key=sub.key, path=sub.path, members=sub.members,
             struct_sig=_struct_sig(sub.members, sub_calls),
@@ -236,8 +238,8 @@ def build_digests(graph: CodeGraph, subsystems: list[Subsystem],
             collaborators_out=_merge(imp_out, c_out),
             collaborators_in=_merge(imp_in, c_in),
             fan_in_hubs=hubs,
-            entry_points=_entry_points(graph, sub, scripts, call_in, call_out),
-            flow_sketches=[],
+            entry_points=eps,
+            flow_sketches=flow_sketches(adj, [p for p, _ in eps]),
             parse_errors=parse_errors,
         ))
     return digests
@@ -266,3 +268,56 @@ def cross_edges(graph: CodeGraph, subsystems: list[Subsystem]) -> list[tuple[str
 def edges_ref(edges: list[tuple[str, str, int, int]]) -> str:
     pairs = sorted({(a, b) for a, b, _, _ in edges})
     return hashlib.sha256(orjson.dumps(pairs)).hexdigest()[:16]
+
+
+# ---------------------------------------------------------------------------
+# Flow sketches + deterministic Mermaid
+# ---------------------------------------------------------------------------
+
+_FLOW_DEPTH = 6
+_FLOWS_PER_ENTRY = 3
+_FLOW_BRANCHING = 2
+# ponytail: file-level flows via bounded BFS; symbol-level processes stay a seam
+
+
+def call_adjacency(graph: CodeGraph) -> dict[str, list[str]]:
+    """File -> called files, ordered by call weight desc then path."""
+    weights: dict[str, Counter] = {}
+    for src, tgt, _, _ in graph.call_edges():
+        if src != tgt:
+            weights.setdefault(src, Counter())[tgt] += 1
+    return {src: [t for t, _ in sorted(c.items(), key=lambda kv: (-kv[1], kv[0]))]
+            for src, c in weights.items()}
+
+
+def flow_sketches(adj: dict[str, list[str]], entries: list[str]) -> list[list[str]]:
+    """Real call paths from each entry point: the LLM narrates these instead
+    of guessing flows from import adjacency."""
+    out: list[list[str]] = []
+    seen: set[frozenset] = set()
+    for entry in entries:
+        count = 0
+        queue: list[tuple[str, list[str]]] = [(entry, [entry])]
+        while queue and count < _FLOWS_PER_ENTRY:
+            node, chain = queue.pop(0)
+            nxt = [t for t in adj.get(node, []) if t not in chain]
+            if not nxt or len(chain) >= _FLOW_DEPTH:
+                key = frozenset(chain)
+                if len(chain) >= 2 and key not in seen:
+                    seen.add(key)
+                    out.append(chain)
+                    count += 1
+                continue
+            for t in nxt[:_FLOW_BRANCHING]:
+                queue.append((t, chain + [t]))
+    return out
+
+
+def render_mermaid(edges: list[tuple[str, str, int, int]]) -> str:
+    """Cross-subsystem graph as a Mermaid block. Deterministic and
+    byte-stable: sorted input, rendered by code, never by the LLM."""
+    lines = ["```mermaid", "graph LR"]
+    for a, b, _iw, _cw in sorted(edges):
+        lines.append(f"  {a} --> {b}")
+    lines.append("```")
+    return "\n".join(lines)
