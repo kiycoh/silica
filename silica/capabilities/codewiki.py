@@ -162,3 +162,205 @@ def generate_overview(summaries, edges, flows, project_info: str, config) -> Not
         parts += [" -> ".join(chain) for chain in flows]
     user = "Write the architecture overview.\n\n<digest>\n" + "\n".join(parts) + "\n</digest>"
     return _call_worker(config, _OVERVIEW_SYSTEM, user)
+
+
+# ---------------------------------------------------------------------------
+# /wiki pipeline — deterministic gate, one worker call per regenerating note
+# ---------------------------------------------------------------------------
+
+_MERMAID_BEGIN = "<!-- silica:wiki:graph -->"
+_MERMAID_END = "<!-- /silica:wiki:graph -->"
+
+
+def _note_body(front: str, prose: str) -> str:
+    return front + prose.strip() + "\n"
+
+
+def _subsystem_frontmatter(d, head: str) -> str:
+    docs = "\n".join(f'  - "{m}"' for m in d.members)
+    return ("---\n"
+            f"documents:\n{docs}\n"
+            f"code_ref: {head}\n"
+            f"wiki_struct_sig: {d.struct_sig}\n"
+            "tags:\n  - codebase\n  - architecture\n"
+            "---\n\n")
+
+
+def _overview_frontmatter(head: str, ref: str) -> str:
+    # no documents: key, or /stale would flag the overview on every commit
+    return ("---\n"
+            f"code_ref: {head}\n"
+            f"wiki_edges_ref: {ref}\n"
+            "tags:\n  - codebase\n  - architecture\n"
+            "---\n\n")
+
+
+def _mermaid_section(block: str) -> str:
+    return f"{_MERMAID_BEGIN}\n{block}\n{_MERMAID_END}\n\n"
+
+
+def _replace_mermaid(body: str, block: str) -> str:
+    begin = body.find(_MERMAID_BEGIN)
+    end = body.find(_MERMAID_END)
+    if begin == -1 or end == -1:
+        return _mermaid_section(block) + body
+    return body[:begin] + _mermaid_section(block).rstrip("\n") + body[end + len(_MERMAID_END):]
+
+
+def _project_info(root) -> str:
+    pp = root / "pyproject.toml"
+    if not pp.is_file():
+        return "(no pyproject.toml)"
+    try:
+        import tomllib
+        project = tomllib.loads(pp.read_text(encoding="utf-8")).get("project", {})
+    except Exception:
+        return "(pyproject.toml unreadable)"
+    scripts = ", ".join(f"{k} = {v}" for k, v in (project.get("scripts") or {}).items())
+    return (f"name: {project.get('name', '?')}\n"
+            f"description: {project.get('description', '')}\n"
+            f"scripts: {scripts or '(none)'}")
+
+
+def run_wiki(vault, config, folder: str | None = None,
+             overview_only: bool = False, force: bool = False) -> dict:
+    """Five-stage /wiki pipeline. Deterministic stages 0-1 and 4; one worker
+    LLM call per regenerating subsystem (stage 2) plus one for the overview
+    (stage 3). Sequential calls in v1.
+    # ponytail: sequential LLM calls; capability-seam batching if a big repo is slow
+    """
+    from pathlib import Path
+
+    from silica.agent.bounds import refiner_bounds
+    from silica.agent.commit import commit_ops
+    from silica.kernel import frontmatter, gitstate, paths
+    from silica.kernel.codedocs import CHANGE_STRUCTURAL, stale_docs
+    from silica.kernel.codegraph import load_codegraph
+    from silica.kernel.codewiki import (
+        build_digests, cross_edges, edges_ref, partition, render_mermaid,
+    )
+    from silica.kernel.ops import Op, OpType
+    from silica.kernel.vault_manifest import load_manifest
+
+    vault = Path(vault)
+    root = paths.repo_root_for(vault)
+    if root is None:
+        return {"status": "no_repo", "written": [], "skipped": [], "parse_errors": 0}
+
+    graph = load_codegraph(vault)
+    if graph is None:
+        return {"status": "no_repo", "written": [], "skipped": [], "parse_errors": 0}
+    subs = partition(graph)
+    if folder:
+        subs = [s for s in subs if s.key == folder.strip("/")]
+        if not subs:
+            return {"status": "error", "reason": f"unknown subsystem: {folder}",
+                    "written": [], "skipped": [], "parse_errors": 0}
+    digests = build_digests(graph, subs, root)
+    head = gitstate.head_ref(root) or ""
+    edges = cross_edges(graph, partition(graph))   # full graph, even when scoped
+    ref = edges_ref(edges)
+
+    wiki_dir = ""
+    try:
+        wiki_dir = (load_manifest(vault).conventions.wiki_dir or "").strip("/")
+    except Exception:
+        pass
+    prefix = f"{wiki_dir}/" if wiki_dir else ""
+
+    structurally_stale = {d.note_path for d in stale_docs(vault)
+                          if d.change_level == CHANGE_STRUCTURAL}
+
+    written: list[str] = []
+    skipped: list[str] = []
+    any_regen = False
+
+    def _read(rel: str) -> str:
+        p = vault / rel
+        try:
+            return p.read_text(encoding="utf-8")
+        except OSError:
+            return ""
+
+    def _commit(rel: str, content: str, reason: str) -> bool:
+        existing = _read(rel)
+        if not existing:
+            # ponytail: direct create for new notes. overwrite raises on absent
+            # files and the ingest write-op validators are shaped for distilled
+            # notes (hub-in-body, containment, snippet gate); anti-info-loss
+            # bounds add nothing with no prior prose. Regen below keeps the
+            # commit_ops + refiner_bounds channel where it matters.
+            from silica.driver import DRIVER
+            DRIVER.create(rel, content)
+            return True
+        parent = Path(rel).parent
+        target_dir = "" if str(parent) == "." else str(parent)
+        # hub=None on purpose: a wiki note IS its subsystem, so the refiner's
+        # anti-hub-clobber guard (which forbids the hub note) would reject the
+        # note's own path (core.md ~ hub "core"). The anti-info-loss guard and
+        # transactional rollback still apply.
+        op = Op(op=OpType.overwrite,
+                heading=Path(rel).stem, source_basename=Path(rel).name,
+                path=rel, content=content, reason=reason)
+        result = commit_ops([op], target_dir=target_dir,
+                            bounds=refiner_bounds(rel),
+                            read_note=lambda _p: _read(rel))
+        return result.get("status") == "committed"
+
+    summaries: list[tuple[str, str]] = []
+    for d in digests:
+        rel = f"{prefix}subsystems/{d.key}.md"
+        existing = _read(rel)
+        regen = force or not existing
+        if existing and not regen:
+            data, _, _ = frontmatter.split(existing)
+            data = data or {}
+            if rel in structurally_stale:
+                regen = True                              # gate (a)
+            if str(data.get("wiki_struct_sig", "")) != d.struct_sig:
+                regen = True                              # gate (b)
+        if overview_only:
+            regen = False
+        if not regen:
+            skipped.append(rel)
+            if existing:
+                _, _, body = frontmatter.split(existing)
+                summaries.append((d.key, (body or "").strip().splitlines()[0] if body else ""))
+            continue
+        digest_text = render_digest(d)
+        note = generate_subsystem_note(d, digest_text, config)
+        if not note.content.strip():
+            skipped.append(rel)                           # no_change, others proceed
+            continue
+        if _commit(rel, _note_body(_subsystem_frontmatter(d, head), note.content),
+                   reason="code wiki subsystem note"):
+            written.append(rel)
+            any_regen = True
+            summaries.append((d.key, note.content.strip().splitlines()[0]))
+
+    arch_rel = f"{prefix}ARCHITECTURE.md"
+    existing_arch = _read(arch_rel)
+    arch_data, _, arch_body = frontmatter.split(existing_arch) if existing_arch else ({}, "", "")
+    regen_arch = force or not existing_arch or any_regen \
+        or str((arch_data or {}).get("wiki_edges_ref", "")) != ref
+    mermaid = render_mermaid(edges)
+    if regen_arch:
+        project_info = _project_info(root)
+        flows = [f for d in digests for f in d.flow_sketches][:10]
+        note = generate_overview(summaries, edges, flows, project_info, config)
+        if note.content.strip():
+            body = _mermaid_section(mermaid) + note.content
+            if _commit(arch_rel, _note_body(_overview_frontmatter(head, ref), body),
+                       reason="code wiki overview"):
+                written.append(arch_rel)
+        else:
+            skipped.append(arch_rel)
+    elif existing_arch:
+        refreshed = _replace_mermaid(arch_body or "", mermaid)
+        if refreshed != (arch_body or ""):
+            _commit(arch_rel, _note_body(_overview_frontmatter(head, ref), refreshed),
+                    reason="code wiki mermaid refresh")
+        skipped.append(arch_rel)
+
+    return {"status": "ok", "written": written, "skipped": skipped,
+            "parse_errors": sum(d.parse_errors for d in digests)}

@@ -94,3 +94,95 @@ def test_generate_overview_includes_project_info(monkeypatch):
     user_msg = fake.messages[1]["content"]
     assert "name: silica" in user_msg
     assert "does kernel things" in user_msg
+
+
+# ---------------------------------------------------------------------------
+# Task 9: run_wiki pipeline + idempotency gate
+# ---------------------------------------------------------------------------
+
+import subprocess
+
+from silica.capabilities.codewiki import run_wiki
+
+
+def _git(root, *args):
+    subprocess.run(["git", *args], cwd=root, check=True, capture_output=True)
+
+
+def _mkrepo(tmp_path):
+    root = tmp_path / "repo"
+    root.mkdir()
+    _git(root, "init", "-q")
+    (root / "pkg").mkdir()
+    (root / "pkg" / "__init__.py").write_text("", encoding="utf-8")
+    (root / "pkg" / "core.py").write_text(
+        '"""Core module."""\nfrom pkg.util import helper\n\n\n'
+        "def main():\n    helper()\n\n\n"
+        'if __name__ == "__main__":\n    main()\n', encoding="utf-8")
+    (root / "pkg" / "util.py").write_text(
+        '"""Util module."""\n\n\ndef helper():\n    pass\n', encoding="utf-8")
+    _git(root, "add", "-A")
+    _git(root, "-c", "user.email=t@t", "-c", "user.name=t", "commit", "-q", "-m", "init")
+    vault = root / ".silica"
+    vault.mkdir()
+    return root, vault
+
+
+@pytest.fixture()
+def wiki_env(tmp_path, monkeypatch):
+    root, vault = _mkrepo(tmp_path)
+    fake = _FakeProvider('{"content": "Behavioral prose about the subsystem."}')
+    monkeypatch.setattr("silica.agent.providers.get_provider",
+                        lambda config, role: fake)
+    # keep the derived index inside the tmp vault
+    from silica.kernel import paths as kpaths
+    monkeypatch.setattr(kpaths, "index_dir", lambda: vault / ".index")
+    (vault / ".index").mkdir(parents=True, exist_ok=True)
+    # bind the write channel (DRIVER) at the tmp vault (canonical tmp_vault setup)
+    import silica.config
+    import silica.driver
+    monkeypatch.setattr(silica.config.CONFIG, "backend", "fs")
+    monkeypatch.setattr(silica.config.CONFIG, "vault_path", str(vault))
+    silica.driver._driver = None
+    yield root, vault, fake
+    silica.driver._driver = None
+
+
+def test_first_run_builds_everything(wiki_env):
+    root, vault, fake = wiki_env
+    result = run_wiki(vault, config=None)
+    assert result["status"] == "ok"
+    arch = vault / "ARCHITECTURE.md"
+    note = vault / "subsystems" / "core.md"
+    assert arch.is_file() and note.is_file()
+    text = note.read_text(encoding="utf-8")
+    assert "wiki_struct_sig:" in text and "code_ref:" in text and "documents:" in text
+    assert "```mermaid" in arch.read_text(encoding="utf-8")
+
+
+def test_second_run_on_still_repo_skips_llm(wiki_env):
+    root, vault, fake = wiki_env
+    run_wiki(vault, config=None)
+    fake.messages = None
+    result = run_wiki(vault, config=None)
+    assert result["written"] == []
+    assert fake.messages is None            # no LLM call on a still repo
+
+
+def test_body_only_call_change_triggers_regen(wiki_env):
+    root, vault, fake = wiki_env
+    run_wiki(vault, config=None)
+    # body-only edit: remove the imported call (import stays, call goes:
+    # import set and signatures identical)
+    (root / "pkg" / "core.py").write_text(
+        '"""Core module."""\nfrom pkg.util import helper\n\n\n'
+        "def main():\n    pass\n\n\n"
+        'if __name__ == "__main__":\n    main()\n', encoding="utf-8")
+    result = run_wiki(vault, config=None)
+    assert any(p.endswith("core.md") for p in result["written"])
+
+
+def test_no_repo_degrades_soft(tmp_path, monkeypatch):
+    from silica.kernel import paths as kpaths
+    monkeypatch.setattr(kpaths, "repo_root_for", lambda v: None)
+    assert run_wiki(tmp_path, config=None)["status"] == "no_repo"
