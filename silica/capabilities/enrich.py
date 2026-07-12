@@ -12,7 +12,7 @@ from silica.agent.commit import commit_ops
 from silica.agent.bounds import refiner_bounds
 from silica.kernel.ops import Op, OpType
 from silica.kernel.workqueue import WorkItem
-from silica.capabilities._base import NoteContent, emit_feedback, read_or_skip
+from silica.capabilities._base import NoteContent, emit_feedback, load_prompt, read_or_skip
 
 logger = logging.getLogger(__name__)
 
@@ -73,6 +73,7 @@ def _enrich_note(config: Any, target_path: str, original: str, hub: str) -> Note
         "3. Perform structuring in Obsidian Flavored Markdown: use callouts (> [!tip], > [!note]), LaTeX equation blocks ($$ ... $$) if appropriate, lists, and bold text.\n"
         f"4. You must include a wikilink [[{hub}]] to the hub/parent note (for example in a final section called '# Relations' or '# Connections').\n"
         "5. Return the result structured in JSON format containing a single key 'content' with the full body of the note (including normalized and updated YAML frontmatter tags, and the enriched body)."
+        "\n\n" + load_prompt("_anti_slop.txt")
     )
 
     title = os.path.splitext(os.path.basename(target_path))[0]
@@ -88,7 +89,7 @@ def _enrich_note(config: Any, target_path: str, original: str, hub: str) -> Note
         ],
         tools=None,
         response_schema=NoteContent,
-        max_tokens=int(os.getenv("ENRICH_MAX_TOKENS", os.getenv("MAX_TOKENS", "256000"))),
+        max_tokens=int(os.getenv("ENRICH_MAX_TOKENS", os.getenv("MAX_TOKENS", "65536"))),
     )
     raw = response.text or ""
     try:

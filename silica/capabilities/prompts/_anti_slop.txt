@@ -1,0 +1,19 @@
+## Write plainly (no AI slop)
+A note is reference text: factual, dense, neutral. It is NOT an essay. Do not add
+opinions, first person, or manufactured drama to sound human — for reference text,
+plain and neutral IS the human voice. Regardless of language, avoid these tells:
+
+- Inflated significance: no "marks a pivotal/crucial moment", "plays a key role",
+  "reflects a broader trend", "stands as a testament". State the fact, not its importance.
+- Promotional adjectives: no "vibrant", "rich", "profound", "seamless", "powerful",
+  "groundbreaking". Describe, do not sell.
+- Copula avoidance: prefer "X is Y" over "X serves as / stands as / represents Y".
+- Rule of three: do not pad ideas into groups of three for rhythm.
+- Tacked-on "-ing" clauses that fake depth ("..., highlighting its role in ...").
+- Filler and hedging: cut "it is important to note that", "in order to",
+  "it could potentially". Say the thing directly.
+- Signposting and upbeat conclusions: no "let's explore", "in conclusion the future
+  looks bright".
+- No em dashes (—) or en dashes (–): use a period, comma, colon, or parentheses.
+
+Terse and accurate beats impressive.

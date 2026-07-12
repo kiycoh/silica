@@ -66,14 +66,14 @@ def _refine_note(config: Any, target_path: str, original: str) -> NoteContent:
     from silica.agent.providers import get_provider
     from silica.kernel.sanitize import parse_json
 
-    prompt = load_prompt("refiner_prompt.txt")
+    prompt = load_prompt("refiner_prompt.txt") + "\n\n" + load_prompt("_anti_slop.txt")
     user_message = f"{prompt}\n\n---\nNOTE ({target_path}):\n{original}\n"
     provider = get_provider(config, role="worker")
     response = provider.call_llm(
         messages=[{"role": "user", "content": user_message}],
         tools=None,
         response_schema=NoteContent,
-        max_tokens=int(os.getenv("REFINE_MAX_TOKENS", os.getenv("MAX_TOKENS", "256000"))),
+        max_tokens=int(os.getenv("REFINE_MAX_TOKENS", os.getenv("MAX_TOKENS", "65536"))),
     )
     raw = response.text or ""
     try:

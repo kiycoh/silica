@@ -22,6 +22,8 @@ logger = logging.getLogger(__name__)
 
 # Distiller prompt template — vendored at install time
 _PROMPT_PATH = Path(__file__).resolve().parent.parent / "capabilities" / "prompts" / "distiller_prompt.txt"
+# Shared anti-slop fragment, appended to every body-writing prompt (refine/enrich too).
+_ANTI_SLOP_PATH = _PROMPT_PATH.parent / "_anti_slop.txt"
 
 
 def _load_prompt() -> str:
@@ -58,6 +60,8 @@ def render_prompt(target: str, hub: str | None = None, source_text: str = "") ->
     )
     body = body.replace("{LANGUAGE}", lang_name)
     body = body.replace("{MAX_TAGS}", str(conventions.max_tags))
+    if _ANTI_SLOP_PATH.exists():  # ponytail: optional fragment, missing file must not break ingestion
+        body += "\n\n" + _ANTI_SLOP_PATH.read_text(encoding="utf-8")
     return body
 
 
