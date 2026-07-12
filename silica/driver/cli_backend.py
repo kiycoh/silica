@@ -511,8 +511,11 @@ class ObsidianCLIBackend(GraphIndexMixin):
         """Read a note's full content by name or ref."""
         content = self._run_cli("read", self._ref_arg(ref))
         name = ref if isinstance(ref, str) else ref.name
+        # Driver contract: ref.path carries the resolved vault-relative path,
+        # same as the fs/ws backends — silica_related keys the relatedness
+        # indexes off it, so leaving it '' silently empties those results.
         return NoteContent(
-            ref=NoteRef(name=name),
+            ref=NoteRef(name=name, path=self._resolve_path(ref)),
             content=content,
             size=len(content),
         )

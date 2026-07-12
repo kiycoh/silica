@@ -369,10 +369,11 @@ def silica_related(note: str, k: int = 5) -> dict[str, Any]:
     # _norm_path here — its lowercasing misses the case-preserving stored keys.
     try:
         query_path = DRIVER.read_note(note).ref.path
-        resolved = True
+        resolved = bool(query_path)  # a backend returning '' must not pass as resolved
     except Exception:
-        query_path = note  # unresolved: treat the input itself as a path
         resolved = False
+    if not resolved:
+        query_path = note  # unresolved: treat the input itself as a path
     query_path = cooccur_key(query_path)
 
     embed_store = get_store()
