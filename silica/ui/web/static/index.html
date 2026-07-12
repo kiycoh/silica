@@ -18,6 +18,7 @@
       <button class="tab" data-tab="map">map</button>
     </nav>
     <div class="spacer"></div>
+    <button id="note-last" class="ghost" hidden title="reopen last note"></button>
     <div class="ctx-tokens" id="ctx-tokens" title="context window usage"></div>
     <button id="new-chat" class="ghost">+ new chat</button>
     <button id="stop" class="ghost" hidden>&#9632; stop</button>
@@ -41,7 +42,7 @@
       </div>
 
       <details class="side-section" id="side-files" open>
-        <summary class="side-title">Files</summary>
+        <summary class="side-title">Files<button id="tree-toggle" type="button" title="expand/collapse all folders"></button></summary>
         <div id="tree"></div>
       </details>
 
@@ -103,7 +104,10 @@
         <button data-cmd="/embed">/embed</button>
         <button data-cmd="/find">/find</button>
       </div>
+      <div id="attachments" hidden></div>
       <form id="composer">
+        <input id="ingest-file" type="file" multiple hidden />
+        <button type="button" id="attach" title="attach files (pdf, code, notes…)">+</button>
         <textarea id="input" rows="1" placeholder="message silica…  (⏎ send, ⇧⏎ newline)"></textarea>
         <button type="submit" id="send">send</button>
       </form>
@@ -147,6 +151,21 @@
     </details>
     <div id="note-body"></div>
   </aside>
+
+  <div id="dock" hidden>
+    <div id="peek" hidden>
+      <header>
+        <span id="peek-title"></span>
+        <button id="peek-open-chat" class="ghost" title="continue in chat — full transcript">open in chat</button>
+        <button id="peek-close" class="ghost" title="dismiss">&#10005;</button>
+      </header>
+      <div id="peek-body"></div>
+    </div>
+    <form id="dock-composer">
+      <textarea id="dock-input" rows="1" placeholder="ask the vault from here…  (⏎ send, ⇧⏎ newline)"></textarea>
+      <button type="submit" id="dock-send">send</button>
+    </form>
+  </div>
 
   <script src="/static/app.js"></script>
 </body>

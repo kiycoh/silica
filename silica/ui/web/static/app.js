@@ -177,10 +177,12 @@ async function runTurn(fetchPromise) {
     }
   } catch (e) {
     flowMsg("error: " + e);
+    peekError(String(e));
   } finally {
     streaming = false;
     stopBtn.hidden = true;
     caret.remove(); // no-op if a rerender already detached it
+    freezePeek(); // done or aborted — stop mirroring, keep the preview up
     if (curThink) curThink.details.open = false; // aborted mid-thought — still collapse
     if (touched.size) {
       const s = document.createElement("div");
@@ -214,6 +216,7 @@ async function runTurn(fetchPromise) {
       seg.raw += ev.text;
       seg.el.innerHTML = mdLite(seg.raw);
       (seg.el.lastElementChild || seg.el).appendChild(caret); // inline at the text tail
+      peekDelta(ev.text);
     } else if (ev.type === "tool_start") {
       const t = document.createElement("div");
       t.className = "tool";
@@ -247,8 +250,10 @@ async function runTurn(fetchPromise) {
       }
       close(""); // collapse any open thinking, end all segments
       setCtxTokens(ev.context_tokens, ev.max_context_tokens);
+      peekDone(ev); // card gets the canonical OFM render
     } else if (ev.type === "error") {
       close("");
+      peekError(ev.error);
       const t = document.createElement("div");
       t.className = "tool error";
       t.textContent = "error: " + ev.error;
@@ -274,6 +279,9 @@ function send(text) {
 // the /graph and /map tabs, just rendered inline as a result bubble.
 async function runFind(rest) {
   const body = bubble("silica");
+  // dock-launched /find: mirror the result bubble into the card (no SSE stream
+  // here, so the peek would otherwise sit at "thinking" forever)
+  const mirror = () => { if (peek) { peek.body.innerHTML = body.innerHTML; freezePeek(); } };
   let k = 5;
   const tokens = [];
   for (const part of rest.trim().split(/\s+/)) {
@@ -282,7 +290,7 @@ async function runFind(rest) {
     else if (part) tokens.push(part);
   }
   const query = tokens.join(" ");
-  if (!query) { body.textContent = "usage: /find <query> [--k=N]"; return; }
+  if (!query) { body.textContent = "usage: /find <query> [--k=N]"; mirror(); return; }
   body.textContent = "searching…";
   try {
     const r = await fetch("/find?q=" + encodeURIComponent(query) + "&k=" + k);
@@ -290,26 +298,49 @@ async function runFind(rest) {
   } catch (e) {
     body.textContent = "error: " + e;
   }
+  mirror();
 }
 
 // --- composer ---------------------------------------------------------------
-function autoGrow() {
-  input.style.height = "auto";
-  const border = input.offsetHeight - input.clientHeight; // box-sizing: border-box
-  input.style.height = (input.scrollHeight + border) + "px"; // clamped visually by CSS max-height
+function autoGrow(el) {
+  el.style.height = "auto";
+  const border = el.offsetHeight - el.clientHeight; // box-sizing: border-box
+  el.style.height = (el.scrollHeight + border) + "px"; // clamped visually by CSS max-height
 }
 $("#composer").addEventListener("submit", (e) => {
   e.preventDefault();
   const t = input.value;
   input.value = "";
-  autoGrow();
-  send(t);
+  autoGrow(input);
+  if (staged.length) ingestStaged(t); // files attached: upload + act on them together
+  else send(t);
 });
-input.addEventListener("input", autoGrow);
+input.addEventListener("input", () => autoGrow(input));
 input.addEventListener("keydown", (e) => {
   if (e.key === "Enter" && !e.shiftKey) {
     e.preventDefault();
     $("#composer").requestSubmit();
+  }
+});
+
+// --- dock composer (graph/map) — same conversation, mirrored into the card ---
+// The turn is a real chat turn (user bubble + transcript land in the chat tab);
+// the dock card is a lens showing only the latest exchange.
+const dockInput = $("#dock-input");
+$("#dock-composer").addEventListener("submit", (e) => {
+  e.preventDefault();
+  const t = dockInput.value;
+  if (!t.trim() || streaming) return;
+  dockInput.value = "";
+  autoGrow(dockInput);
+  openPeek(t.trim());
+  send(t);
+});
+dockInput.addEventListener("input", () => autoGrow(dockInput));
+dockInput.addEventListener("keydown", (e) => {
+  if (e.key === "Enter" && !e.shiftKey) {
+    e.preventDefault();
+    $("#dock-composer").requestSubmit();
   }
 });
 $("#commands").addEventListener("click", (e) => {
@@ -349,8 +380,28 @@ async function loadVaultInfo() {
     $("#stat-unresolved").textContent = data.unresolved;
     $("#tree").innerHTML = data.tree || "";
     applySidebarFilter();
+    syncTreeToggle();
   } catch (_) {}
 }
+
+// Collapse/expand-all: 0 folders open → expand all, otherwise collapse all.
+// Label + action both read live state, so it stays in sync when folders are
+// toggled by hand (the toggle event doesn't bubble, so listen in capture).
+function syncTreeToggle() {
+  const folders = $("#tree").querySelectorAll("details");
+  const open = Array.from(folders).some((d) => d.open);
+  const btn = $("#tree-toggle");
+  btn.hidden = folders.length === 0;
+  btn.textContent = open ? "collapse" : "expand";
+}
+$("#tree-toggle").addEventListener("click", (e) => {
+  e.preventDefault(); // don't toggle the Files section itself
+  const folders = $("#tree").querySelectorAll("details");
+  const expand = !Array.from(folders).some((d) => d.open);
+  folders.forEach((d) => (d.open = expand));
+  syncTreeToggle();
+});
+$("#tree").addEventListener("toggle", syncTreeToggle, true);
 
 // Tree click routing follows the active tab: map roots the radial map on the
 // note; chat/graph open the note drawer (which also mirrors focus into the
@@ -444,6 +495,8 @@ $(".tabs").addEventListener("click", (e) => {
   const tab = e.target.dataset.tab;
   if (!tab) return;
   activeTab = tab;
+  if (tab === "chat") closePeek(); // stream visible → card redundant
+  $("#dock").hidden = tab === "chat"; // ask-from-here strip lives on graph + map
   document.querySelectorAll(".tab").forEach((b) => b.classList.toggle("active", b.dataset.tab === tab));
   $("#view-chat").classList.toggle("active", tab === "chat");
   $("#view-graph").classList.toggle("active", tab === "graph");
@@ -469,7 +522,43 @@ $("#map-bar").addEventListener("submit", (e) => {
 });
 $("#map-frame").addEventListener("load", () => { $("#map-loading").hidden = true; });
 
-// --- drop-zone (whole window) ----------------------------------------------
+// --- attachments: drop / "+" accumulate files as chips above the input; they
+// are NOT ingested on drop. The next composer submit uploads them together with
+// the typed message, so the agent acts on the files per the user's instruction.
+let staged = []; // File objects awaiting the next submit
+const attachEls = $("#attachments");
+
+function renderAttachments() {
+  attachEls.innerHTML = "";
+  attachEls.hidden = staged.length === 0;
+  staged.forEach((f, i) => {
+    const chip = document.createElement("span");
+    chip.className = "chip";
+    chip.innerHTML = `<span class="chip-name"></span><button type="button" class="chip-x" title="remove">✕</button>`;
+    chip.querySelector(".chip-name").textContent = f.name;
+    chip.querySelector(".chip-x").addEventListener("click", () => { staged.splice(i, 1); renderAttachments(); });
+    attachEls.appendChild(chip);
+  });
+}
+function addFiles(fileList) {
+  for (const f of fileList) staged.push(f);
+  renderAttachments();
+}
+
+// Upload every staged file + the typed text as one turn (server stages them —
+// converts PDFs, stubs code — then the agent works on them per `text`).
+function ingestStaged(text) {
+  if (streaming || !staged.length) return;
+  const names = staged.map((f) => f.name);
+  bubble("user").textContent = (text.trim() ? text.trim() + "\n" : "") + "⇪ " + names.join(", ");
+  const fd = new FormData();
+  for (const f of staged) fd.append("files", f);
+  fd.append("text", text);
+  staged = [];
+  renderAttachments();
+  runTurn(fetch("/ingest", { method: "POST", body: fd }));
+}
+
 let dragDepth = 0;
 window.addEventListener("dragenter", (e) => { e.preventDefault(); dragDepth++; document.body.classList.add("dragging"); });
 window.addEventListener("dragover", (e) => e.preventDefault());
@@ -478,17 +567,30 @@ window.addEventListener("drop", (e) => {
   e.preventDefault();
   dragDepth = 0;
   document.body.classList.remove("dragging");
-  const file = e.dataTransfer.files[0];
-  if (!file) return;
-  bubble("user").textContent = "⇪ ingest: " + file.name;
-  const fd = new FormData();
-  fd.append("file", file);
-  runTurn(fetch("/ingest", { method: "POST", body: fd }));
+  if (e.dataTransfer.files.length) addFiles(e.dataTransfer.files);
+});
+
+// "+" opens the native picker, constrained to what the ingest lanes accept.
+const ingestInput = $("#ingest-file");
+fetch("/supported_types")
+  .then((r) => r.json())
+  .then((d) => { ingestInput.accept = (d.extensions || []).join(","); })
+  .catch(() => {}); // accept="" just means the picker shows all files
+$("#attach").addEventListener("click", () => ingestInput.click());
+ingestInput.addEventListener("change", () => {
+  addFiles(ingestInput.files);
+  ingestInput.value = ""; // reset so re-picking the same file fires change again
 });
 
 // --- note panel (right overlay drawer; opens from .note-link, the graph, and the map) -
 const notePanel = $("#note-panel");
-let lastNotePath = null;
+let lastNotePath = null;   // note currently open in the drawer
+let lastViewedPath = null; // survives close — feeds the header reopen button
+
+// The dock inset and the drawer width must agree; CSS reads it as --note-w.
+function setNoteW(w) {
+  document.documentElement.style.setProperty("--note-w", w + "px");
+}
 
 // Mirror the open note onto the graph + map iframes: the matching node + its
 // 1-hop neighbours go full-opacity, everything else dims. No-op harmlessly if
@@ -531,6 +633,7 @@ function renderMermaid(root) {
 async function openNote(path) {
   if (!path) return;
   lastNotePath = path;
+  lastViewedPath = path;
   focusGraphNode(path);
   $("#note-mini-map").open = false; // reset: reload lazily if reopened for the new note
   $("#note-mini-map-frame").src = "";
@@ -543,14 +646,22 @@ async function openNote(path) {
     $("#note-body").scrollTop = 0;
     notePanel.classList.add("open");
     notePanel.setAttribute("aria-hidden", "false");
+    document.body.classList.add("note-open"); // dock insets to the drawer's edge
+    const btn = $("#note-last");
+    btn.textContent = data.title || path;
+    btn.hidden = false;
   } catch (_) {}
 }
 function closeNote() {
   notePanel.classList.remove("open");
   notePanel.setAttribute("aria-hidden", "true");
-  lastNotePath = null;
+  document.body.classList.remove("note-open");
+  lastNotePath = null; // lastViewedPath survives — the header button can reopen
   focusGraphNode(null);
 }
+$("#note-last").addEventListener("click", () => {
+  if (lastViewedPath) openNote(lastViewedPath);
+});
 
 // Mini-map: load only when expanded (native <details>), so a plain note read
 // never pays for a /map render.
@@ -574,13 +685,13 @@ $("#note-map").addEventListener("click", () => {
 });
 
 // summarize / explain / quiz — dispatch the reader slash-command for the open
-// note as a chat turn, then close the drawer so the streamed answer is visible.
-// Capture path/title BEFORE closeNote() nulls lastNotePath.
+// note as a chat turn. The drawer stays open (the peek dock tucks under it and
+// mirrors the turn), so the note you launched from is never lost.
 const shellQuote = (s) => '"' + String(s).replace(/"/g, '\\"') + '"';
 function drawerReader(makeCmd) {
-  if (!lastNotePath) return;
+  if (!lastNotePath || streaming) return; // streaming: send() would no-op — no peek either
   const cmd = makeCmd(lastNotePath, $("#note-title").textContent.trim());
-  closeNote();
+  if (activeTab !== "chat") openPeek(cmd); // on chat the stream is already visible
   send(cmd);
 }
 $("#note-summarize").addEventListener("click", () => drawerReader((p) => "/summarize " + shellQuote(p)));
@@ -588,10 +699,66 @@ $("#note-explain").addEventListener("click", () => drawerReader((p, t) => "/expl
 $("#note-quiz").addEventListener("click", () => drawerReader((p) => "/quiz " + shellQuote(p)));
 $("#note-relate").addEventListener("click", () => drawerReader((p) => "/relate " + shellQuote(p)));
 
+// --- dock card (rendered answer for a dock- or drawer-launched turn) ---------
+// Not a re-implementation of the chat flow: no tools, no thinking text. Title =
+// the dispatched prompt; body = pulsing "thinking", then the answer as live
+// markdown (mdLite), upgraded to the canonical OFM render on `done` — so
+// wikilinks in the card open the note drawer and focus the graph. One exchange
+// only; the next one replaces it. "open in chat" → the full transcript.
+const peekEl = $("#peek");
+let peek = null; // { body, caret, raw } while a turn is being mirrored
+function openPeek(title) {
+  const body = $("#peek-body");
+  body.className = "";
+  body.textContent = "thinking";
+  const caret = document.createElement("span"); // own instance: the chat caret is a
+  caret.className = "caret";                    // single element, re-parented live
+  caret.textContent = "▍";
+  body.appendChild(caret);
+  $("#peek-title").textContent = title;
+  peekEl.hidden = false;
+  peek = { body, caret, raw: "" };
+}
+function closePeek() {
+  peekEl.hidden = true;
+  peek = null;
+}
+// Freeze: stop mirroring, drop the caret, leave the card up until dismissed.
+function freezePeek() {
+  if (!peek) return;
+  peek.caret.remove();
+  peek = null;
+}
+function peekDelta(text) {
+  if (!peek) return;
+  peek.raw += text;
+  peek.body.innerHTML = mdLite(peek.raw);
+  (peek.body.lastElementChild || peek.body).appendChild(peek.caret);
+  peek.body.scrollTop = peek.body.scrollHeight;
+}
+// `done` upgrade: the server's canonical OFM render (wikilinks, callouts, math),
+// same swap the chat pane does. Also covers no-delta turns (raw still empty).
+function peekDone(ev) {
+  if (!peek) return;
+  if (ev.html || ev.answer) peek.body.innerHTML = ev.html || escapeHtml(ev.answer);
+  freezePeek();
+}
+function peekError(msg) {
+  if (!peek) return;
+  peek.body.classList.add("error");
+  peek.body.textContent = "error: " + msg;
+  peek = null; // frozen; card stays until dismissed
+}
+$("#peek-open-chat").addEventListener("click", () => {
+  document.querySelector('.tab[data-tab="chat"]').click(); // tab handler closes the peek
+});
+$("#peek-close").addEventListener("click", closePeek);
+
 // --- note panel resize (drag left edge, clamped) ----------------------------
 const NOTE_MIN_W = 280, NOTE_MAX_W = 800;
 const savedNoteWidth = parseInt(localStorage.getItem("note-width"), 10);
 if (savedNoteWidth) notePanel.style.width = Math.min(NOTE_MAX_W, Math.max(NOTE_MIN_W, savedNoteWidth)) + "px";
+setNoteW(parseInt(notePanel.style.width, 10) || 420);
 let resizingNote = false; // guards the outside-click-closes handler below: a drag
                            // that ends outside #note-panel fires a "click" there too
 $("#note-resize").addEventListener("mousedown", (e) => {
@@ -601,6 +768,7 @@ $("#note-resize").addEventListener("mousedown", (e) => {
   const onMove = (e2) => {
     const w = Math.min(NOTE_MAX_W, Math.max(NOTE_MIN_W, startWidth + (startX - e2.clientX)));
     notePanel.style.width = w + "px";
+    setNoteW(w); // keep the dock inset glued to the drawer edge while dragging
   };
   const onUp = () => {
     document.removeEventListener("mousemove", onMove);
@@ -612,15 +780,18 @@ $("#note-resize").addEventListener("mousedown", (e) => {
   document.addEventListener("mouseup", onUp);
 });
 // One delegated handler: .note-link (chat OR in-panel → in-place nav) opens the
-// drawer; a click outside an open drawer closes it. The sidebar is persistent
-// nav — clicking it (pick a note, toggle a folder) must not close the drawer or
-// reset the graph focus, so it never counts as "outside".
+// drawer; a click outside an open drawer closes it. The sidebar and the dock
+// are persistent instruments — picking a note, toggling a folder, or typing a
+// question about the open note must not close the drawer or reset the graph
+// focus, so they never count as "outside". Neither does the reopen button
+// (its own listener would immediately fight the close).
 document.addEventListener("click", (e) => {
   if (resizingNote) return;
   const link = e.target.closest(".note-link");
   if (link) { e.preventDefault(); openNote(link.dataset.path); return; }
   if (notePanel.classList.contains("open") &&
-      !e.target.closest("#note-panel") && !e.target.closest("#sidebar")) closeNote();
+      !e.target.closest("#note-panel") && !e.target.closest("#sidebar") &&
+      !e.target.closest("#dock") && !e.target.closest("#note-last")) closeNote();
 });
 $("#note-close").addEventListener("click", closeNote);
 document.addEventListener("keydown", (e) => { if (e.key === "Escape") closeNote(); });
@@ -647,3 +818,5 @@ async function loadVault() {
 loadVault();
 loadSessions();
 loadVaultInfo();
+// Land on chat — it's the primary surface. The tab handler does the rest.
+document.querySelector('.tab[data-tab="chat"]').click();

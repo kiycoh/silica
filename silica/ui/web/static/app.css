@@ -97,6 +97,8 @@ body {
   font-weight: 400;
   font-size: 14px;
   line-height: 1.6;
+  -webkit-font-smoothing: antialiased;
+  -moz-osx-font-smoothing: grayscale;
 }
 
 body {
@@ -158,6 +160,7 @@ header>* {
   letter-spacing: 0.08em;
   padding: 0 0.9rem;
   border-left: 1px solid var(--line);
+  font-variant-numeric: tabular-nums;
 }
 
 .spacer {
@@ -172,7 +175,8 @@ header>* {
 .tab,
 .ghost,
 .commands button,
-#send {
+#send,
+#dock-send {
   font-family: var(--sans);
   font-size: 11px;
   text-transform: uppercase;
@@ -200,6 +204,29 @@ header>* {
   color: var(--frost);
 }
 
+/* tactile press — a hard 1px key-travel, no soft scale (keeps the grid rigid) */
+.tab:active,
+.ghost:active,
+.commands button:active,
+.linklike:active,
+#send:active,
+#dock-send:active,
+#tree-toggle:active {
+  transform: translateY(1px);
+}
+
+/* keyboard focus — a hard accent ring, suppressed for the mouse. a11y gap fill */
+.tab:focus-visible,
+.ghost:focus-visible,
+.commands button:focus-visible,
+.linklike:focus-visible,
+#send:focus-visible,
+#dock-send:focus-visible,
+#tree-toggle:focus-visible {
+  outline: 1px solid var(--accent);
+  outline-offset: -1px;
+}
+
 #sidebar-toggle {
   border-right: 1px solid var(--line);
   font-size: 13px;
@@ -207,6 +234,24 @@ header>* {
 
 #new-chat {
   border-left: 1px solid var(--line);
+}
+
+/* reopen-last-note — the one header button that names content, so it keeps the
+   note's own casing and clips like a title instead of shouting uppercase */
+#note-last {
+  display: block; /* text-overflow needs a block box, not the header's flex */
+  border-left: 1px solid var(--line);
+  text-transform: none;
+  letter-spacing: 0.02em;
+  max-width: 220px;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+#note-last::before {
+  content: "// ";
+  color: var(--accent);
 }
 
 #stop {
@@ -292,6 +337,27 @@ details.side-section[open]>summary.side-title::after {
   content: " ▾";
 }
 
+#tree-toggle {
+  float: right;
+  margin-top: -2px;
+  padding: 2px 6px;
+  font-family: var(--sans);
+  font-size: 9px;
+  line-height: 1;
+  letter-spacing: 0.1em;
+  text-transform: uppercase;
+  color: var(--ash);
+  background: var(--slate-2);
+  border: 1px solid var(--line-2);
+  cursor: pointer;
+  transition: color .1s linear, border-color .1s linear;
+}
+
+#tree-toggle:hover {
+  color: var(--frost);
+  border-color: var(--ash-dim);
+}
+
 details.side-section[open]>summary.side-title {
   margin-bottom: 0.6rem;
 }
@@ -326,6 +392,7 @@ details.side-section:hover>summary.side-title {
   font-size: 19px;
   font-weight: 700;
   color: var(--frost);
+  font-variant-numeric: tabular-nums;
 }
 
 .stat .val.warn {
@@ -595,25 +662,26 @@ details.side-section:hover>summary.side-title {
 }
 
 /* markdown-it output — typeset it instead of leaving raw-looking browser
-   defaults. Shared by the chat transcript (.msg) and the note drawer
-   (#note-body): one renderer server-side, one typesetting client-side. */
-:is(.msg, #note-body) :is(p, h1, h2, h3, h4, h5, h6, ul, ol, blockquote, pre, table) {
+   defaults. Shared by the chat transcript (.msg), the note drawer (#note-body)
+   and the dock card (#peek-body): one renderer server-side, one typesetting
+   client-side. */
+:is(.msg, #note-body, #peek-body) :is(p, h1, h2, h3, h4, h5, h6, ul, ol, blockquote, pre, table) {
   margin: 0.75em 0;
 }
 
-:is(.msg, #note-body) :is(p, h1, h2, h3, h4, h5, h6, ul, ol, blockquote, pre, table):first-child {
+:is(.msg, #note-body, #peek-body) :is(p, h1, h2, h3, h4, h5, h6, ul, ol, blockquote, pre, table):first-child {
   margin-top: 0;
 }
 
-:is(.msg, #note-body) :is(p, h1, h2, h3, h4, h5, h6, ul, ol, blockquote, pre, table):last-child {
+:is(.msg, #note-body, #peek-body) :is(p, h1, h2, h3, h4, h5, h6, ul, ol, blockquote, pre, table):last-child {
   margin-bottom: 0;
 }
 
-:is(.msg, #note-body) :is(h1, h2, h3, h4, h5, h6):not(:first-child) {
+:is(.msg, #note-body, #peek-body) :is(h1, h2, h3, h4, h5, h6):not(:first-child) {
   margin-top: 1.1em;
 }
 
-:is(.msg, #note-body) :is(h1, h2, h3, h4, h5, h6) {
+:is(.msg, #note-body, #peek-body) :is(h1, h2, h3, h4, h5, h6) {
   font-weight: 700;
   letter-spacing: 0.02em;
   color: var(--frost);
@@ -621,44 +689,44 @@ details.side-section:hover>summary.side-title {
   text-transform: uppercase;
 }
 
-:is(.msg, #note-body) h1 {
+:is(.msg, #note-body, #peek-body) h1 {
   font-size: 1.1em;
 }
 
-:is(.msg, #note-body) h2 {
+:is(.msg, #note-body, #peek-body) h2 {
   font-size: 1.04em;
 }
 
-:is(.msg, #note-body) :is(h3, h4, h5, h6) {
+:is(.msg, #note-body, #peek-body) :is(h3, h4, h5, h6) {
   font-size: 1em;
 }
 
-:is(.msg, #note-body) strong {
+:is(.msg, #note-body, #peek-body) strong {
   color: var(--frost);
   font-weight: 700;
 }
 
-:is(.msg, #note-body) em {
+:is(.msg, #note-body, #peek-body) em {
   font-style: italic;
 }
 
-:is(.msg, #note-body) :is(ul, ol) {
+:is(.msg, #note-body, #peek-body) :is(ul, ol) {
   padding-left: 1.4rem;
 }
 
-:is(.msg, #note-body) ul {
+:is(.msg, #note-body, #peek-body) ul {
   list-style-type: "– ";
 }
 
-:is(.msg, #note-body) li {
+:is(.msg, #note-body, #peek-body) li {
   margin: 0.3em 0;
 }
 
-:is(.msg, #note-body) li::marker {
+:is(.msg, #note-body, #peek-body) li::marker {
   color: var(--ash-dim);
 }
 
-:is(.msg, #note-body) blockquote {
+:is(.msg, #note-body, #peek-body) blockquote {
   border-left: 2px solid var(--line-2);
   margin-left: 0;
   padding: 0 0.7rem;
@@ -666,24 +734,24 @@ details.side-section:hover>summary.side-title {
   font-style: italic;
 }
 
-:is(.msg, #note-body) hr {
+:is(.msg, #note-body, #peek-body) hr {
   border: none;
   border-top: 1px solid var(--line);
 }
 
-:is(.msg, #note-body) table {
+:is(.msg, #note-body, #peek-body) table {
   border-collapse: collapse;
   width: 100%;
   font-size: 0.9em;
 }
 
-:is(.msg, #note-body) :is(th, td) {
+:is(.msg, #note-body, #peek-body) :is(th, td) {
   border: 1px solid var(--line);
   padding: 0.3rem 0.5rem;
   text-align: left;
 }
 
-:is(.msg, #note-body) thead th {
+:is(.msg, #note-body, #peek-body) thead th {
   color: var(--ash);
   font-weight: 700;
   text-transform: uppercase;
@@ -691,14 +759,14 @@ details.side-section:hover>summary.side-title {
   letter-spacing: 0.06em;
 }
 
-:is(.msg, #note-body) pre {
+:is(.msg, #note-body, #peek-body) pre {
   overflow-x: auto;
   background: var(--void);
   padding: 0.6rem;
   border: 1px solid var(--line);
 }
 
-:is(.msg, #note-body) code {
+:is(.msg, #note-body, #peek-body) code {
   font-family: var(--mono);
   font-size: 0.92em;
   /* code keeps the grid font */
@@ -707,59 +775,59 @@ details.side-section:hover>summary.side-title {
   padding: 0 3px;
 }
 
-:is(.msg, #note-body) pre code {
+:is(.msg, #note-body, #peek-body) pre code {
   background: none;
   padding: 0;
 }
 
-:is(.msg, #note-body) a {
+:is(.msg, #note-body, #peek-body) a {
   color: var(--frost);
   text-decoration: underline;
   text-decoration-color: var(--accent);
 }
 
-:is(.msg, #note-body) img {
+:is(.msg, #note-body, #peek-body) img {
   max-width: 100%;
   border: 1px solid var(--line);
 }
 
 /* pygments fences — restrained syntax scheme mapped onto the site palette:
    keywords azure, literals gold, comments dim, names frost. */
-:is(.msg, #note-body) pre :is(.k, .kc, .kd, .kn, .kp, .kr, .kt, .ow, .nd, .nt) {
+:is(.msg, #note-body, #peek-body) pre :is(.k, .kc, .kd, .kn, .kp, .kr, .kt, .ow, .nd, .nt) {
   color: var(--accent);
 }
 
-:is(.msg, #note-body) pre :is(.s, .s1, .s2, .sa, .sb, .sc, .sd, .se, .sh, .si, .sr, .ss, .sx,
+:is(.msg, #note-body, #peek-body) pre :is(.s, .s1, .s2, .sa, .sb, .sc, .sd, .se, .sh, .si, .sr, .ss, .sx,
   .m, .mb, .mf, .mh, .mi, .mo, .il) {
   color: var(--gold);
 }
 
-:is(.msg, #note-body) pre :is(.c, .c1, .ch, .cm, .cp, .cpf, .cs) {
+:is(.msg, #note-body, #peek-body) pre :is(.c, .c1, .ch, .cm, .cp, .cpf, .cs) {
   color: var(--ash-dim);
   font-style: italic;
 }
 
-:is(.msg, #note-body) pre :is(.nf, .nc, .fm) {
+:is(.msg, #note-body, #peek-body) pre :is(.nf, .nc, .fm) {
   color: var(--frost);
   font-weight: 500;
 }
 
-:is(.msg, #note-body) pre :is(.nb, .bp, .o, .p) {
+:is(.msg, #note-body, #peek-body) pre :is(.nb, .bp, .o, .p) {
   color: var(--ash);
 }
 
 /* --- OFM sugar (highlight, tags, callouts, tasks, mermaid) ------------------ */
-:is(.msg, #note-body) mark {
+:is(.msg, #note-body, #peek-body) mark {
   background: rgba(0, 165, 225, 0.28);
   color: var(--frost);
   padding: 0 2px;
 }
 
-:is(.msg, #note-body) .tag {
+:is(.msg, #note-body, #peek-body) .tag {
   color: var(--accent);
 }
 
-:is(.msg, #note-body) .callout {
+:is(.msg, #note-body, #peek-body) .callout {
   border-left: 2px solid var(--accent);
   background: var(--slate-2);
   padding: 0.5rem 0.7rem;
@@ -767,7 +835,7 @@ details.side-section:hover>summary.side-title {
   font-style: normal;
 }
 
-:is(.msg, #note-body) .callout-title {
+:is(.msg, #note-body, #peek-body) .callout-title {
   color: var(--accent);
   font-weight: 700;
   font-size: 10px;
@@ -776,51 +844,51 @@ details.side-section:hover>summary.side-title {
   margin: 0 0 0.3rem;
 }
 
-:is(.msg, #note-body) .callout p:empty {
+:is(.msg, #note-body, #peek-body) .callout p:empty {
   display: none;
 }
 
 /* title-only callouts */
-:is(.msg, #note-body) :is(.callout-warning, .callout-caution, .callout-danger, .callout-error, .callout-bug) {
+:is(.msg, #note-body, #peek-body) :is(.callout-warning, .callout-caution, .callout-danger, .callout-error, .callout-bug) {
   border-left-color: var(--gold);
 }
 
-:is(.msg, #note-body) :is(.callout-warning, .callout-caution, .callout-danger, .callout-error, .callout-bug) .callout-title {
+:is(.msg, #note-body, #peek-body) :is(.callout-warning, .callout-caution, .callout-danger, .callout-error, .callout-bug) .callout-title {
   color: var(--gold);
 }
 
-:is(.msg, #note-body) li.task {
+:is(.msg, #note-body, #peek-body) li.task {
   list-style: none;
 }
 
-:is(.msg, #note-body) li.task input[type="checkbox"] {
+:is(.msg, #note-body, #peek-body) li.task input[type="checkbox"] {
   accent-color: var(--accent);
   margin: 0 0.3rem 0 -1.2rem;
   vertical-align: -2px;
 }
 
-:is(.msg, #note-body) pre.mermaid {
+:is(.msg, #note-body, #peek-body) pre.mermaid {
   text-align: center;
   white-space: pre-wrap;
   color: var(--ash-dim);
 }
 
-:is(.msg, #note-body) pre.mermaid svg {
+:is(.msg, #note-body, #peek-body) pre.mermaid svg {
   max-width: 100%;
 }
 
 /* LaTeX → native MathML; display math gets its own centered strip */
-:is(.msg, #note-body) .math {
+:is(.msg, #note-body, #peek-body) .math {
   text-align: center;
   overflow-x: auto;
   margin: 0.75em 0;
 }
 
-:is(.msg, #note-body) math {
+:is(.msg, #note-body, #peek-body) math {
   font-size: 1.08em;
 }
 
-:is(.msg, #note-body) .math-err {
+:is(.msg, #note-body, #peek-body) .math-err {
   color: var(--gold);
 }
 
@@ -926,14 +994,16 @@ details.side-section:hover>summary.side-title {
   background: var(--slate-2);
 }
 
-#composer {
+#composer,
+#dock-composer {
   display: flex;
   gap: 0;
   padding: 0.7rem 1rem 0.9rem;
   border-top: 1px solid var(--line-2);
 }
 
-#input {
+#input,
+#dock-input {
   flex: 1;
   resize: none;
   font-family: var(--sans);
@@ -950,20 +1020,85 @@ details.side-section:hover>summary.side-title {
   /* still scrollable past max-height, no visible track */
 }
 
-#input::-webkit-scrollbar {
+#input::-webkit-scrollbar,
+#dock-input::-webkit-scrollbar {
   display: none;
 }
 
-#input:focus {
+#input:focus,
+#dock-input:focus {
   outline: none;
   border-color: var(--frost);
 }
 
-#input::placeholder {
+#input::placeholder,
+#dock-input::placeholder {
   color: var(--ash-dim);
 }
 
-#send {
+#attachments {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 0.4rem;
+  padding: 0.6rem 1rem 0;
+}
+
+.chip {
+  display: inline-flex;
+  align-items: center;
+  gap: 0.5rem;
+  background: var(--slate-2);
+  color: var(--frost);
+  border: 1px solid var(--line-2);
+  padding: 0.3rem 0.5rem;
+  font-family: var(--sans);
+  font-size: 12px;
+}
+
+.chip-x {
+  background: transparent;
+  border: none;
+  color: var(--ash-dim);
+  cursor: pointer;
+  font-size: 12px;
+  line-height: 1;
+  padding: 0;
+}
+
+.chip-x:hover {
+  color: var(--accent);
+}
+
+#attach {
+  align-self: stretch;
+  background: var(--slate-2);
+  color: var(--ash-dim);
+  border: 1px solid var(--line-2);
+  border-right: none;
+  padding: 0 0.9rem;
+  font-size: 18px;
+  line-height: 1;
+  cursor: pointer;
+  transition: color .1s linear, border-color .1s linear;
+}
+
+#attach:hover {
+  color: var(--accent);
+  border-color: var(--frost);
+}
+
+#attach:active {
+  transform: translateY(1px);
+}
+
+#attach:focus-visible {
+  outline: none;
+  border-color: var(--frost);
+  color: var(--frost);
+}
+
+#send,
+#dock-send {
   background: var(--accent);
   color: var(--void);
   font-weight: 700;
@@ -972,7 +1107,8 @@ details.side-section:hover>summary.side-title {
   align-self: stretch;
 }
 
-#send:hover {
+#send:hover,
+#dock-send:hover {
   background: var(--frost);
   border-color: var(--frost);
   color: var(--void);
@@ -1231,11 +1367,19 @@ body.dragging #drop-hint {
   white-space: nowrap;
 }
 
-/* header actions (summarize/explain/quiz/map/close) pack tight so they + the
-   title fit one line even on a narrow drawer. */
+/* header actions (summarize/explain/quiz/map/close) read as real buttons:
+   outlined chips matching #tree-toggle, recessed one step darker than the
+   header. Still tight enough that title + all actions hold one line. */
 #note-panel > header .ghost {
-  padding: 0.4rem 0.45rem;
+  padding: 0.35rem 0.5rem;
   font-size: 10px;
+  border: 1px solid var(--line-2);
+  background: var(--slate);
+}
+
+#note-panel > header .ghost:hover {
+  border-color: var(--ash-dim);
+  background: var(--slate-2);
 }
 
 #note-body {
@@ -1359,4 +1503,87 @@ details.fm summary:hover {
   border: none;
   background: var(--void);
   display: block;
+}
+
+/* --- bottom dock (graph/map): ask-from-here composer + rendered answer card -- */
+/* A lens onto the SAME conversation: the card holds only the latest exchange,
+   the full transcript lives one click away in chat. Fixed strip between the
+   sidebar (left mirrors its flex-basis) and the note drawer (right insets by
+   --note-w while the drawer is open, so neither ever covers the other).
+   z-index below the drawer (50) so the drawer's slide passes cleanly over. */
+#dock {
+  position: fixed;
+  left: 264px;
+  right: 0;
+  bottom: 0;
+  z-index: 40;
+  display: flex;
+  flex-direction: column;
+  background: var(--slate);
+  border-top: 1px solid var(--line-2);
+  transition: right .14s linear, left .12s linear; /* match drawer + sidebar */
+}
+
+body.sidebar-collapsed #dock {
+  left: 0;
+}
+
+body.note-open #dock {
+  right: var(--note-w, 420px);
+}
+
+#peek {
+  border-bottom: 1px solid var(--line);
+}
+
+#peek > header {
+  gap: 0.5rem;
+  padding: 0.2rem 0.2rem 0.2rem 0.9rem;
+  border-bottom: 1px solid var(--line);
+  background: var(--slate-2);
+}
+
+#peek-title {
+  flex: 1;
+  min-width: 0; /* same clip idiom as #note-title */
+  color: var(--frost);
+  font-size: 11px;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+#peek-title::before {
+  content: "// ";
+  color: var(--accent);
+}
+
+/* header actions read as real buttons — same outlined chips as the drawer's */
+#peek > header .ghost {
+  padding: 0.35rem 0.5rem;
+  font-size: 10px;
+  border: 1px solid var(--line-2);
+  background: var(--slate);
+}
+
+#peek > header .ghost:hover {
+  border-color: var(--ash-dim);
+  background: var(--slate-2);
+}
+
+/* the rendered answer: full OFM typesetting via the shared :is(...) rules,
+   height-capped so the graph stays the protagonist — the card scrolls inside */
+#peek-body {
+  padding: 0.6rem 0.9rem;
+  font-size: 13px;
+  max-height: 38vh;
+  overflow-y: auto;
+}
+
+#peek-body.error {
+  color: var(--accent); /* same signal as .tool.error */
+}
+
+#dock-composer {
+  border-top: none; /* #dock's own border-top (or the card's bottom rule) separates */
 }

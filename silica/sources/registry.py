@@ -33,6 +33,19 @@ def enabled_adapters(enabled: Sequence[str] | None = None) -> list[SourceAdapter
     return [a for a in ALL_ADAPTERS if a.name in enabled]
 
 
+def supported_ingest_extensions() -> list[str]:
+    """File extensions every ingest lane accepts — the GUI picker's `accept` set.
+
+    Union of the prose/notebook/pdf lanes and all tree-sitter code languages.
+    Lives here (the dispatch hub), not per-adapter: CODE matches by language,
+    not an extension list, so there's nothing to enumerate on the adapter.
+    """
+    from silica.kernel.codeast import EXTENSION_MAP
+    from silica.sources.prose import _EXTS as PROSE_EXTS
+
+    return sorted({".pdf", ".ipynb", *PROSE_EXTS, *EXTENSION_MAP})
+
+
 def adapter_for(target: str, enabled: Sequence[str] | None = None) -> SourceAdapter | None:
     for adapter in enabled_adapters(enabled):
         if adapter.matches(target):

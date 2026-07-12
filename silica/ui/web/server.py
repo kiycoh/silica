@@ -16,9 +16,10 @@ import threading
 import time
 import uuid
 from collections.abc import AsyncIterator
+from contextlib import asynccontextmanager
 from pathlib import Path
 
-from fastapi import FastAPI, File, HTTPException, UploadFile
+from fastapi import FastAPI, File, Form, HTTPException, UploadFile
 from fastapi.responses import FileResponse, HTMLResponse, JSONResponse, StreamingResponse
 from fastapi.staticfiles import StaticFiles
 from starlette.background import BackgroundTask
@@ -573,21 +574,84 @@ async def chat(payload: dict):
     return _turn_response(payload.get("text", ""))
 
 
+@app.get("/supported_types")
+def supported_types():
+    """Extensions the ingest picker offers — drives the `+` button's `accept`."""
+    from silica.sources.registry import supported_ingest_extensions
+
+    return {"extensions": supported_ingest_extensions()}
+
+
+async def _stage_uploads(files: list[UploadFile]) -> tuple[list[str], list[str]]:
+    """Write uploads to Inbox and mechanically stage them, mirroring the inline
+    half of `/ingest` (silica/cli.py): PDFs convert to markdown, code/notebooks
+    become skeleton stubs, prose stays as-is. Returns (ready, stubs): markdown
+    notes ready for the injector/reading, and code stub note paths already
+    written to the vault. The semantic step (ingest? summarize?) is the agent's,
+    driven by the user's message — see `_compose_ingest_turn`.
+
+    ponytail: convert() shells out to mineru (can be minutes on a book) and runs
+    on the loop thread, same as the old path did during message expansion — the
+    UI just holds the spinner. Move to a worker thread if it ever blocks /stop.
+    """
+    from silica.kernel.vault_manifest import get_active_manifest
+    from silica.sources.convert import convert
+    from silica.sources.registry import adapter_for, stage
+
+    inbox = Path(CONFIG.vault_path or ".") / "Inbox"
+    inbox.mkdir(parents=True, exist_ok=True)
+    enabled = get_active_manifest().sources
+    ready: list[str] = []
+    stubs: list[str] = []
+    for f in files:
+        dest = inbox / Path(f.filename or "dropped").name
+        dest.write_bytes(await f.read())
+        rel = f"Inbox/{dest.name}"
+        adapter = adapter_for(rel, enabled=enabled)
+        if adapter is None:  # no source claims it → converter fallback (PDF today)
+            try:
+                ready.extend(convert(rel))
+            except ValueError as exc:
+                logger.warning("ingest: skipped %s: %s", dest.name, exc)
+            continue
+        result = stage(adapter, rel)
+        if result["status"] == "distill":       # prose → injector re-reads it
+            ready.append(rel)
+        elif result["status"] == "ok":            # code/notebook → stub written
+            stubs.append(result["note_path"])
+        else:
+            logger.warning("ingest: %s: %s", dest.name, result.get("message", ""))
+    return ready, stubs
+
+
+def _compose_ingest_turn(text: str, ready: list[str], stubs: list[str]) -> str:
+    """The agent turn for a batch of attached files: the user's instruction plus
+    a factual manifest of what got staged. Empty instruction defaults to ingest."""
+    lines: list[str] = []
+    if ready:
+        lines.append("Markdown staged in Inbox, ready to ingest or read:")
+        lines += [f"- {p}" for p in ready]
+    if stubs:
+        lines.append("Code skeleton stubs already staged in the vault:")
+        lines += [f"- {p}" for p in stubs]
+    manifest = "\n".join(lines) if lines else "(no files could be staged)"
+    base = text.strip() or (
+        "Ingest the attached file(s) into an appropriate folder; "
+        "ask me if the target is unclear."
+    )
+    return f"{base}\n\n---\nAttached files:\n{manifest}"
+
+
 @app.post("/ingest")
-async def ingest(file: UploadFile = File(...)):
+async def ingest(files: list[UploadFile] = File(...), text: str = Form("")):
     if not _begin_turn():
         raise HTTPException(status_code=409, detail="a turn is already in progress")
     try:
-        inbox = Path(CONFIG.vault_path or ".") / "Inbox"
-        inbox.mkdir(parents=True, exist_ok=True)
-        dest = inbox / Path(file.filename or "dropped").name
-        dest.write_bytes(await file.read())
+        ready, stubs = await _stage_uploads(files)
     except Exception:
-        _end_turn()  # release the slot the upload never got to use
+        _end_turn()  # release the slot the staging never got to use
         raise
-    # ponytail: a dropped bare .md needs a --target; v1 surfaces that error in
-    # chat and the user re-runs. PDFs/code (the happy path) stage on their own.
-    return _turn_response(f'/ingest "{dest}"')
+    return _turn_response(_compose_ingest_turn(text, ready, stubs))
 
 
 @app.get("/graph")

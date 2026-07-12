@@ -216,17 +216,8 @@ def test_sweep_frees_the_gate_when_no_worker_ever_started(client):
     assert server._busy is False
 
 
-def test_ingest_saves_to_inbox_and_triggers_the_ingest_command(client, monkeypatch):
+def test_ingest_stages_uploads_and_hands_files_to_the_agent(client, monkeypatch):
     tc, server = client
-    import silica.cli as cli
-
-    calls: list[str] = []
-
-    def fake_expand(text):
-        calls.append(text)
-        return f"INGEST {text}"  # non-empty → agent turn
-
-    monkeypatch.setattr(cli, "_expand_workflow_shortcut", fake_expand)
 
     ran: dict = {}
 
@@ -237,15 +228,35 @@ def test_ingest_saves_to_inbox_and_triggers_the_ingest_command(client, monkeypat
 
     monkeypatch.setattr(server, "run_agent", fake_run_agent)
 
-    resp = tc.post("/ingest", files={"file": ("note.md", b"# Hi", "text/markdown")})
+    resp = tc.post(
+        "/ingest",
+        files=[("files", ("note.md", b"# Hi\n\nsome body text to stage", "text/markdown"))],
+        data={"text": "file these under Concepts/AI"},
+    )
     assert resp.status_code == 200
 
     from silica.config import CONFIG
 
     saved = Path(CONFIG.vault_path) / "Inbox" / "note.md"
-    assert saved.exists()
-    assert any("/ingest" in c and "note.md" in c for c in calls)
-    assert any(m["role"] == "user" and "note.md" in m["content"] for m in ran["msgs"])
+    assert saved.exists()  # upload landed in the inbox (not ingested yet)
+    # the agent turn carries the user's instruction *and* the staged file path
+    user = next(m for m in ran["msgs"] if m["role"] == "user")
+    assert "file these under Concepts/AI" in user["content"]
+    assert "Inbox/note.md" in user["content"]
+
+
+def test_compose_ingest_turn_defaults_empty_text_and_lists_files():
+    from silica.ui.web.server import _compose_ingest_turn
+
+    # empty instruction → default ingest ask; markdown vs code stubs both listed
+    msg = _compose_ingest_turn("", ["Inbox/a.md"], ["Code/b.md"])
+    assert "Ingest the attached file(s)" in msg
+    assert "Inbox/a.md" in msg and "Code/b.md" in msg
+
+    # a real instruction is kept verbatim as the turn's lead
+    msg2 = _compose_ingest_turn("summarize these", ["Inbox/a.md"], [])
+    assert msg2.startswith("summarize these")
+    assert "Inbox/a.md" in msg2
 
 
 def test_reset_restores_a_fresh_session(client, monkeypatch):
