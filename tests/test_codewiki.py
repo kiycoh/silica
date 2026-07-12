@@ -20,6 +20,15 @@ def test_source_root_is_densest_top_dir():
     assert source_root(g) == "silica"
 
 
+def test_source_root_ignores_tests_and_docs_when_counting():
+    # test-heavy repo: tests/ outnumbers the real source package, but the
+    # source root must still be the code package, never the test suite.
+    g = _graph(["silica/cli.py", "silica/kernel/a.py",
+                "tests/test_a.py", "tests/test_b.py", "tests/test_c.py",
+                "docs/conf.py"])
+    assert source_root(g) == "silica"
+
+
 def test_partition_subdirs_and_core():
     g = _graph(["silica/cli.py", "silica/config.py",
                 "silica/kernel/a.py", "silica/kernel/graph/deep.py",

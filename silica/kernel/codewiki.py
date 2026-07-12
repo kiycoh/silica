@@ -38,6 +38,8 @@ def source_root(graph: CodeGraph) -> str:
     for path in graph.files:
         top, _, rest = path.partition("/")
         if rest:
+            if top in _EXCLUDED_TOP:
+                continue  # tests/docs never win source-root: they are not the code
             counts[top] += 1
         else:
             loose += 1
