@@ -310,6 +310,17 @@ def handle_validate(fsm: "InjectorFSM") -> None:
 
     fsm.context["validate"] = res
 
+    # Span-grounding warnings (warn-only, never a rejection) → run ledger,
+    # persisted as <run_dir>/warnings.json alongside the orphan warnings.
+    # Doubles as calibration data for the gate's thresholds.
+    if fsm.warning_ledger is not None:
+        for u in res.get("ungrounded", []):
+            fsm.warning_ledger.add(
+                u.get("path") or "",
+                "ungrounded_span",
+                f"{u.get('heading', '')}: " + " | ".join(s[:60] for s in u.get("spans", [])),
+            )
+
     max_rate = fsm._get_recipe_gate("rejection_rate_max", 0.10)
 
     if orch.CONFIG.verbose:

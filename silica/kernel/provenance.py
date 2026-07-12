@@ -29,6 +29,7 @@ from __future__ import annotations
 import hashlib
 import json
 import logging
+import re
 from datetime import datetime
 from pathlib import Path
 from typing import Any
@@ -196,6 +197,89 @@ def check_reingest(
     if last.get("sha256") == incoming_sha256:
         return False, 0
     return True, len(last.get("notes") or [])
+
+
+# --- Span grounding (verbatim-contract gate) --------------------------------
+# The distiller must carry formulas and code verbatim from the source excerpt
+# (distiller_prompt "Content Quality Requirements"). Prose is rewritten and
+# translated by design, so it can't be checked mechanically — but math and
+# code can: a $$...$$ / ```...``` span in the output that cannot be located
+# in the source excerpt is a fabrication candidate. Warn-only signal:
+# re-typesetting ASCII math into LaTeX is sanctioned by the prompt's own
+# few-shot example, so a span class is gated only when the source itself
+# uses that markup ($ for math, ``` for code).
+
+_FENCE_RE = re.compile(r"```[^\n]*\n(.*?)```", re.DOTALL)
+_DISPLAY_MATH_RE = re.compile(r"\$\$(.+?)\$\$", re.DOTALL)
+_INLINE_MATH_RE = re.compile(r"(?<!\$)\$([^$\n]+?)\$(?!\$)")
+
+MIN_GROUNDABLE_CHARS = 12  # normalized; shorter spans ($x$, \top) match anywhere
+GROUNDING_FLOOR = 0.85     # matched-char fraction under LOCAL difflib alignment
+LOCALITY_WINDOW = 2        # matched blocks must fit in a window of N * len(span)
+
+_NUMERAL_RE = re.compile(r"\d+(?:[.,]\d+)?")
+
+
+def _norm_ws(s: str) -> str:
+    return " ".join(s.split())
+
+
+def _local_match_fraction(s: str, src: str) -> float:
+    """Best matched-char fraction of *s* with all blocks inside one source
+    window of LOCALITY_WINDOW * len(s). Global scatter would let a formula
+    recombined from fragments across the excerpt self-ground; localization
+    is the whole point of the gate."""
+    from difflib import SequenceMatcher
+
+    # blocks under 3 chars are coincidence ('v', ')'), not localization —
+    # they inflate the fraction exactly on recombined formulas
+    blocks = [b for b in SequenceMatcher(None, s, src, autojunk=False).get_matching_blocks() if b.size >= 3]
+    if not blocks:
+        return 0.0
+    window = LOCALITY_WINDOW * len(s)
+    best = 0
+    for i in range(len(blocks)):  # blocks are few; O(n²) is fine
+        lo = blocks[i].b
+        best = max(best, sum(b.size for b in blocks[i:] if b.b + b.size <= lo + window))
+    return best / len(s)
+
+
+def ungrounded_spans(body: str, source: str) -> list[str]:
+    """Verbatim-contract spans of *body* (math, fenced code) not locatable in *source*.
+
+    Returns the offending spans (whitespace-normalized); empty list means
+    fully grounded or nothing gateable. A span class is checked only when
+    *source* itself contains that markup — LaTeX in the output for an
+    ASCII-math source is legitimate re-typesetting, not drift.
+
+    Two independent checks per span (either failing flags it):
+    - numeric literals (≥2 chars) must appear verbatim in the source —
+      numbers survive re-typesetting and translation, so an absent constant
+      is the sharpest fabrication signal (altered 0.01→0.1, invented ε=10⁻⁸);
+    - fuzzy match must be LOCAL (see _local_match_fraction).
+    """
+    spans: list[str] = []
+    if "```" in source:
+        spans += _FENCE_RE.findall(body)
+    if "$" in source:
+        # ponytail: "$" also matches currency; acceptable for a warn-only gate
+        rest = _FENCE_RE.sub("", body)
+        spans += _DISPLAY_MATH_RE.findall(rest)
+        spans += _INLINE_MATH_RE.findall(_DISPLAY_MATH_RE.sub("", rest))
+
+    src = _norm_ws(source)
+    out: list[str] = []
+    for span in spans:
+        s = _norm_ws(span)
+        if len(s) < MIN_GROUNDABLE_CHARS or s in src:
+            continue
+        numerals = [n for n in _NUMERAL_RE.findall(s) if len(n) >= 2]
+        if any(n not in src for n in numerals):
+            out.append(s)
+            continue
+        if _local_match_fraction(s, src) < GROUNDING_FLOOR:
+            out.append(s)
+    return out
 
 
 def content_sha256(source_path: str) -> str:

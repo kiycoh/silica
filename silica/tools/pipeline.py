@@ -239,6 +239,7 @@ def silica_validate_ops(
 
     cleared_parents: list[dict] = []
     cleared_links: list[dict] = []
+    ungrounded: list[dict] = []
     validated_ops, rejected_ops = validate_operations(
         ops,
         payloads,
@@ -247,6 +248,7 @@ def silica_validate_ops(
         cleared_parents_out=cleared_parents,
         future_ref_whitelist=future_ref_whitelist,
         cleared_links_out=cleared_links,
+        ungrounded_out=ungrounded,
     )
 
     total = len(ops)
@@ -273,6 +275,7 @@ def silica_validate_ops(
         "rejected_ops": [r.model_dump() for r in rejected_ops],
         "cleared_parents": cleared_parents,
         "cleared_links": cleared_links,
+        "ungrounded": ungrounded,
     }
 
 

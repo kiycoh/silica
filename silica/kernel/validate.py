@@ -33,8 +33,14 @@ def validate_operations(
     cleared_parents_out: list | None = None,
     future_ref_whitelist: list[str] | None = None,
     cleared_links_out: list | None = None,
+    ungrounded_out: list | None = None,
 ) -> tuple[list[Op], list[Rejection]]:
-    """Validates operations against payloads and target_dir using DRIVER."""
+    """Validates operations against payloads and target_dir using DRIVER.
+
+    ungrounded_out (optional): collects warn-only span-grounding hits —
+    write/patch ops whose math/code spans can't be located in their source
+    excerpt (fabrication candidates). Never causes a rejection.
+    """
     from silica.kernel.ops_io import parse_ops
     ops_parsed = parse_ops(ops)
     ops = [op.model_copy(deep=True) for op in ops_parsed]
@@ -63,6 +69,7 @@ def validate_operations(
     valid_concepts: dict[str, set[str]] = {}
     expected_collision_paths: dict[tuple[str, str], str | None] = {}
     concept_excerpts: dict[tuple[str, str], str] = {}
+    collision_excerpts: dict[tuple[str, str], str] = {}
     inbox_folders = set()
     has_payloads = bool(payloads)
 
@@ -92,6 +99,7 @@ def validate_operations(
                     collision = c.get("vault_collision")
                     if collision and isinstance(collision, dict) and collision.get("path"):
                         expected_collision_paths[(source_basename, name)] = collision["path"]
+                        collision_excerpts[(source_basename, name)] = collision.get("excerpt", "") or ""
                     else:
                         expected_collision_paths[(source_basename, name)] = None
 
@@ -224,6 +232,33 @@ def validate_operations(
                 })
             op.parent = None
 
+    def _check_grounding(op: Op) -> None:
+        """Warn-only verbatim gate (never rejects): math/code spans in the body
+        that can't be located in the source excerpt are fabrication candidates."""
+        # Ground against everything the distiller legitimately saw for this
+        # concept: inbox excerpt + colliding vault note excerpt — a patch
+        # restating a vault formula for coherence is not fabrication.
+        excerpt = concept_excerpts.get((op.source_basename, op.heading), "")
+        collision = collision_excerpts.get((op.source_basename, op.heading), "")
+        source_text = f"{excerpt}\n{collision}" if collision else excerpt
+        body = op.snippet or op.content or ""
+        if not source_text.strip() or not body:
+            return
+        from silica.kernel.provenance import ungrounded_spans
+        spans = ungrounded_spans(body, source_text)
+        if spans:
+            logger.warning(
+                "validate: '%s' — %d verbatim span(s) not grounded in source excerpt: %s",
+                op.path, len(spans), " | ".join(s[:60] for s in spans),
+            )
+            if ungrounded_out is not None:
+                ungrounded_out.append({
+                    "path": op.path,
+                    "heading": op.heading,
+                    "source_basename": op.source_basename,
+                    "spans": spans,
+                })
+
     validated_ops = []
     rejected_ops = []
 
@@ -292,6 +327,7 @@ def validate_operations(
                 continue
 
             _resolve_parent(op, cleared_parents_out)
+            _check_grounding(op)
             validated_ops.append(op)
 
         elif op_type == OpType.write:
@@ -358,6 +394,7 @@ def validate_operations(
                 continue
 
             _resolve_parent(op, cleared_parents_out)
+            _check_grounding(op)
             validated_ops.append(op)
 
         elif op_type == OpType.overwrite:
