@@ -238,6 +238,16 @@ COMMANDS: tuple[Command, ...] = (
         summary="show the active vault, or switch to another for this session",
     ),
     Command(
+        name="/settings",
+        group="system",
+        usage="[<key> <value|none>]",
+        summary="view or edit vault.yaml settings (language, tags) without the wizard",
+        examples=(
+            "/settings",
+            "/settings conventions.reply_language italian",
+        ),
+    ),
+    Command(
         name="/help",
         group="system",
         usage="",

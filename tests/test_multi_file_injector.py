@@ -538,10 +538,10 @@ class TestT7IngestShortcut:
         assert msg is not None
         assert "AI" in msg
 
-    def test_ingest_missing_target_returns_error(self):
+    def test_ingest_missing_target_expands_to_auto_target(self):
         msg = self._expand("/ingest Inbox/a.md")
-        assert msg is not None
-        assert "Error" in msg or "--target" in msg
+        assert msg is not None and "silica_run_injector" in msg
+        assert "target_dir=<chosen folder>" in msg
 
     def test_ingest_missing_files_returns_error(self):
         msg = self._expand("/ingest --target=Concepts/AI")

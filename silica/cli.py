@@ -822,6 +822,7 @@ def _expand_workflow_shortcut(user_input: str) -> str | None:
         /report --top-k=15 --embeddings
         /report Inbox --embeddings
         /ingest Inbox/notes.md --target=Concepts/AI
+        /ingest Inbox/notes.md
         /ingest silica/cli.py
         /ingest paper.pdf --target=Concepts/AI
         /ingest "Inbox/papers/With Spaces.pdf" --target=Concepts/AI
@@ -882,9 +883,6 @@ def _expand_workflow_shortcut(user_input: str) -> str | None:
         if not md_files:
             return ""  # fully handled inline — sentinel: nothing for the agent
 
-        if not target_dir:
-            return "Error: /ingest of notes requires --target=DIR. Usage: /ingest <file...> --target=DIR"
-
         from pathlib import Path as _Path
         from silica.kernel.provenance import check_reingest, content_sha256
 
@@ -903,15 +901,68 @@ def _expand_workflow_shortcut(user_input: str) -> str | None:
                 logger.debug("/ingest: re-ingest provenance check skipped for %s (non-fatal): %s", mf, exc)
 
         files_json = json.dumps(md_files)
-        msg = (
-            f"Run the Injector pipeline for {len(md_files)} file(s).\n"
-            f"Call `silica_run_injector` with "
-            f"inbox_files={files_json}, target_dir={json.dumps(target_dir)}"
-        )
+        if target_dir:
+            msg = (
+                f"Run the Injector pipeline for {len(md_files)} file(s).\n"
+                f"Call `silica_run_injector` with "
+                f"inbox_files={files_json}, target_dir={json.dumps(target_dir)}"
+            )
+        else:
+            # ponytail: auto-target = one folder per run chosen by the chat
+            # agent (it already holds the vault map); per-note thematic
+            # placement stays /organize's job.
+            msg = (
+                f"Run the Injector pipeline for {len(md_files)} file(s).\n"
+                f"No target folder was given. Skim the inbox file(s) {files_json}, "
+                f"then pick the single most relevant existing vault folder for "
+                f"this content (use the vault map; list folders if unsure). If "
+                f"nothing fits, pick a sensible new folder name. State the chosen "
+                f"folder in one line, then call `silica_run_injector` with "
+                f"inbox_files={files_json}, target_dir=<chosen folder>"
+            )
         if hub:
             msg += f", hub={json.dumps(hub)}"
         msg += "."
         return msg
+
+    if cmd == "/settings":
+        # View/edit vault.yaml without the wizard. ponytail: safe_dump rewrite —
+        # YAML comments are not preserved; hand-edit the file to keep them.
+        import yaml as _yaml
+        from pathlib import Path as _P
+        from silica.kernel.vault_manifest import MANIFEST_REL, reset_manifest_cache
+        _KEYS = {"cooccurrence_lang", "conventions.language",
+                 "conventions.reply_language", "conventions.max_tags"}
+        mf = _P(CONFIG.vault_path) / MANIFEST_REL
+        data = _yaml.safe_load(mf.read_text(encoding="utf-8")) if mf.exists() else {}
+        if not isinstance(data, dict):
+            data = {}
+        args = parts[1:]
+        if not args:
+            CONSOLE.print(f"  [bold]{mf}[/]")
+            body = _yaml.safe_dump(data, allow_unicode=True, sort_keys=False).rstrip() \
+                if data else "(defaults — no vault.yaml yet)"
+            CONSOLE.print(f"  {body}")
+            CONSOLE.print(f"  Keys: {', '.join(sorted(_KEYS))} — /settings <key> <value|none>")
+            return ""
+        if len(args) != 2 or args[0] not in _KEYS:
+            return f"Error: usage /settings <key> <value|none>. Keys: {', '.join(sorted(_KEYS))}"
+        key, raw = args
+        val = None if raw.lower() in ("none", "null") else (int(raw) if raw.isdigit() else raw)
+        node = data
+        *heads, leaf = key.split(".")
+        for h in heads:
+            if not isinstance(node.get(h), dict):
+                node[h] = {}
+            node = node[h]
+        if val is None:
+            node.pop(leaf, None)
+        else:
+            node[leaf] = val
+        mf.write_text(_yaml.safe_dump(data, allow_unicode=True, sort_keys=False), encoding="utf-8")
+        reset_manifest_cache()
+        CONSOLE.print(f"  {key} = {raw} → {mf.name} (comments in the file are not preserved)")
+        return ""
 
     if cmd == "/convert":
         args = parts[1:]

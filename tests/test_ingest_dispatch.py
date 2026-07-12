@@ -20,16 +20,32 @@ def _reset_manifest_cache():
     reset_manifest_cache()
 
 
+def test_supported_ingest_extensions_covers_every_lane():
+    # The GUI "+" picker derives its accept= list from this; every ingest lane
+    # (prose, code, notebook, pdf) must be represented or the picker hides files
+    # the server would actually accept.
+    from silica.kernel.codeast import EXTENSION_MAP
+    from silica.sources.registry import supported_ingest_extensions
+
+    exts = set(supported_ingest_extensions())
+    assert {".md", ".txt", ".ipynb", ".pdf"} <= exts  # prose / notebook / pdf lanes
+    assert set(EXTENSION_MAP) <= exts                  # every tree-sitter code language
+    assert all(e.startswith(".") for e in exts)        # accept= wants dotted extensions
+
+
 def test_ingest_md_expands_to_injector_message():
     msg = _expand_workflow_shortcut("/ingest Inbox/a.md --target=Concepts/AI")
     assert msg is not None and "silica_run_injector" in msg
     assert "Inbox/a.md" in msg and "Concepts/AI" in msg
 
 
-def test_ingest_md_missing_target_returns_error():
+def test_ingest_md_missing_target_expands_to_auto_target():
     msg = _expand_workflow_shortcut("/ingest Inbox/a.md")
-    assert msg is not None and msg.startswith("Error:")
-    assert "--target" in msg
+    assert msg is not None and "silica_run_injector" in msg
+    assert "Inbox/a.md" in msg
+    # the agent must pick the folder, not receive a preset one
+    assert "target_dir=<chosen folder>" in msg
+    assert "most relevant existing vault folder" in msg
 
 
 def test_ingest_no_files_returns_error():
@@ -93,7 +109,7 @@ def test_ingest_pdf_converts_and_forwards_converted_md(repo_vault, monkeypatch):
     the FSM is told to re-read (not the .pdf)."""
     import silica.sources.convert as conv_mod
 
-    monkeypatch.setattr(conv_mod, "convert", lambda f, dest_dir="": "Inbox/paper.md")
+    monkeypatch.setattr(conv_mod, "convert", lambda f, dest_dir="": ["Inbox/paper.md"])
     msg = _expand_workflow_shortcut("/ingest paper.pdf --target=Concepts/AI")
     assert msg is not None and "silica_run_injector" in msg
     assert '"Inbox/paper.md"' in msg   # converted .md forwarded
@@ -115,7 +131,7 @@ def test_ingest_pdf_converter_error_is_caught(repo_vault, monkeypatch, capsys):
 def test_convert_command_returns_sentinel_and_reports(repo_vault, monkeypatch, capsys):
     import silica.sources.convert as conv_mod
 
-    monkeypatch.setattr(conv_mod, "convert", lambda f, dest_dir="": "Inbox/paper.md")
+    monkeypatch.setattr(conv_mod, "convert", lambda f, dest_dir="": ["Inbox/paper.md"])
     msg = _expand_workflow_shortcut("/convert paper.pdf")
     assert msg == ""  # fully handled inline
     assert "Converted" in capsys.readouterr().out
@@ -180,9 +196,9 @@ def test_ingest_no_prior_provenance_no_warning(repo_vault, capsys):
     assert "re-ingest of a modified source" not in out
 
 
-def test_ingest_missing_target_errors_before_reingest_warning(repo_vault, capsys):
-    """An invocation missing --target is invalid regardless of provenance —
-    the drift warning must not print before the guard rejects the call."""
+def test_ingest_missing_target_still_warns_on_reingest(repo_vault, capsys):
+    """Auto-target (no --target) is a valid invocation — the provenance
+    drift warning must still print on the way to the agent message."""
     root, vault = repo_vault
     inbox = vault / "Inbox"
     inbox.mkdir(exist_ok=True)
@@ -193,6 +209,24 @@ def test_ingest_missing_target_errors_before_reingest_warning(repo_vault, capsys
 
     msg = _expand_workflow_shortcut("/ingest Inbox/lezione.md")
 
-    assert msg is not None and msg.startswith("Error:") and "--target" in msg
+    assert msg is not None and "silica_run_injector" in msg
     out = capsys.readouterr().out
-    assert "re-ingest of a modified source" not in out
+    assert "re-ingest of a modified source" in out
+
+
+def test_settings_sets_and_shows_vault_yaml(repo_vault, capsys):
+    from pathlib import Path
+    from silica.config import CONFIG
+    from silica.kernel.vault_manifest import get_active_manifest, reset_manifest_cache
+
+    msg = _expand_workflow_shortcut("/settings conventions.language italian")
+    assert msg == ""
+    assert "language" in (Path(CONFIG.vault_path) / "vault.yaml").read_text()
+    assert get_active_manifest().conventions.language == "italian"  # cache reset
+
+    msg = _expand_workflow_shortcut("/settings")
+    assert msg == ""
+    assert "italian" in capsys.readouterr().out
+
+    assert _expand_workflow_shortcut("/settings bogus.key x").startswith("Error:")
+    reset_manifest_cache()
