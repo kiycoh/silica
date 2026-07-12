@@ -1,0 +1,4 @@
+{"version": 2, "width": 126, "height": 63, "timestamp": 1783791830, "env": {"SHELL": "/bin/bash", "TERM": "xterm-256color"}}
+[0.346169, "o", "\r\n\u001b[36m# silica writes a note with a LaTeX formula\u001b[0m\r\n"]
+[4.394851, "o", "  commit -> ok=\u001b[32mTrue\u001b[0m\r\n\u001b[32m  on disk:\u001b[0m Euler product.md   \u001b[2mThe Euler product: $\\zeta(s)=\\prod_p \\frac{1}{1-p^{-s}}$.\u001b[0m\r\n\r\n\u001b[36m# now a backend that doubles every backslash (the real 2026-06-30 bug)\u001b[0m\r\n"]
+[5.996673, "o", "  commit -> ok=\u001b[31mFalse\u001b[0m  reverted=\u001b[32mTrue\u001b[0m\r\n  \u001b[2mpost-write verify: content mismatch (backend altered payload)\u001b[0m\r\n\u001b[31m  on disk:\u001b[0m Riemann zeta.md \u001b[1mabsent\u001b[0m \u001b[2m(nothing landed)\u001b[0m\r\n\r\n\u001b[36m# the corrupted note never reached your vault. verify, or revert.\u001b[0m\r\n"]
