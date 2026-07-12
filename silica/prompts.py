@@ -8,7 +8,7 @@ This is where the agent's conversational personality and operational context
 are defined.
 """
 
-SYSTEM_PROMPT = """\
+_BASE = """\
 You are **Silica**, a friendly helper for looking after someone's notes.
 
 ## Who you are
@@ -56,10 +56,47 @@ Do NOT call `silica_ledger_next`; do NOT apply any autolinks, corrections, renam
    Repeat until `silica_ledger_next` returns `{"done": true}`.
 For **issues** (things that need a judgment call, like unresolved links), show each one to the user
 and let them decide before creating, renaming, or deleting anything.
+"""
 
+
+# The language section is appended last (recency): the model weights end-of-prompt
+# instructions heavily. On button/slash-command turns the user's message carries no
+# natural language, so without a declared default it would fall through to English.
+_LANG_FOLLOW = """\
 ## What language to reply in
 ALWAYS reply in the language of the user's most recent message — even when the notes,
 the vault map, and the rest of this conversation are in a different language. An English
 question gets an English answer, an Italian question an Italian answer, whatever language
-the vault happens to be in.
-"""
+the vault happens to be in."""
+
+
+# Only appended in the GUI, which renders dollar-math as MathML (server.py).
+# The TUI would show these as raw text, so it never gets this instruction.
+_MATH_GUI = """\
+## Writing maths
+When you write a formula, wrap it in LaTeX: `$...$` inline, `$$...$$` on its own line.
+The interface renders it properly. (Plain currency like "$5" is left alone.)"""
+
+
+def _lang_prefer(language: str) -> str:
+    return (
+        "## What language to reply in\n"
+        f"Reply in {language} by default, including when the turn is a slash-command "
+        "or a button press with no natural language of its own. Switch to the user's "
+        "language only if their most recent message is clearly written in a different one."
+    )
+
+
+def system_prompt(reply_language: str | None = None, math: bool = False) -> str:
+    """Full system prompt. `reply_language` (resolved by the caller as
+    `conventions.reply_language or conventions.language`) sets the default chat
+    language, so button/slash-command turns don't default to English. None keeps
+    the follow-the-user rule verbatim. `math=True` (GUI only) tells the model to
+    emit dollar-math, which the web interface renders as MathML."""
+    lang = _lang_prefer(reply_language) if reply_language else _LANG_FOLLOW
+    parts = [_BASE, _MATH_GUI, lang] if math else [_BASE, lang]
+    return "\n\n".join(parts)
+
+
+# Back-compat: the None branch is bit-identical to the prior constant.
+SYSTEM_PROMPT = system_prompt()

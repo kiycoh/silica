@@ -63,9 +63,12 @@ def _build_seed() -> None:
     context meter of the conversation in progress."""
     global _seed
     from silica.cli import _count_context_tokens, _inject_vault_map
-    from silica.prompts import SYSTEM_PROMPT
+    from silica.kernel.vault_manifest import get_active_manifest
+    from silica.prompts import system_prompt
 
-    msgs: list[dict] = [{"role": "system", "content": SYSTEM_PROMPT}]
+    conv = get_active_manifest().conventions
+    reply = conv.reply_language or conv.language
+    msgs: list[dict] = [{"role": "system", "content": system_prompt(reply, math=True)}]
     _inject_vault_map(msgs)
     _seed = (msgs, _count_context_tokens(msgs))
 

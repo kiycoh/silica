@@ -40,9 +40,14 @@ class VaultConventions:
     language" — resolved per-note downstream via `kernel.language.detect`.
     A declared non-empty string means "force/translate everything into this
     language" — an explicit declaration is translation intent.
+
+    `reply_language` is a *different* axis: the language Silica speaks in chat
+    (button/slash-command turns included), independent of note content. None
+    ⇒ the call site falls back to `language`, then to follow-the-user.
     """
 
     language: str | None = None
+    reply_language: str | None = None
     max_tags: int = 3
     extra_callouts: tuple[str, ...] = ()
 
@@ -86,6 +91,12 @@ def _parse_conventions(raw: dict) -> VaultConventions:
     else:
         language = None
 
+    reply_language = conv_raw.get("reply_language")
+    if isinstance(reply_language, str) and reply_language.strip():
+        reply_language = reply_language.strip()
+    else:
+        reply_language = None
+
     max_tags = conv_raw.get("max_tags")
     if not (isinstance(max_tags, int) and not isinstance(max_tags, bool) and max_tags > 0):
         max_tags = DEFAULT_CONVENTIONS.max_tags
@@ -98,6 +109,7 @@ def _parse_conventions(raw: dict) -> VaultConventions:
 
     return VaultConventions(
         language=language,
+        reply_language=reply_language,
         max_tags=max_tags,
         extra_callouts=extra_callouts,
     )

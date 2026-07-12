@@ -20,7 +20,7 @@ from silica.ui.style import FlatMarkdown
 
 from silica.agent.loop import run_agent
 from silica.config import CONFIG
-from silica.prompts import SYSTEM_PROMPT
+from silica.prompts import system_prompt
 from silica.ui.console import CONSOLE
 from silica.ui.home import print_home
 from silica.ui.prompt import build_session, bottom_toolbar, prompt_text
@@ -102,7 +102,11 @@ def _fresh_messages() -> list[dict]:
     Single source of truth for the initial state, shared by session start and
     /clear so the two can't drift.
     """
-    messages: list[dict] = [{"role": "system", "content": SYSTEM_PROMPT}]
+    from silica.kernel.vault_manifest import get_active_manifest
+
+    conv = get_active_manifest().conventions
+    reply = conv.reply_language or conv.language
+    messages: list[dict] = [{"role": "system", "content": system_prompt(reply)}]
     _inject_vault_map(messages)
     _update_context_tokens(messages)
     return messages
