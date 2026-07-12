@@ -3,6 +3,10 @@
 
 """`silica connect` — host the WS bridge server the Obsidian plugin dials into.
 
+Also the auto-host used by the TUI (start_bridge_thread, rpc-only) and the GUI
+lifespan (maybe_start_bridge, full chat) so a running Obsidian upgrades the
+driver without a separate `silica connect` session.
+
 PROTOCOL.md's server half. One loopback socket carries both channels: the
 plugin's chat turns stream through the transport-neutral `run_turn` (framed as
 `chat_event*` + one `chat_done`/`chat_error`), while DRIVER `rpc` frames
@@ -16,11 +20,12 @@ so the module loads without the [connect] extra.
 from __future__ import annotations
 
 import asyncio
+import atexit
 import json
 import logging
 import os
 import secrets
-import shutil
+import threading
 from pathlib import Path
 from typing import Any
 
@@ -30,11 +35,23 @@ logger = logging.getLogger(__name__)
 
 PROTOCOL_VERSION = 1
 
+# websockets' 1 MiB default max_size would sever the connection on any note
+# body over ~1 MB (rpc read replies, bulk-ingest creates). 32 MiB matches the
+# no-ceiling behavior of the cli/fs backends. Mirrored in ws_backend.py.
+MAX_FRAME = 2**25
+
 
 def _fallback_backend() -> str:
-    """Local driver while no plugin is attached (PROTOCOL fallback chain):
-    cli if the Obsidian CLI is on PATH, else headless fs."""
-    return "cli" if shutil.which("obsidian") else "fs"
+    """Local driver while no plugin is attached: headless fs.
+
+    The fallback fires only when no plugin is connected. In that state the sole
+    case where cli would differ from fs is "Obsidian open but plugin not dialed
+    in" — and there cli drives Obsidian over CDP subprocess, the exact fragile
+    path this bridge replaces. The right answer there is "connect the plugin,"
+    not silently auto-select cli. So fs, unconditionally. cli stays reachable
+    via explicit SILICA_BACKEND=cli until the plugin is proven in real Obsidian.
+    """
+    return "fs"
 
 
 def _origin_ok(origin: str) -> bool:
@@ -53,9 +70,12 @@ async def _send(ws: Any, frame: dict) -> None:
 class BridgeServer:
     """The ws://127.0.0.1 bridge server (PROTOCOL.md, server half)."""
 
-    def __init__(self) -> None:
+    def __init__(self, chat_enabled: bool = True) -> None:
         self.port: int = CONFIG.ws_port  # 0 → OS picks; real port set by start()
         self.token: str = CONFIG.ws_token or secrets.token_hex(16)
+        # False when the TUI hosts the bridge: the REPL owns the conversation
+        # and doesn't share the GUI's turn gate, so plugin chat is refused.
+        self.chat_enabled = chat_enabled
         self._server: Any = None
         self._backend: Any = None  # the attached ws driver, while a plugin is connected
         self._bridge_file: Path | None = None
@@ -64,7 +84,7 @@ class BridgeServer:
     async def start(self) -> None:
         from websockets.asyncio.server import serve
 
-        self._server = await serve(self._handler, "127.0.0.1", self.port)
+        self._server = await serve(self._handler, "127.0.0.1", self.port, max_size=MAX_FRAME)
         self.port = self._server.sockets[0].getsockname()[1]
         self._bridge_file = self._write_bridge_file()
         logger.info("bridge: listening on ws://127.0.0.1:%d", self.port)
@@ -165,18 +185,25 @@ class BridgeServer:
     # ------------------------------------------------------------------
 
     async def _route(self, ws: Any, frame: dict, backend: Any) -> None:
-        from silica.ui.web import server as web
-
         # ponytail: reaches across module seams into privates — web._begin_turn /
         # web.current_cancel (the GUI's turn gate) and backend._on_frame (the ws
         # driver's rpc demux). Deliberate for now: the bridge is the only second
         # consumer, so promoting them to public API would be speculative. Promote
         # to a shared public interface if a third caller needs the same gate/demux.
+        # The web import stays inside the chat branches: rpc frames must keep
+        # working when the TUI hosts the bridge without the [gui] extra.
         kind = frame.get("type")
         if kind in ("rpc_result", "rpc_error"):
             backend._on_frame(frame)
         elif kind == "chat":
             tid, text = str(frame.get("turnId", "")), str(frame.get("text", ""))
+            if not self.chat_enabled:
+                await _send(ws, {"type": "chat_error", "turnId": tid,
+                                 "error": "chat is unavailable: this bridge is hosted by a "
+                                          "TUI session; use `silica --gui` or `silica connect`"})
+                return
+            from silica.ui.web import server as web
+
             if not web._begin_turn():
                 await _send(ws, {"type": "chat_error", "turnId": tid,
                                  "error": "a turn is already in progress"})
@@ -185,6 +212,10 @@ class BridgeServer:
             # bare create_task can be garbage-collected mid-turn.
             self._chat_task = asyncio.create_task(self._chat_turn(ws, tid, text))
         elif kind == "chat_cancel":
+            if not self.chat_enabled:
+                return
+            from silica.ui.web import server as web
+
             if web.current_cancel is not None:
                 web.current_cancel.set()
         elif kind == "event":
@@ -207,6 +238,60 @@ class BridgeServer:
                     await _send(ws, {"type": "chat_event", "turnId": tid, "event": item})
         except Exception as exc:  # socket died mid-turn; run_turn's finally cleans up
             logger.warning("bridge: chat turn aborted: %s", exc)
+
+
+def bridge_supported() -> bool:
+    """True when auto-hosting the bridge makes sense: the [connect] extra is
+    installed and the vault is a real Obsidian vault (has .obsidian/) — repo
+    .silica/ vaults have no plugin to dial in."""
+    try:
+        import websockets  # noqa: F401
+    except ImportError:
+        return False
+    return bool(CONFIG.vault_path) and (Path(CONFIG.vault_path) / ".obsidian").is_dir()
+
+
+async def maybe_start_bridge(chat_enabled: bool = True) -> BridgeServer | None:
+    """Async host for the GUI lifespan: start the bridge on the running loop.
+    Returns None when unsupported; caller owns stop()."""
+    if not bridge_supported():
+        return None
+    if CONFIG.backend == "ws":
+        CONFIG.backend = _fallback_backend()  # ws installs on dial-in, not via config
+    server = BridgeServer(chat_enabled=chat_enabled)
+    await server.start()
+    return server
+
+
+def start_bridge_thread() -> BridgeServer | None:
+    """Sync host for the TUI: bridge on a daemon loop thread, rpc channel only
+    (chat_enabled=False — the REPL owns the conversation). Stops via atexit so
+    the discovery file is unlinked on clean exit."""
+    if not bridge_supported():
+        return None
+    if CONFIG.backend == "ws":
+        CONFIG.backend = _fallback_backend()
+    server = BridgeServer(chat_enabled=False)
+    loop = asyncio.new_event_loop()
+    threading.Thread(target=loop.run_forever, name="silica-bridge", daemon=True).start()
+    try:
+        asyncio.run_coroutine_threadsafe(server.start(), loop).result(10)
+    except Exception as exc:  # port clash, etc. — the TUI must not die for the bridge
+        logger.warning("bridge auto-start failed: %s", exc)
+        loop.call_soon_threadsafe(loop.stop)
+        return None
+    server._host_loop = loop  # for _stop_bridge_thread
+    atexit.register(_stop_bridge_thread, server)
+    return server
+
+
+def _stop_bridge_thread(server: BridgeServer) -> None:
+    loop: asyncio.AbstractEventLoop = server._host_loop
+    try:
+        asyncio.run_coroutine_threadsafe(server.stop(), loop).result(5)
+    except Exception:
+        pass  # exiting anyway — stop() only tidies the socket and bridge file
+    loop.call_soon_threadsafe(loop.stop)
 
 
 def run_connect() -> int:

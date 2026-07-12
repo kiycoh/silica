@@ -38,11 +38,17 @@ from silica.driver.base import (
     mentions_in,
 )
 from silica.kernel.ast import extract_links
+from silica.kernel.graph_export import is_vault_artifact
 from silica.kernel.ops import InverseOp, InverseOpKind
 
 logger = logging.getLogger(__name__)
 
 PROTOCOL_VERSION = 1
+
+# websockets' 1 MiB default max_size would sever the connection on a read
+# reply carrying a large note body. Mirrors ui/connect.py (driver must not
+# import from ui).
+MAX_FRAME = 2**25
 
 
 class ObsidianWSBackend(GraphIndexMixin):
@@ -109,7 +115,7 @@ class ObsidianWSBackend(GraphIndexMixin):
 
     async def _run(self) -> None:
         try:
-            async with connect(self._url) as ws:
+            async with connect(self._url, max_size=MAX_FRAME) as ws:
                 self._ws = ws
                 await ws.send(json.dumps({
                     "type": "hello", "token": self._token,
@@ -197,7 +203,12 @@ class ObsidianWSBackend(GraphIndexMixin):
         """
         if isinstance(ref, NoteRef):
             return ref.path or f"{ref.name}.md"
-        if ref.endswith(".md") or "/" in ref:
+        if "/" in ref:
+            # Path link: Obsidian's getFileByPath needs the extension, so a
+            # bare `Folder/Note` (as it arrives from wikilinks/search) gets .md.
+            last = ref.rsplit("/", 1)[-1]
+            return ref if "." in last else f"{ref}.md"
+        if ref.endswith(".md"):
             return ref
         self._ensure_graph()
         matched = self._notes_by_name.get(ref.lower(), [])
@@ -215,7 +226,15 @@ class ObsidianWSBackend(GraphIndexMixin):
 
     def list_files(self, folder: str = "") -> list[NoteRef]:
         rows = self._rpc("list_files", folder=folder)
-        return [NoteRef(name=r["name"], path=r["path"]) for r in (rows or [])]
+        # Obsidian indexes every .md including Silica's own vault-root output
+        # (log.md, GRAPH_REPORT.md). Exclude it here — the single seam fs/cli
+        # already gate on — so it reaches no metric that reads list_files: the
+        # graph node set (_ensure_graph), embed + cooccurrence builds, mentions.
+        return [
+            NoteRef(name=r["name"], path=r["path"])
+            for r in (rows or [])
+            if not is_vault_artifact(r["path"])
+        ]
 
     def list_inbox_files(self) -> list[NoteRef]:
         from silica.config import CONFIG

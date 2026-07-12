@@ -564,7 +564,24 @@ def _turn_response(text: str) -> StreamingResponse:
     )
 
 
-app = FastAPI()
+@asynccontextmanager
+async def _lifespan(app: FastAPI):
+    """Host the Obsidian bridge for the GUI session — the plugin dials in and
+    the driver hot-swaps to ws (falls back on drop). No-op without the
+    [connect] extra or when the vault has no .obsidian/."""
+    from silica.ui.connect import maybe_start_bridge
+
+    bridge = None
+    try:
+        bridge = await maybe_start_bridge()
+    except Exception:
+        logger.exception("bridge auto-start failed")  # the GUI must not die for it
+    yield
+    if bridge is not None:
+        await bridge.stop()
+
+
+app = FastAPI(lifespan=_lifespan)
 
 
 @app.post("/chat")

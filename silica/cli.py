@@ -1441,12 +1441,20 @@ def main():
         try:
             from silica.ui.web import serve
         except ImportError:
-            CONSOLE.print("  [red]La GUI richiede l'extra:[/] pip install 'silica[gui]'")
+            CONSOLE.print("  [red]La GUI richiede l'extra:[/] pip install 'silica\\[gui]'")
             sys.exit(1)
         serve(port=_gui_port())
         return
 
+    # Obsidian bridge: host the rpc channel so the plugin can dial in and the
+    # driver hot-swaps to ws (writes land through Obsidian's vault API while
+    # the app is open). Silent no-op without [connect] or .obsidian/.
+    from silica.ui.connect import start_bridge_thread
+    _bridge = start_bridge_thread()
+
     print_home()
+    if _bridge is not None:
+        CONSOLE.print(f"  [dim]Obsidian bridge on ws://127.0.0.1:{_bridge.port}[/]\n")
     if not _model_configured():
         CONSOLE.print(_NO_MODEL_HINT)
 

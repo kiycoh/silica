@@ -39,12 +39,12 @@ def bridge_env(tmp_vault, tmp_path, monkeypatch):
     yield web
 
 
-def _run(scenario) -> None:
+def _run(scenario, **srv_kwargs) -> None:
     """Boot a BridgeServer, run the async scenario against it, tear down."""
     from silica.ui.connect import BridgeServer
 
     async def main():
-        srv = BridgeServer()
+        srv = BridgeServer(**srv_kwargs)
         await srv.start()
         try:
             await asyncio.wait_for(scenario(srv), timeout=15)
@@ -298,12 +298,12 @@ def test_plugin_drop_falls_back_to_local_backend(bridge_env):
 # Startup fallback + CLI wiring
 # ---------------------------------------------------------------------------
 
-def test_ws_config_resolves_to_local_fallback(monkeypatch):
+def test_ws_config_resolves_to_local_fallback():
     import silica.ui.connect as connect_mod
 
-    monkeypatch.setattr(connect_mod.shutil, "which", lambda n: "/usr/bin/obsidian")
-    assert connect_mod._fallback_backend() == "cli"
-    monkeypatch.setattr(connect_mod.shutil, "which", lambda n: None)
+    # fs unconditionally: cli-as-fallback would silently auto-select the fragile
+    # CDP backend for the one niche (Obsidian open, plugin not dialed in) the
+    # bridge exists to replace. cli stays reachable via explicit SILICA_BACKEND.
     assert connect_mod._fallback_backend() == "fs"
 
 
@@ -317,3 +317,91 @@ def test_cli_dispatches_silica_connect(monkeypatch):
     monkeypatch.setattr(cli, "_resolve_context_budget", lambda: None)
     assert cli._dispatch_subcommand(["connect"]) == 0
     assert calls == [1]
+
+
+# ---------------------------------------------------------------------------
+# Auto-hosting — the TUI thread host and the GUI lifespan host
+# ---------------------------------------------------------------------------
+
+def test_bridge_supported_requires_obsidian_dir(bridge_env):
+    from silica.ui.connect import bridge_supported
+
+    assert not bridge_supported()  # tmp_vault has no .obsidian/
+    (Path(CONFIG.vault_path) / ".obsidian").mkdir()
+    assert bridge_supported()
+
+
+def test_chat_refused_when_hosted_by_tui(bridge_env):
+    async def scenario(srv):
+        ws, _ = await _dial(srv)
+        await ws.send(json.dumps({"type": "chat", "turnId": "t1", "text": "ciao"}))
+        reply = json.loads(await ws.recv())
+        assert reply["type"] == "chat_error"
+        assert reply["turnId"] == "t1"
+        assert "silica --gui" in reply["error"]
+        await ws.close()
+
+    _run(scenario, chat_enabled=False)
+
+
+def test_large_frames_survive_the_bridge(bridge_env):
+    """A frame over websockets' 1 MiB default must not sever the connection
+    (rpc replies carry whole note bodies). The follow-up chat probe proves
+    the socket is still alive."""
+    async def scenario(srv):
+        ws, _ = await _dial(srv, max_size=None)
+        big = json.dumps({"type": "rpc_result", "id": 999, "result": "x" * (2 * 2**20)})
+        await ws.send(big)  # unknown id — routed to the driver demux, ignored
+        await ws.send(json.dumps({"type": "chat", "turnId": "t2", "text": "ping"}))
+        reply = json.loads(await ws.recv())
+        assert reply["type"] == "chat_error"  # chat disabled, but the reply arrived
+        await ws.close()
+
+    _run(scenario, chat_enabled=False)
+
+
+def test_maybe_start_bridge_noop_without_obsidian_dir(bridge_env):
+    from silica.ui.connect import maybe_start_bridge
+
+    assert asyncio.run(maybe_start_bridge()) is None
+
+
+def test_gui_lifespan_hosts_bridge(bridge_env):
+    """`silica --gui` hosts the bridge for the whole app lifetime: the
+    discovery file appears on startup and is gone after shutdown."""
+    from fastapi.testclient import TestClient
+
+    from silica.ui.web.server import app
+
+    (Path(CONFIG.vault_path) / ".obsidian").mkdir()
+    bridge_file = Path(CONFIG.vault_path) / ".obsidian" / "silica-bridge.json"
+    with TestClient(app):
+        assert bridge_file.exists()
+    assert not bridge_file.exists()
+
+
+def test_start_bridge_thread_hosts_rpc_only(bridge_env):
+    import atexit
+
+    import silica.ui.connect as connect_mod
+    from silica.driver import get_driver
+    from silica.driver.ws_backend import ObsidianWSBackend
+
+    (Path(CONFIG.vault_path) / ".obsidian").mkdir()
+    srv = connect_mod.start_bridge_thread()
+    assert srv is not None
+    try:
+        async def scenario():
+            ws, welcome = await _dial(srv)
+            assert welcome["type"] == "welcome"
+            assert isinstance(get_driver(), ObsidianWSBackend)  # driver hot-swapped
+            await ws.send(json.dumps({"type": "chat", "turnId": "t3", "text": "hi"}))
+            reply = json.loads(await ws.recv())
+            assert reply["type"] == "chat_error"  # rpc-only host
+            await ws.close()
+
+        asyncio.run(asyncio.wait_for(scenario(), timeout=15))
+    finally:
+        atexit.unregister(connect_mod._stop_bridge_thread)
+        connect_mod._stop_bridge_thread(srv)
+    assert not (Path(CONFIG.vault_path) / ".obsidian" / "silica-bridge.json").exists()

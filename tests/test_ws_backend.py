@@ -193,8 +193,34 @@ def test_read_note_round_trips_content_over_the_socket(ws_backend, synthetic_vau
     assert nc.size == len(nc.content)
 
 
+def test_read_note_by_bare_path_appends_md(ws_backend):
+    """A path-shaped name without extension (as it arrives from wikilinks/search)
+    resolves to the .md file, matching getFileByPath's exact-path requirement."""
+    nc = ws_backend.read_note("Hub/Concepts")
+    assert "central hub" in nc.content
+
+
+def test_path_arg_extension_handling(ws_backend):
+    pa = ws_backend._path_arg
+    assert pa("Hub/Concepts") == "Hub/Concepts.md"      # bare path → .md
+    assert pa("Hub/Concepts.md") == "Hub/Concepts.md"   # already .md → verbatim
+    assert pa("Board/Sketch.canvas") == "Board/Sketch.canvas"  # other ext preserved
+
+
 def test_list_files_matches_fs(ws_backend, fs):
     assert {r.path for r in ws_backend.list_files()} == {r.path for r in fs.list_files()}
+
+
+def test_list_files_drops_vault_root_artifacts(ws_backend, monkeypatch):
+    # Obsidian's list_files RPC returns EVERY .md, including Silica's own
+    # GRAPH_REPORT.md — unlike fs/cli, which filter at their own list_files.
+    # ws must strip it too, else it seeds the graph as a real wikilink node.
+    monkeypatch.setattr(ws_backend, "_rpc", lambda *a, **k: [
+        {"name": "GRAPH_REPORT", "path": "GRAPH_REPORT.md"},
+        {"name": "log", "path": "log.md"},
+        {"name": "Real", "path": "Concepts/Real.md"},
+    ])
+    assert {r.path for r in ws_backend.list_files()} == {"Concepts/Real.md"}
 
 
 def test_search_names_matches_fs(ws_backend, fs):
