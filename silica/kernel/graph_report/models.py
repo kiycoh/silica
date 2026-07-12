@@ -25,6 +25,7 @@ class NodeStat:
     in_degree: int
     degree: int       # out+in
     pagerank: float   # rounded to 5 decimal places
+    betweenness: float = 0.0  # fraction of shortest paths through the node — bottleneck signal, distinct from degree
 
 
 @dataclass
@@ -34,6 +35,16 @@ class BridgeStat:
     source_cluster: int
     target_cluster: int
     weight: float     # surprise score: (deg(u)+deg(v)) / (1 + shared_neighbors)
+
+
+@dataclass
+class StructuralGap:        # mirror of BridgeStat — two well-formed areas with few/no links between them
+    cluster_a: int
+    cluster_b: int
+    hub_a: str             # highest-degree node of cluster_a (overlay endpoint)
+    hub_b: str             # highest-degree node of cluster_b
+    inter_edges: int       # EXTRACTED edges joining the two clusters (0 = a full structural hole)
+    gap_score: float       # size_a * size_b / (1 + inter_edges) — big disconnected areas rank highest
 
 
 @dataclass
@@ -132,5 +143,7 @@ class VaultReport:
     reformat_notes: list[str] = field(default_factory=list)
     contested: list[ContestedNote] = field(default_factory=list)
     source_drift: list[SourceDrift] = field(default_factory=list)
+    structural_gaps: list[StructuralGap] = field(default_factory=list)
+    discourse_state: str = ""     # "Focused" | "Diversified" | "Fragmented" | "" — topology one-word diagnosis
     pagerank_map: dict[str, float] = field(default_factory=dict)  # all nodes: vault-relative path (no .md) → pagerank
     code_coverage: CodeCoverage | None = None

@@ -20,6 +20,7 @@ from __future__ import annotations
 
 import colorsys
 import logging
+from collections import Counter
 from dataclasses import dataclass
 from pathlib import Path
 
@@ -266,3 +267,119 @@ def detect_communities(nodes: list[dict], edges: list[dict]) -> list[Community]:
         )
         for i, comm in enumerate(communities)
     ]
+
+
+def structural_gaps(
+    nodes: list[dict], edges: list[dict], top_k: int = 10, min_size: int = 2
+) -> list[tuple[int, int, str, str, int, float]]:
+    """Community-pairs with the largest structural hole, score-descending.
+
+    The mirror of the cross-cluster bridge signal: a bridge is a weak link that
+    EXISTS between two areas; a structural gap is a pair of well-formed areas
+    where the linking edges are ABSENT. Returns tuples
+    (cluster_a, cluster_b, hub_a, hub_b, inter_edges, gap_score) with
+    gap_score = size_a * size_b / (1 + inter_edges) — two large areas with no
+    connecting edge rank highest (the InfraNodus structural-hole read).
+
+    Reads node["group"] (set by detect_communities) and EXTRACTED edges, so it
+    agrees node-for-node with the exported graph. Pure dict counting, no nx.
+    ponytail: in a sparse vault this mostly ranks by size-product — that IS the
+    signal (biggest disconnected areas). Upgrade to a modularity-gain score if
+    it ever reads noisy.
+    """
+    group_of = {
+        n["id"]: n["group"]
+        for n in nodes
+        if n.get("type") != "ghost" and n.get("group", -1) >= 0
+    }
+    if not group_of:
+        return []
+
+    sizes = Counter(group_of.values())
+    deg: Counter = Counter()
+    inter: Counter = Counter()  # (lo_cluster, hi_cluster) -> #EXTRACTED edges joining them
+    for e in edges:
+        if e.get("type") != "EXTRACTED":
+            continue
+        ga, gb = group_of.get(e.get("from")), group_of.get(e.get("to"))
+        if ga is None or gb is None:
+            continue
+        deg[e["from"]] += 1
+        deg[e["to"]] += 1
+        if ga != gb:
+            inter[(min(ga, gb), max(ga, gb))] += 1
+
+    # Hub per cluster = highest-degree member (ties → larger id), matching
+    # ClusterStat.hub so the report row and the overlay edge point at the same note.
+    hub: dict[int, str] = {}
+    for nid, g in group_of.items():
+        if g not in hub or (deg[nid], nid) > (deg[hub[g]], hub[g]):
+            hub[g] = nid
+
+    big = sorted(g for g, s in sizes.items() if s >= min_size)
+    gaps: list[tuple[int, int, str, str, int, float]] = []
+    for i, ca in enumerate(big):
+        for cb in big[i + 1:]:
+            ie = inter.get((ca, cb), 0)
+            score = sizes[ca] * sizes[cb] / (1 + ie)
+            gaps.append((ca, cb, hub[ca], hub[cb], ie, round(score, 2)))
+    gaps.sort(key=lambda t: (-t[5], t[0], t[1]))
+    return gaps[:top_k]
+
+
+def discourse_shape(n_nodes: int, giant: int, cluster_sizes: list[int]) -> str:
+    """One-word topology diagnosis from primitives, InfraNodus-style.
+
+    The single source of the rule, shared by the /graph report Summary and the
+    graph HUD badge so the two surfaces never disagree.
+
+    Fragmented: the graph splits into pieces — the giant component holds under
+                half the notes.
+    Focused:    one area dominates — the largest linked cluster is over half the
+                linked notes (a star around a few hubs).
+    Diversified: several comparably-sized, well-connected areas.
+    ponytail: two 0.5 thresholds on component-share and cluster-share. Good
+    enough for a headline; tune the knobs if a real vault reads wrong.
+    """
+    if n_nodes <= 0:
+        return ""
+    if giant / n_nodes < 0.5:
+        return "Fragmented"
+    linked = sorted((s for s in cluster_sizes if s >= 2), reverse=True)
+    if linked and linked[0] / sum(linked) > 0.5:
+        return "Focused"
+    return "Diversified"
+
+
+def canvas_metrics(nodes: list[dict], edges: list[dict], k: int = 400) -> tuple[dict[str, float], int]:
+    """One nx build over EXTRACTED edges → (betweenness per node, giant-component
+    size), for node sizing and the discourse-shape badge on the exported graph.
+
+    Kept separate from graph_report.compute_report (the report path) so the
+    offline export doesn't drag in the full report machinery; the betweenness
+    formula matches compute_report's so the two agree.
+    ponytail: betweenness is O(V·E), sampled at k pivots to stay bounded on big
+    vaults (k==n on small ones is exact). Empty/0 if networkx is unavailable.
+    """
+    try:
+        import networkx as nx
+    except ImportError:
+        return {}, 0
+
+    real = {n["id"] for n in nodes if n.get("type") != "ghost"}
+    G = nx.Graph()
+    G.add_nodes_from(real)
+    for e in edges:
+        if e.get("type") == "EXTRACTED" and e.get("from") in real and e.get("to") in real:
+            G.add_edge(e["from"], e["to"])
+
+    giant = max((len(c) for c in nx.connected_components(G)), default=0)
+    bet: dict[str, float] = {}
+    if G.number_of_edges() > 0:
+        try:
+            bet = nx.betweenness_centrality(
+                G, k=min(G.number_of_nodes(), k), seed=42, normalized=True
+            )
+        except Exception:
+            bet = {}
+    return bet, giant

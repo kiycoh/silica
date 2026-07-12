@@ -108,6 +108,7 @@ def render_html(
     communities: "list[Community]" = (),  # type: ignore[assignment]
     title: str = "Vault Graph",
     lib_js: str = "",
+    discourse: str = "",
 ) -> str:
     """Produce a fully self-contained 3d-force-graph HTML string.
 
@@ -122,7 +123,13 @@ def render_html(
     n_ghost      = sum(1 for n in nodes if n.get("type") == "ghost")
     n_extracted  = sum(1 for e in edges if e.get("type") == "EXTRACTED")
     n_ambiguous  = sum(1 for e in edges if e.get("type") == "AMBIGUOUS")
+    n_gaps       = sum(1 for e in edges if e.get("type") == "GAP")
     n_communities = len(communities)
+    discourse_badge = (
+        f'<div style="font-size:11px;color:#8f8f8f;letter-spacing:.04em;margin-bottom:6px">'
+        f'discourse: <span style="color:#c9a227;font-weight:600">{html.escape(discourse)}</span></div>'
+        if discourse else ""
+    )
 
     legend_items = "".join(
         f'<div class="legend-item" data-community="{c.id}" data-size="{c.size}" onclick="filterCommunity({c.id})">'
@@ -279,6 +286,12 @@ def render_html(
         Unresolved
         <span style="color:#5c5c5c;font-size:11px;margin-left:auto">{n_ambiguous}</span>
       </label>
+      <label class="filter-row" style="margin-top:4px" title="Well-formed areas with no links between them — a bridge could go here">
+        <input type="checkbox" id="cb-gaps" checked onchange="updateEdgeFilter()">
+        <div class="dot-edge" style="background:#c9a227"></div>
+        Structural gaps
+        <span style="color:#5c5c5c;font-size:11px;margin-left:auto">{n_gaps}</span>
+      </label>
     </div>
 
     <div>
@@ -287,6 +300,7 @@ def render_html(
         <span id="sort-communities" style="color:#8f8f8f;cursor:pointer;font-size:11px;letter-spacing:0;text-transform:none"
               onclick="toggleCommunitySort()" title="sort by size">size &#8597;</span>
       </div>
+      {discourse_badge}
       <div id="legend-box">
 {legend_items}      <div class="legend-item active" id="legend-all" onclick="filterCommunity(-2)">
           <span class="dot" style="background:#5c5c5c"></span>Show all
@@ -371,6 +385,7 @@ function clearFocus() {{
 let activeCommunity = -2;
 let showExtracted = true;
 let showAmbiguous = false;
+let showGaps = true;
 
 // --- Node color = its community color, flat -------------------------------
 // One hue per community: every node in a community shares the exact color,
@@ -395,6 +410,12 @@ const Graph = new ForceGraph3D(document.getElementById("graph"))
   // GL lines; no arrows; fewer sphere segments; finite cooldown so the sim
   // settles and stops reflowing instead of re-laying-out every frame.
   .linkWidth(0)
+  // Structural gaps have no dash in WebGL — mark them by motion instead: amber
+  // particles stream along the absent bridge. Only for GAP links, and they stop
+  // when the link is dimmed (node focus) so focus mode stays quiet.
+  .linkDirectionalParticles(l => l.type === "GAP" && !l._dim ? 2 : 0)
+  .linkDirectionalParticleColor(() => "{_EDGE_COLOR_GAP}")
+  .linkDirectionalParticleWidth(2)
   .nodeResolution(6)
   .cooldownTicks(100)
   .nodeVisibility(n => !n._hidden)
@@ -406,7 +427,8 @@ function applyFilters() {{
   }});
   RAW_EDGES.forEach(e => {{
     e._hidden = (e.type === "EXTRACTED" && !showExtracted) ||
-                (e.type === "AMBIGUOUS" && !showAmbiguous);
+                (e.type === "AMBIGUOUS" && !showAmbiguous) ||
+                (e.type === "GAP" && !showGaps);
   }});
   // Re-pass the current accessor to force a visibility refresh without resetting the physics layout
   Graph.nodeVisibility(Graph.nodeVisibility());
@@ -416,6 +438,7 @@ function applyFilters() {{
 function updateEdgeFilter() {{
   showExtracted = document.getElementById("cb-extracted").checked;
   showAmbiguous = document.getElementById("cb-ambiguous").checked;
+  showGaps = document.getElementById("cb-gaps").checked;
   applyFilters();
 }}
 
@@ -545,7 +568,8 @@ function selectNode(node) {{
   document.getElementById("drawer-path").textContent  = node.path || "(ghost node)";
   const commText = (Number.isInteger(node.group) && node.group >= 0 && COMM_LABELS[node.group])
     ? ` · ${{COMM_LABELS[node.group]}}` : "";
-  document.getElementById("drawer-meta").textContent = `${{node.type}}${{commText}}`;
+  const betwText = node.betweenness ? ` · betweenness ${{node.betweenness}}` : "";
+  document.getElementById("drawer-meta").textContent = `${{node.type}}${{commText}}${{betwText}}`;
   document.getElementById("drawer-out").textContent = outDeg[node.id] || 0;
   document.getElementById("drawer-in").textContent  = inDeg[node.id]  || 0;
 
@@ -592,6 +616,37 @@ applyFilters();
 </html>"""
 
 
+_EDGE_COLOR_GAP = "#c9a227"  # dim amber — "a bridge could go here, and doesn't"
+
+
+def _gap_edges(nodes: list[dict], edges: list[dict], top_k: int = 5) -> list[dict]:
+    """Top structural gaps as overlay edges between two area hubs.
+
+    Reads: 'these two well-formed areas should probably connect, and don't.'
+    Reuses graph_export.structural_gaps so the overlay agrees with the /graph
+    report's Structural Gaps section node-for-node. Only the keys 3d-force-graph
+    actually honours: from/to (linkSource/linkTarget), color.color (linkColor),
+    and type (visibility toggle + particle accessor). The lib draws these as
+    amber directional-particle links — WebGL has no dashed line, so motion, not
+    a dash pattern, is what sets a gap apart. score rides along for the title map.
+    """
+    from silica.kernel.graph_export import structural_gaps
+
+    return [
+        {
+            "id":    f"gap{i}",
+            "from":  hub_a,
+            "to":    hub_b,
+            "type":  "GAP",
+            "color": {"color": _EDGE_COLOR_GAP},
+            "score": score,
+        }
+        for i, (ca, cb, hub_a, hub_b, ie, score) in enumerate(
+            structural_gaps(nodes, edges, top_k=top_k)
+        )
+    ]
+
+
 def export_graph(
     output_path: str,
     folder: str = "",
@@ -605,10 +660,30 @@ def export_graph(
     """
     from silica.kernel.graph_export import build_graph_data, detect_communities
 
+    from silica.kernel.graph_export import canvas_metrics, discourse_shape
+
     lib_js = _vendored_lib_js()  # fail fast before the graph build
     nodes, edges = build_graph_data(folder=folder)
     communities = detect_communities(nodes, edges)
-    html_out = render_html(nodes, edges, communities, title=title, lib_js=lib_js)
+
+    # Betweenness → node size (bottleneck nodes swell) + discourse-shape badge,
+    # from one shared nx build. Base size 16 stays for ordinary nodes.
+    bet, giant = canvas_metrics(nodes, edges)
+    if bet:
+        for n in nodes:
+            if n.get("type") != "ghost":
+                b = round(bet.get(n["id"], 0.0), 4)
+                n["betweenness"] = b
+                n["size"] = round(16 + 40 * b, 2)
+    discourse = discourse_shape(
+        sum(1 for n in nodes if n.get("type") != "ghost"),
+        giant, [c.size for c in communities],
+    )
+
+    gaps = _gap_edges(nodes, edges)  # amber particle-links over the top structural holes
+    html_out = render_html(
+        nodes, edges + gaps, communities, title=title, lib_js=lib_js, discourse=discourse
+    )
 
     out = Path(output_path)
     out.parent.mkdir(parents=True, exist_ok=True)
@@ -630,4 +705,5 @@ def export_graph(
         "edges":       n_extracted,
         "communities": n_communities,
         "unresolved":  n_ghost,
+        "gaps":        len(gaps),
     }

@@ -38,6 +38,7 @@ _TOTAL_LABELS = {
     "lean_notes": "Thin notes (enrich?)",
     "reformat_notes": "Notes to reformat",
     "orphans": "Orphans (no incoming links)",
+    "structural_gaps": "Structural gaps (disconnected areas)",
 }
 
 
@@ -94,6 +95,8 @@ def to_markdown(r: VaultReport, title: str = "Silica Vault Report") -> str:
     if linked:
         top = ", ".join(f"[[{_short(c.hub)}]] ({c.size})" for c in linked[:5])
         add(f"Largest areas: {top}.")
+    if r.discourse_state:
+        add(f"Discourse shape: **{r.discourse_state}**.")
     add("")
     health = []
     if t.get("orphans"):
@@ -141,11 +144,13 @@ def to_markdown(r: VaultReport, title: str = "Silica Vault Report") -> str:
     # God nodes (PageRank dropped — it reads 0.0 at this scale; degree is the signal)
     add("## God Nodes (High-Degree Hubs)")
     if r.god_nodes:
-        add("| Note | Area | Links | In | Out |")
-        add("|---|---|---|---|---|")
+        # Betweenness rides alongside degree: a hub with high betweenness is also
+        # a bottleneck (its removal fragments the discourse), not just popular.
+        add("| Note | Area | Links | In | Out | Between |")
+        add("|---|---|---|---|---|---|")
         for n in r.god_nodes:
             area = hub_of.get(n.cluster, f"#{n.cluster}")
-            add(f"| [[{n.label}]] | {area} | {n.degree} | {n.in_degree} | {n.out_degree} |")
+            add(f"| [[{n.label}]] | {area} | {n.degree} | {n.in_degree} | {n.out_degree} | {n.betweenness} |")
     else:
         add("_No connected notes found._")
     add("")
@@ -162,6 +167,20 @@ def to_markdown(r: VaultReport, title: str = "Silica Vault Report") -> str:
             add(f"| [[{_short(b.source)}]] | [[{_short(b.target)}]] | {sa} ↔ {ta} | {b.weight} |")
     else:
         add("_No cross-cluster bridges found._")
+    add("")
+
+    # Structural gaps — the mirror of bridges: areas that should connect but don't
+    add("## Structural Gaps (Disconnected Knowledge Areas)")
+    add("_Well-formed areas with no links between them — candidate bridges to build._")
+    if r.structural_gaps:
+        add("| Area A | Area B | Links | Gap score |")
+        add("|---|---|---|---|")
+        for g in r.structural_gaps:
+            a = hub_of.get(g.cluster_a, f"#{g.cluster_a}")
+            b = hub_of.get(g.cluster_b, f"#{g.cluster_b}")
+            add(f"| {a} | {b} | {g.inter_edges} | {g.gap_score} |")
+    else:
+        add("_No disconnected areas (or too few clusters to compare)._")
     add("")
 
     # Clusters (named by hub, singletons collapsed, biggest first)

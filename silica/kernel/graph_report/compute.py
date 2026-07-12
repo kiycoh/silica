@@ -26,6 +26,7 @@ from silica.kernel.graph_report.models import (
     ContestedNote,
     NodeStat,
     SourceDrift,
+    StructuralGap,
     VaultReport,
 )
 
@@ -58,7 +59,11 @@ def compute_report(
     Pass _nodes_edges_override for testing without a live driver.
     """
     import networkx as nx
-    from silica.kernel.graph_export import build_graph_data, detect_communities
+    from silica.kernel.graph_export import (
+        build_graph_data,
+        detect_communities,
+        structural_gaps,
+    )
 
     if _nodes_edges_override is not None:
         nodes, edges = _nodes_edges_override
@@ -158,6 +163,21 @@ def compute_report(
         except Exception:
             pr = {}
 
+    # Betweenness — analytics-only (O(V·E), the most expensive metric). Sampled
+    # at k<=400 pivots so it stays bounded on big vaults; k==n (small vaults) is
+    # exact. seed fixed for deterministic output. Distinct from degree: it flags
+    # bottleneck nodes whose removal fragments the discourse.
+    # ponytail: k-sampled approximation; drop k= for exact if a vault is small
+    # and you need the last digit.
+    bet: dict[str, float] = {}
+    if analytics and G_und.number_of_edges() > 0:
+        try:
+            bet = nx.betweenness_centrality(
+                G_und, k=min(G_und.number_of_nodes(), 400), seed=42, normalized=True
+            )
+        except Exception:
+            bet = {}
+
     # ------------------------------------------------------------------
     # Attention candidates — analytics-only. Spaced-repetition
     # surfacing, embedder-free: a note untouched for long AND weakly linked
@@ -225,6 +245,7 @@ def compute_report(
                 in_degree=in_deg.get(nid, 0),
                 degree=deg.get(nid, 0),
                 pagerank=round(pr.get(nid, 0.0), 5),
+                betweenness=round(bet.get(nid, 0.0), 4),
             ))
 
         seen_bridge: set[tuple[str, str]] = set()
@@ -274,6 +295,20 @@ def compute_report(
             cohesion=cohesion,
         ))
 
+    # Structural gaps + discourse shape — analytics-only, mirror of the bridge
+    # signal (areas that SHOULD connect but don't) plus a one-word topology read.
+    structural_gaps_list: list[StructuralGap] = []
+    discourse_state = ""
+    if analytics:
+        structural_gaps_list = [
+            StructuralGap(
+                cluster_a=ca, cluster_b=cb, hub_a=ha, hub_b=hb,
+                inter_edges=ie, gap_score=score,
+            )
+            for ca, cb, ha, hb, ie, score in structural_gaps(nodes, edges, top_k=top_k)
+        ]
+        discourse_state = _discourse_state(G_und, clusters)
+
     # ------------------------------------------------------------------
     # Orphans (in-degree == 0, scoped to folder)
     # ------------------------------------------------------------------
@@ -318,6 +353,8 @@ def compute_report(
         reformat_notes=reformat_notes,
         contested=contested,
         source_drift=source_drift,
+        structural_gaps=structural_gaps_list,
+        discourse_state=discourse_state,
     )
 
     if with_embeddings:
@@ -364,12 +401,24 @@ def compute_report(
         "source_drift": len(source_drift),
         "orphans": len(orphans),
         "clusters": len(clusters),
+        "structural_gaps": len(structural_gaps_list),
         "code_files_documented": (report.code_coverage.documented if report.code_coverage else 0),
         "code_files_total": (report.code_coverage.total if report.code_coverage else 0),
     }
     report.totals = totals
 
     return report
+
+
+def _discourse_state(G_und, clusters: list[ClusterStat]) -> str:
+    """Report-side wrapper: measure giant-component share on G_und, then apply
+    the shared discourse_shape rule (single source, also used by the graph HUD)."""
+    import networkx as nx
+
+    from silica.kernel.graph_export import discourse_shape
+
+    giant = max((len(c) for c in nx.connected_components(G_und)), default=0)
+    return discourse_shape(G_und.number_of_nodes(), giant, [c.size for c in clusters])
 
 
 def _empty_report(scope: str = "") -> VaultReport:
