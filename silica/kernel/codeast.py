@@ -39,6 +39,7 @@ class Symbol:
     doc: str = ""    # first docstring line ("" when absent)
     parent: str = "" # enclosing class name for methods
     doc_full: str = ""  # whole docstring, per-line stripped ("" when absent)
+    decorators: list[str] = field(default_factory=list)  # names, '@' and call args stripped
 
 
 @dataclass(frozen=True)
@@ -50,6 +51,7 @@ class ModuleSkeleton:
     parse_error: bool = False  # tree-sitter setup failed — consumers must not read "empty" as "no structure"
     module_doc: str = ""                                   # module-level docstring, whole
     module_comments: list[str] = field(default_factory=list)  # top-level comment blocks
+    dunder_all: list[str] | None = None  # literal __all__, or None (absent / dynamic)
 
 
 def language_for(path: str | Path) -> str | None:
@@ -74,13 +76,14 @@ def extract_skeleton(source: str, language: str, path: str = "") -> ModuleSkelet
     extract = _py_extract if language == "python" else _ts_extract
     for i in range(root.named_child_count()):
         extract(root.named_child(i), src, imports, symbols)
-    module_doc, module_comments = ("", [])
+    module_doc, module_comments, dunder_all = ("", [], None)
     if language == "python":
         module_doc, module_comments = _py_module_docs(root, src)
+        dunder_all = _py_dunder_all(root, src)
     # ponytail: TS doc/comment capture deferred; Python-first wiki
     return ModuleSkeleton(path=path, language=language, imports=imports,
                           symbols=symbols, module_doc=module_doc,
-                          module_comments=module_comments)
+                          module_comments=module_comments, dunder_all=dunder_all)
 
 
 # ---------------------------------------------------------------------------
@@ -170,15 +173,53 @@ def _py_module_docs(root, src: bytes) -> tuple[str, list[str]]:
     return module_doc, blocks
 
 
+def _py_decorators(node, src: bytes) -> list[str]:
+    """Decorator names of a decorated_definition, '@' and call args stripped."""
+    out: list[str] = []
+    for i in range(node.named_child_count()):
+        child = node.named_child(i)
+        if child.kind() == "decorator":
+            out.append(_text(child, src).lstrip("@").split("(", 1)[0].strip())
+    return out
+
+
+def _py_dunder_all(root, src: bytes) -> list[str] | None:
+    """Literal `__all__` list, or None (absent / dynamic: no authority). This
+    grammar emits a bare `assignment` at module level; older ones wrap it in
+    `expression_statement`, so both shapes are unwrapped."""
+    for i in range(root.named_child_count()):
+        node = root.named_child(i)
+        assign = node
+        if node.kind() == "expression_statement" and node.named_child_count() > 0:
+            assign = node.named_child(0)
+        if assign.kind() != "assignment":
+            continue
+        left = assign.child_by_field_name("left")
+        right = assign.child_by_field_name("right")
+        if left is None or right is None or _text(left, src) != "__all__":
+            continue
+        if right.kind() != "list":
+            return None
+        names: list[str] = []
+        for j in range(right.named_child_count()):
+            el = right.named_child(j)
+            if el.kind() != "string":
+                return None
+            names.append(_strip_quotes(_text(el, src).strip()))
+        return names
+    return None
+
+
 # ---------------------------------------------------------------------------
 # Python
 # ---------------------------------------------------------------------------
 
-def _py_extract(node, src: bytes, imports: list[str], symbols: list[Symbol]) -> None:
+def _py_extract(node, src: bytes, imports: list[str], symbols: list[Symbol],
+                decorators: list[str] | None = None) -> None:
     if node.kind() == "decorated_definition":
         inner = node.child_by_field_name("definition")
         if inner is not None:
-            _py_extract(inner, src, imports, symbols)
+            _py_extract(inner, src, imports, symbols, _py_decorators(node, src))
         return
     if node.kind() == "import_statement":
         for i in range(node.named_child_count()):
@@ -221,6 +262,7 @@ def _py_extract(node, src: bytes, imports: list[str], symbols: list[Symbol]) -> 
             signature=_signature(node, src),
             doc=_py_docstring(node, src),
             doc_full=_py_docstring_full(node, src),
+            decorators=decorators or [],
         ))
         return
     if node.kind() == "class_definition":
@@ -232,13 +274,16 @@ def _py_extract(node, src: bytes, imports: list[str], symbols: list[Symbol]) -> 
             signature=_signature(node, src),
             doc=_py_docstring(node, src),
             doc_full=_py_docstring_full(node, src),
+            decorators=decorators or [],
         ))
         body = node.child_by_field_name("body")
         for i in range(body.named_child_count() if body is not None else 0):
             child = body.named_child(i)
             target = child
+            method_decos: list[str] = []
             if child.kind() == "decorated_definition":
                 target = child.child_by_field_name("definition") or child
+                method_decos = _py_decorators(child, src)
             if target.kind() == "function_definition":
                 mname = target.child_by_field_name("name")
                 symbols.append(Symbol(
@@ -248,6 +293,7 @@ def _py_extract(node, src: bytes, imports: list[str], symbols: list[Symbol]) -> 
                     doc=_py_docstring(target, src),
                     doc_full=_py_docstring_full(target, src),
                     parent=cls_name,
+                    decorators=method_decos,
                 ))
 
 

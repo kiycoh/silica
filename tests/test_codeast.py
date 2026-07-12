@@ -218,3 +218,46 @@ def test_no_doc_no_comments_yield_empty_fields():
     sk = extract_skeleton("x = 1\n", "python", path="m.py")
     assert sk.module_doc == ""
     assert sk.module_comments == []
+
+
+# ---------------------------------------------------------------------------
+# Task 2: decorators + __all__
+# ---------------------------------------------------------------------------
+
+PY_DECOS = '''__all__ = ["Cli", "run"]
+
+import functools
+
+
+class Cli:
+    @property
+    def name(self):
+        return "x"
+
+
+@functools.lru_cache(maxsize=8)
+def run():
+    pass
+
+
+def _hidden():
+    pass
+'''
+
+
+def test_decorators_captured_function_and_method():
+    sk = extract_skeleton(PY_DECOS, "python", path="m.py")
+    run = next(s for s in sk.symbols if s.name == "run")
+    assert run.decorators == ["functools.lru_cache"]
+    name = next(s for s in sk.symbols if s.name == "name" and s.parent == "Cli")
+    assert name.decorators == ["property"]
+
+
+def test_dunder_all_literal_captured():
+    sk = extract_skeleton(PY_DECOS, "python", path="m.py")
+    assert sk.dunder_all == ["Cli", "run"]
+
+
+def test_dunder_all_dynamic_is_none():
+    sk = extract_skeleton("__all__ = [x for x in names]\n", "python", path="m.py")
+    assert sk.dunder_all is None
