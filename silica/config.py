@@ -110,6 +110,15 @@ class SilicaConfig:
         default_factory=lambda: os.getenv("SILICA_VAULT_NAME", "")
     )
 
+    # Personal-memory vault — the second recall lane (ADR-0019). Read-only at
+    # query time: its (embed, cooccur) stores join the RRF fusion; writes never
+    # route here. Empty ⇒ the default user vault (~/.silica/vault). When it
+    # resolves to the SAME path as the active vault the lane abstains and
+    # behavior is bit-identical to single-vault.
+    memory_vault: str = field(
+        default_factory=lambda: os.getenv("SILICA_MEMORY_VAULT", "")
+    )
+
     # Driver backend: "fs" (default, filesystem-native, headless), "cli" (Obsidian
     # desktop via CDP — adds version-history rollback and live metadata-cache reads),
     # or "ws" (the Obsidian bridge plugin over a loopback WebSocket, PROTOCOL.md).

@@ -103,11 +103,16 @@ def build_substrate(
         if len(cooccur_store) == 0:
             cooccur_store = None
 
+        from silica.kernel.memory_lane import memory_stores
+
+        mem_embed, mem_cooccur = memory_stores()  # ADR-0019 second recall lane
         related = related_notes_for_query(
             query_vec=query_vec,
             query_text="\n".join(texts[:8]),
             embed_store=store,
             cooccur_store=cooccur_store,
+            memory_embed_store=mem_embed,
+            memory_cooccur_store=mem_cooccur,
             k=k,
         ) or []
 
@@ -124,6 +129,20 @@ def build_substrate(
             if not name or name.lower() in exclude_lower:
                 continue
 
+            if r.embed_score is not None:
+                score_label = f"score={r.embed_score:.3f}"
+            else:
+                score_label = f"cooccur~w{int(round(r.cooccur_weight or 0))}"
+
+            # Memory-lane result (ADR-0019): context only, never a wikilink —
+            # the note lives in the personal memory vault, not in this vault.
+            if r.origin == "memory":
+                lines.append(
+                    f"- {name} ({score_label}, from personal memory — "
+                    "reference conceptually, do NOT wikilink)"
+                )
+                continue
+
             # Graph-far flag: related but not already adjacent to run notes.
             # Light check (1-hop links of this candidate) — best-effort.
             graph_far = False
@@ -135,10 +154,6 @@ def build_substrate(
             except Exception:
                 pass
 
-            if r.embed_score is not None:
-                score_label = f"score={r.embed_score:.3f}"
-            else:
-                score_label = f"cooccur~w{int(round(r.cooccur_weight or 0))}"
             flag = " [graph-far]" if graph_far else ""
             lines.append(f"- [[{name}]] ({score_label}){flag}")
 

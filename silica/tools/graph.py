@@ -267,8 +267,9 @@ def _facade_search(text: str, k: int) -> dict[str, Any]:
     from silica.config import CONFIG
     from silica.kernel.cooccurrence import get_cooccur_store
     from silica.kernel.embed import get_store
+    from silica.kernel.memory_lane import memory_stores, memory_vault
     from silica.kernel.relatedness import related_notes_for_query
-    from silica.kernel.rerank import rerank_related
+    from silica.kernel.rerank import note_document, rerank_related
 
     embed_store = get_store()
     try:
@@ -277,15 +278,16 @@ def _facade_search(text: str, k: int) -> dict[str, Any]:
             cooccur_store = None
     except Exception:
         cooccur_store = None
+    mem_embed, mem_cooccur = memory_stores()  # ADR-0019 second recall lane
 
     query_vec = None
-    if len(embed_store) > 0:
+    if len(embed_store) > 0 or mem_embed is not None:
         try:
             query_vec = get_embedder(CONFIG).embed([text])[0]
         except Exception:
             query_vec = None  # embed leg abstains; co-occurrence may still carry
 
-    if query_vec is None and cooccur_store is None:
+    if query_vec is None and cooccur_store is None and mem_cooccur is None:
         return {"error": "No index available. Run silica_embed_refresh or silica_cooccurrence_refresh first."}
 
     reranker = get_reranker(CONFIG)
@@ -295,10 +297,43 @@ def _facade_search(text: str, k: int) -> dict[str, Any]:
         query_text=text,
         embed_store=embed_store,
         cooccur_store=cooccur_store,
+        memory_embed_store=mem_embed,
+        memory_cooccur_store=mem_cooccur,
         k=pool,
     )
-    results = rerank_related(reranker, text, results, k=k) if reranker else results[:k]
-    return {"results": [{"path": r.path, "name": r.name, "score": round(r.score, 4)} for r in results]}
+    if reranker:
+        mv = memory_vault()
+
+        def _doc(it):
+            # Memory-lane paths do not resolve through the active-vault driver;
+            # read them from the memory vault so rerank never buries the lane.
+            if getattr(it, "origin", "vault") != "memory":
+                return note_document(it.path)
+            if mv is None:
+                return ""
+            p = mv / (it.path if it.path.endswith(".md") else it.path + ".md")
+            try:
+                body = p.read_text(encoding="utf-8", errors="replace")
+            except OSError:
+                return ""
+            return f"{it.name}\n{body[:800]}".strip()
+
+        results = rerank_related(reranker, text, results, k=k, document_of=_doc)
+    else:
+        results = results[:k]
+    return {
+        "results": [
+            {
+                "path": r.path,
+                "name": r.name,
+                "score": round(r.score, 4),
+                # Origin marker (ADR-0019): only when the note is NOT in the
+                # active vault, so single-vault payloads stay unchanged.
+                **({"origin": "memory"} if r.origin == "memory" else {}),
+            }
+            for r in results
+        ]
+    }
 
 
 class SemanticSearchArgs(BaseModel):
@@ -386,11 +421,27 @@ def silica_related(note: str, k: int = 5) -> dict[str, Any]:
     if len(embed_store) == 0 and cooccur_store is None:
         return {"note": note, "error": "No index available. Run silica_embed_refresh or silica_cooccurrence_refresh first."}
 
-    results = related_notes(query_path, embed_store=embed_store, cooccur_store=cooccur_store, k=k)
+    from silica.kernel.memory_lane import memory_stores
+
+    mem_embed, mem_cooccur = memory_stores()  # ADR-0019 second recall lane
+    results = related_notes(
+        query_path,
+        embed_store=embed_store,
+        cooccur_store=cooccur_store,
+        memory_embed_store=mem_embed,
+        memory_cooccur_store=mem_cooccur,
+        k=k,
+    )
     out: dict[str, Any] = {
         "note": note,
         "results": [
-            {"path": r.path, "name": r.name, "score": round(r.score, 4), "evidence": r.evidence}
+            {
+                "path": r.path,
+                "name": r.name,
+                "score": round(r.score, 4),
+                "evidence": r.evidence,
+                **({"origin": "memory"} if r.origin == "memory" else {}),
+            }
             for r in results
         ],
     }

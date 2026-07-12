@@ -37,6 +37,7 @@ from typing import Any
 
 from silica.kernel.cooccurrence import CooccurStore
 from silica.kernel.embed import EmbedStore
+from silica.kernel.graph_export import is_vault_artifact
 
 # Standard RRF damping constant (Cormack et al. 2009). Larger -> flatter weight
 # decay across ranks; 60 is the widely-used default.
@@ -72,6 +73,11 @@ class RelatedNote:
     embed_score: float | None = None
     cooccur_weight: float | None = None
     edge_score: float | None = None  # CORRELATE (ADR-0013): direct note_edges Jaccard
+    # ADR-0019: "vault" = active vault, "memory" = personal-memory lane. A
+    # memory result's `path` is relative to the MEMORY vault — consumers must
+    # respect this marker (open the right note in the right vault) and never
+    # write through it.
+    origin: str = "vault"
 
 
 # ---------------------------------------------------------------------------
@@ -286,12 +292,20 @@ def _basename(path: str) -> str:
     return path.rsplit("/", 1)[-1]
 
 
+# Key namespace for memory-lane candidates inside the shared RRF dict: the two
+# lanes are different vaults, so identical relative paths are DIFFERENT notes.
+# NUL cannot appear in a filename, so the prefix can never collide.
+_MEM = "\x00memory:"
+
+
 def _fuse(
     embed_rank: list[tuple[str, str, float]] | None,
     cooc_rank: list[tuple[str, float]] | None,
     *,
     k: int,
     edges_rank: list[tuple[str, float]] | None = None,
+    mem_embed_rank: list[tuple[str, str, float]] | None = None,
+    mem_cooc_rank: list[tuple[str, float]] | None = None,
 ) -> list[RelatedNote]:
     """RRF-fuse the per-leg rankings into RelatedNotes with provenance.
 
@@ -301,6 +315,11 @@ def _fuse(
     `edges_rank` is the CORRELATE third leg — direct note_edges of the query,
     ranked by Jaccard. Only related_notes(query_path) supplies it; the
     fresh-query facade always abstains here (fresh text has no note_edges row).
+
+    `mem_embed_rank` / `mem_cooc_rank` are the personal-memory lane (ADR-0019):
+    same fusion, key-namespaced under `_MEM` so a memory note never collides
+    with (or masquerades as) an active-vault note. Its results come out with
+    origin="memory" and `memory:`-prefixed evidence.
     """
     rankings: list[list[tuple[str, float]]] = []
     embed_scores: dict[str, float] = {}
@@ -310,11 +329,19 @@ def _fuse(
         for path, name, score in embed_rank:
             embed_scores[path] = score
             names[path] = name
+    if mem_embed_rank is not None:
+        rankings.append([(_MEM + path, score) for path, _name, score in mem_embed_rank])
+        for path, name, score in mem_embed_rank:
+            embed_scores[_MEM + path] = score
+            names[_MEM + path] = name
 
     cooc_scores: dict[str, float] = {}
     if cooc_rank is not None:
         rankings.append(list(cooc_rank))
         cooc_scores = dict(cooc_rank)
+    if mem_cooc_rank is not None:
+        rankings.append([(_MEM + path, w) for path, w in mem_cooc_rank])
+        cooc_scores.update({_MEM + path: w for path, w in mem_cooc_rank})
 
     edge_scores: dict[str, float] = {}
     if edges_rank is not None:
@@ -322,6 +349,14 @@ def _fuse(
         edge_scores = dict(edges_rank)
 
     fused = _rrf_fuse(rankings)
+    # Vault-root artifacts (log.md, GRAPH_REPORT.md) are excluded at index-build,
+    # but a stale vector embedded before that exclusion outlives it: the store is
+    # upsert-only and never prunes departed notes. Drop them here, before the
+    # top-k cut, so no store consumer (map/autolink/dedup) ever surfaces one.
+    fused = {
+        p: s for p, s in fused.items()
+        if not is_vault_artifact(p.removeprefix(_MEM))
+    }
     if not fused:
         return []
 
@@ -337,15 +372,20 @@ def _fuse(
             evidence.append(f"cooccur:w{int(round(cooc_weight))}")
         if edge_score is not None:
             evidence.append(f"edge:{edge_score:.2f}")
+        origin = "vault"
+        if path.startswith(_MEM):
+            origin = "memory"
+            evidence = [f"memory:{e}" for e in evidence]
         out.append(
             RelatedNote(
-                path=path,
-                name=names.get(path, _basename(path)),
+                path=path.removeprefix(_MEM),
+                name=names.get(path, _basename(path.removeprefix(_MEM))),
                 score=score,
                 evidence=evidence,
                 embed_score=embed_score,
                 cooccur_weight=cooc_weight,
                 edge_score=edge_score,
+                origin=origin,
             )
         )
     return out[:k]
@@ -356,6 +396,8 @@ def related_notes(
     *,
     embed_store: EmbedStore | None = None,
     cooccur_store: CooccurStore | None = None,
+    memory_embed_store: EmbedStore | None = None,
+    memory_cooccur_store: CooccurStore | None = None,
     k: int = 10,
     scope: str | None = None,
     exclude: set[str] | None = None,
@@ -366,6 +408,12 @@ def related_notes(
     Stores are injected (pass None for a leg that is unavailable — that leg
     abstains and fusion degrades to the survivor). Returns [] only when both
     legs abstain. Each result carries `evidence` recording its provenance.
+
+    `memory_*_store` are the personal-memory lane (ADR-0019): the same query
+    signals (the note's vector / concept stems) ranked against the memory
+    vault's stores. None (the default) ⇒ the lane abstains and fusion is
+    bit-identical to single-vault. `scope`/`exclude` are active-vault concepts
+    and do not apply to the memory lane.
 
     `expand` (default off) adds associative co-occurrence neighbours to the
     concept profile. On a real vault this re-inflates hub concepts and buries
@@ -379,6 +427,26 @@ def related_notes(
     cooc_rank = _cooccur_ranking(
         cooccur_store, query_path, k=pool, exclude=blocked, scope=scope, expand=expand
     )
+
+    mem_embed_rank = None
+    if memory_embed_store is not None and embed_store is not None:
+        vec = embed_store.get_vec(query_path)
+        if vec is None:
+            vec = embed_store.get_vec(query_path.removesuffix(".md"))
+        mem_embed_rank = _rank_embeddings_from_vec(
+            memory_embed_store, vec, k=pool, exclude=set()
+        )
+    mem_cooc_rank = None
+    if memory_cooccur_store is not None and cooccur_store is not None:
+        profile = _profile_from_seeds(
+            memory_cooccur_store,
+            cooccur_store.note_nodes(query_path),
+            scope=None,
+            expand=expand,
+        )
+        mem_cooc_rank = _rank_cooccur_from_profile(
+            memory_cooccur_store, profile, k=pool, blocked=set(), scope=None
+        )
     # CORRELATE third leg: the query's direct note_edges row, ranked by Jaccard.
     # Abstains (None) when the row is empty — 0.57 edges/note means most queries
     # abstain and fusion is identical to before; when it fires, high precision.
@@ -390,7 +458,14 @@ def related_notes(
             key=lambda kv: (-kv[1], kv[0]),
         )
         edges_rank = ranked or None
-    return _fuse(embed_rank, cooc_rank, k=k, edges_rank=edges_rank)
+    return _fuse(
+        embed_rank,
+        cooc_rank,
+        k=k,
+        edges_rank=edges_rank,
+        mem_embed_rank=mem_embed_rank,
+        mem_cooc_rank=mem_cooc_rank,
+    )
 
 
 def related_notes_for_query(
@@ -399,6 +474,8 @@ def related_notes_for_query(
     query_text: str | None = None,
     embed_store: EmbedStore | None = None,
     cooccur_store: CooccurStore | None = None,
+    memory_embed_store: EmbedStore | None = None,
+    memory_cooccur_store: CooccurStore | None = None,
     k: int = 10,
     scope: str | None = None,
     exclude: set[str] | None = None,
@@ -410,6 +487,10 @@ def related_notes_for_query(
     concept profile from `query_text`. This is the fusion path for routing an
     incoming concept (COLLISION) or autolinking a freshly-written note: either
     input may be omitted, and that leg abstains. Returns [] when both abstain.
+
+    `memory_*_store` are the personal-memory lane (ADR-0019); see
+    `related_notes`. The memory co-occurrence leg seeds from `query_text`
+    using the MEMORY store's frozen language.
     """
     blocked = set(exclude or ())
     pool = max(k * 3, _POOL_MIN)
@@ -427,4 +508,25 @@ def related_notes_for_query(
         cooc_rank = _rank_cooccur_from_profile(
             cooccur_store, profile, k=pool, blocked=blocked, scope=scope
         )
-    return _fuse(embed_rank, cooc_rank, k=k)
+
+    mem_embed_rank = _rank_embeddings_from_vec(
+        memory_embed_store, query_vec, k=pool, exclude=set()
+    )
+    mem_cooc_rank = None
+    if memory_cooccur_store is not None and query_text:
+        profile = _profile_from_seeds(
+            memory_cooccur_store,
+            _seed_from_text(query_text, memory_cooccur_store.lang),
+            scope=None,
+            expand=expand,
+        )
+        mem_cooc_rank = _rank_cooccur_from_profile(
+            memory_cooccur_store, profile, k=pool, blocked=set(), scope=None
+        )
+    return _fuse(
+        embed_rank,
+        cooc_rank,
+        k=k,
+        mem_embed_rank=mem_embed_rank,
+        mem_cooc_rank=mem_cooc_rank,
+    )

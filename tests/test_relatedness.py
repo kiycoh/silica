@@ -57,6 +57,14 @@ def test_fuse_includes_edges_leg():
     assert "edge:0.31" in out[0].evidence
 
 
+def test_fuse_drops_vault_root_artifacts():
+    # A stale GRAPH_REPORT vector can outlive its index-build exclusion (the
+    # store is upsert-only); _fuse must never surface it. "real" survives.
+    from silica.kernel.relatedness import _fuse
+    out = _fuse([("GRAPH_REPORT", "Graph Report", 0.99), ("real", "Real", 0.5)], None, k=5)
+    assert [r.path for r in out] == ["real"]
+
+
 # ---------------------------------------------------------------------------
 # Embed leg + abstention
 # ---------------------------------------------------------------------------
