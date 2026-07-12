@@ -255,6 +255,7 @@ The full schematic (interfaces, agent loop, ingress adapters, the Injector FSM s
 * **Token-Efficient Vault Auditing (`/report`):** Computes community-detection clusters (Louvain modularity), god-nodes (high-degree hubs), structural bridges (inter-community connectors), and orphans, then builds a full structural remediation plan for a vault of **1,000+ markdown files in under 10 seconds**.
 * **Parallel Worker Sub-Agents:** Cognitive-heavy batch operations like semantic deduplication (`/dedup`) and detail refinement (`/refine`, `/enrich`) are offloaded to leashed sub-agents. These run concurrently (up to `SILICA_SUBAGENT_MAX_CONCURRENT`) on a separate worker model (`SILICA_WORKER_MODEL`), keeping the main model's context window clean.
 * **Embedder-Free Concept Modeling:** If an embedding model is offline or unconfigured, concept matching degrades gracefully to a deterministic, local co-occurrence graph (`/cooccur`), querying relatedness and labeling communities in `/graph` exports with no network calls or LLM queries.
+* **No-Loss Bulk Ingestion:** `/ingest` takes as many files in one call as you have, 20 or more depending on their informational density, without degrading. Each source file is chunked deterministically by size, not truncated or summarized away, so the model never has to hold more than one bounded chunk in context at a time. No more splitting a batch into small hand-fed sessions because "too many files confuse it."
 
 ---
 
