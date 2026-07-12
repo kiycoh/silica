@@ -58,7 +58,7 @@ def test_default_toolset_excludes_sensitive():
     TOOLS["_secret_t"].sensitive = True
     captured = {}
 
-    def fake_call_llm(model, messages, tools=None):
+    def fake_call_llm(model, messages, tools=None, cancel=None):
         captured["tools"] = tools
         return _resp(text="ok")
 
@@ -81,7 +81,7 @@ def test_default_toolset_excludes_internal():
     )
     captured = {}
 
-    def fake_call_llm(model, messages, tools=None):
+    def fake_call_llm(model, messages, tools=None, cancel=None):
         captured["tools"] = tools
         return _resp(text="ok")
 
@@ -122,7 +122,7 @@ def test_sensitive_tool_reachable_when_named():
     TOOLS["_secret_t"].sensitive = True
     captured = {}
 
-    def fake_call_llm(model, messages, tools=None):
+    def fake_call_llm(model, messages, tools=None, cancel=None):
         captured["tools"] = tools
         return _resp(text="ok")
 

@@ -13,6 +13,7 @@ import json
 import logging
 import os
 import random
+import threading
 import time
 from dataclasses import dataclass, field
 from typing import Callable
@@ -34,16 +35,16 @@ litellm.drop_params = True
 # Run-wide adaptive pacing. A 429 anywhere lifts a floor delay that is slept
 # before the *first* attempt of every later call this process makes, so we back
 # off an upstream rate limit instead of hammering it. Per-process = per-run for
-# the CLI; the interactive TUI keeps it for the session.
-# ponytail: no decay — one 429 slows the rest of the run. Add exponential decay
-# on clean calls if a recovered session feeling sluggish ever matters.
+# the CLI; the TUI and the GUI server keep it for their (long) lifetime, so the
+# floor also *halves* on every clean first-try success — one bad 429 episode
+# must not slow every later message of a day-long GUI session by 20s.
 _run_cooldown = 0.0
 _COOLDOWN_STEP = 2.0   # seconds added to the floor per 429
 _COOLDOWN_CAP = 20.0   # ceiling on the floor delay
 _RATE_LIMIT_ATTEMPTS = 6  # 429s get more tries than other transients (backoff to ~1min)
 
 
-def retry_transient(fn, exceptions: tuple, attempts: int = 3, base_delay: float = 1.0, jitter: float = 0.0):
+def retry_transient(fn, exceptions: tuple, attempts: int = 3, base_delay: float = 1.0, jitter: float = 0.0, cancel: threading.Event | None = None):
     """Call fn(), retrying on transient exceptions with exponential backoff.
 
     Sleeps base_delay * 2**attempt (+ uniform jitter) between attempts and
@@ -54,6 +55,11 @@ def retry_transient(fn, exceptions: tuple, attempts: int = 3, base_delay: float 
     tries (an upstream limit clears on the order of seconds), and each one lifts
     a run-wide cooldown paced before the next call so the whole run slows down
     rather than repeatedly re-hitting the limit.
+
+    `cancel` marks the call abandoned (e.g. Ctrl+C orphaned the worker running
+    it): once set, the in-flight attempt still finishes but no further retry is
+    scheduled, and a backoff sleep wakes early. Without it an orphaned worker
+    keeps hammering the API for minutes and can outlive the interpreter.
     """
     global _run_cooldown
     ceiling = attempts
@@ -61,11 +67,17 @@ def retry_transient(fn, exceptions: tuple, attempts: int = 3, base_delay: float 
         if attempt == 1 and _run_cooldown:
             time.sleep(_run_cooldown)  # pace the start of every call once a 429 was seen
         try:
-            return fn()
+            result = fn()
+            if attempt == 1 and _run_cooldown:  # clean first try → upstream healthy, decay the floor
+                _run_cooldown = _run_cooldown / 2 if _run_cooldown > 0.5 else 0.0
+            return result
         except exceptions as e:
             if getattr(e, "status_code", None) == 429:
                 _run_cooldown = min(_run_cooldown + _COOLDOWN_STEP, _COOLDOWN_CAP)
                 ceiling = _RATE_LIMIT_ATTEMPTS
+            if cancel is not None and cancel.is_set():
+                logger.info("Call abandoned; dropping retries: %s", e)
+                raise
             if attempt >= ceiling:
                 logger.error("Transient error, %d attempts exhausted: %s", attempt, e)
                 raise
@@ -74,7 +86,12 @@ def retry_transient(fn, exceptions: tuple, attempts: int = 3, base_delay: float 
                 "Transient error (attempt %d/%d): %s. Retrying in %.1fs...",
                 attempt, ceiling, e, delay,
             )
-            time.sleep(delay)
+            if cancel is not None:
+                if cancel.wait(delay):  # backoff sleep that wakes on abandonment
+                    logger.info("Call abandoned during backoff; dropping retries: %s", e)
+                    raise
+            else:
+                time.sleep(delay)
 
 
 def openrouter_routing(provider_list: str | None = None) -> dict | None:
@@ -123,6 +140,7 @@ def call_llm(
     response_format=None,
     on_delta: Callable[[str, str], None] | None = None,
     openrouter_provider: str | None = None,
+    cancel: threading.Event | None = None,
 ) -> LLMResponse:
     """Call the LLM with function-calling support.
 
@@ -135,6 +153,8 @@ def call_llm(
             emitting "reasoning"/"text" deltas as they arrive (plus a "reset" at the
             start of each attempt, so a mid-stream retry can clear any preview).
             The final LLMResponse is identical to the non-streaming path.
+        cancel: optional abandonment flag, forwarded to retry_transient — set it
+            when nobody is waiting on this call anymore so retries stop.
 
     Returns:
         LLMResponse with either text or tool_calls populated
@@ -171,7 +191,7 @@ def call_llm(
         litellm.BadGatewayError,
     )
     if on_delta is None:
-        response = retry_transient(lambda: litellm.completion(**kwargs), _TRANSIENT)
+        response = retry_transient(lambda: litellm.completion(**kwargs), _TRANSIENT, cancel=cancel)
     else:
         def _stream_once():
             on_delta("reset", "")
@@ -192,7 +212,7 @@ def call_llm(
             # everything below is identical to the non-streaming path.
             return litellm.stream_chunk_builder(chunks, messages=messages)
 
-        response = retry_transient(_stream_once, _TRANSIENT)
+        response = retry_transient(_stream_once, _TRANSIENT, cancel=cancel)
         if response is None:
             raise RuntimeError(f"LLM stream from {model} produced no chunks")
 

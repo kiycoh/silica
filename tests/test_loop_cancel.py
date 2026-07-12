@@ -101,29 +101,38 @@ def test_no_cancel_token_runs_normally():
     assert result == "hello"
 
 
-def test_interrupt_does_not_join_inflight_llm_call():
-    """Ctrl+C during an in-flight LLM call must return control WITHOUT waiting on
-    the (uncancellable, sync) worker. Regression guard: a `with ThreadPoolExecutor`
-    would call shutdown(wait=True) in __exit__ and re-block the loop after the KI."""
-    import concurrent.futures as cf
-
-    shutdown_waits: list[bool] = []
-
-    class SpyExecutor(cf.ThreadPoolExecutor):
-        def shutdown(self, wait=True, **kwargs):  # record intent, never actually block
-            shutdown_waits.append(wait)
-            return super().shutdown(wait=False)
+def test_llm_call_runs_on_daemon_thread():
+    """The LLM worker must be a daemon thread: a non-daemon orphan gets joined
+    at interpreter shutdown, hanging exit while its retries die against
+    executors already flagged shut ('cannot schedule new futures after shutdown')."""
+    seen = {}
 
     def fake_call_llm(*a, **k):
+        seen["daemon"] = threading.current_thread().daemon
+        return _fake_resp()
+
+    with patch("silica.agent.loop.call_llm", fake_call_llm):
+        run_agent(messages=[{"role": "user", "content": "hi"}], model="test")
+
+    assert seen.get("daemon") is True
+
+
+def test_interrupt_sets_cancel_event_on_abandoned_call():
+    """Ctrl+C abandons the in-flight call: control returns immediately AND the
+    cancel event handed to call_llm is set, so retry_transient stops retrying
+    in the background instead of burning attempts for minutes."""
+    captured = {}
+
+    def fake_call_llm(*a, **k):
+        captured["cancel"] = k.get("cancel")
         raise KeyboardInterrupt  # surfaces from _future.result() like a real Ctrl+C
 
-    with patch("silica.agent.loop._cf.ThreadPoolExecutor", SpyExecutor), \
-         patch("silica.agent.loop.call_llm", fake_call_llm):
+    with patch("silica.agent.loop.call_llm", fake_call_llm):
         with pytest.raises(KeyboardInterrupt):
             run_agent(messages=[{"role": "user", "content": "hi"}], model="test")
 
-    assert shutdown_waits, "LLM pool was never shut down"
-    assert all(w is False for w in shutdown_waits), f"blocking shutdown used: {shutdown_waits}"
+    assert captured.get("cancel") is not None, "call_llm never received a cancel event"
+    assert captured["cancel"].is_set()
 
 
 def test_bus_receives_events_during_run():

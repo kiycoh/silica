@@ -157,8 +157,8 @@ def run_agent(
 
     # Streaming is a TUI ergonomic: only the interactive main loop gets it —
     # constrained (worker/batch) runs stay on the plain non-streaming call.
-    # The kwarg is only passed when active, so call_llm test doubles with the
-    # bare signature keep working.
+    # The kwarg is only passed when active, so call_llm test doubles only need
+    # the bare signature plus cancel=None.
     _llm_kwargs: dict = {"tools": None}
     if tool_progress_callback is not None and constraints is None:
         _llm_kwargs["on_delta"] = _stream_delta
@@ -172,25 +172,35 @@ def run_agent(
 
         _emit(ThinkingStartEvent(iteration=iteration))
         try:
-            # Run the (synchronous, potentially slow) LLM call on a worker thread
-            # so a Ctrl+C on the main thread raises KeyboardInterrupt out of
-            # _future.result() instead of being trapped in a C-level network recv().
-            # NOT a `with` block: Executor.__exit__ does shutdown(wait=True), which
-            # would re-join the in-flight call right after the Ctrl+C and make the
-            # interrupt feel ignored. shutdown(wait=False) in finally returns control
-            # immediately; the orphaned worker finishes its (uncancellable, sync
-            # litellm) HTTP request in the background and dies.
-            # ponytail: sync litellm can't abort the in-flight request — best we can
-            # do is stop waiting on it. A true mid-call abort would need async httpx.
+            # Run the (synchronous, potentially slow) LLM call on a *daemon*
+            # thread so a Ctrl+C on the main thread raises KeyboardInterrupt out
+            # of _future.result() instead of being trapped in a C-level network
+            # recv(). Daemon matters: a non-daemon orphan (the old throwaway
+            # ThreadPoolExecutor worker) gets joined at interpreter shutdown,
+            # hanging exit for minutes while its retries die against executors
+            # already flagged shut ("cannot schedule new futures after shutdown").
+            # The finally sets `_abandon` so retry_transient stops rescheduling
+            # once nobody is waiting (harmless on success: the call already
+            # returned). ponytail: sync litellm can't abort the in-flight HTTP
+            # request — best we can do is stop waiting and stop retrying.
             slot = worker_slot() if constraints is not None else nullcontext()
             with slot:
-                _llm_pool = _cf.ThreadPoolExecutor(max_workers=1)
+                _abandon = threading.Event()
                 _llm_kwargs["tools"] = schemas
-                _future = _llm_pool.submit(call_llm, effective_model, messages, **_llm_kwargs)
+                _llm_kwargs["cancel"] = _abandon
+                _future: _cf.Future = _cf.Future()
+
+                def _llm_worker(kwargs=dict(_llm_kwargs)):
+                    try:
+                        _future.set_result(call_llm(effective_model, messages, **kwargs))
+                    except BaseException as e:
+                        _future.set_exception(e)
+
+                threading.Thread(target=_llm_worker, daemon=True, name="llm-call").start()
                 try:
                     resp = _future.result()
                 finally:
-                    _llm_pool.shutdown(wait=False)
+                    _abandon.set()
         finally:
             _emit(ThinkingEndEvent(iteration=iteration))
         messages.append(resp.assistant_message)

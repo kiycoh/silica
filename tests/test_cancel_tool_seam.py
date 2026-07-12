@@ -39,7 +39,7 @@ def test_tool_receives_cancel_token_when_declared():
     token = threading.Event()
     calls = [0]
 
-    def fake_call_llm(model, messages, tools=None):
+    def fake_call_llm(model, messages, tools=None, cancel=None):
         calls[0] += 1
         if calls[0] == 1:
             return _resp(tool_calls=[_tc("long_tool", "c1")])
@@ -62,7 +62,7 @@ def test_tool_without_cancel_token_is_unaffected():
 
     calls = [0]
 
-    def fake_call_llm(model, messages, tools=None):
+    def fake_call_llm(model, messages, tools=None, cancel=None):
         calls[0] += 1
         if calls[0] == 1:
             return _resp(tool_calls=[_tc("plain_tool", "c1")])

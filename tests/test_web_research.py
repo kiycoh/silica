@@ -233,7 +233,7 @@ def test_main_agent_default_toolset_excludes_web_search():
 
     captured = {}
 
-    def fake_call_llm(model, messages, tools=None):
+    def fake_call_llm(model, messages, tools=None, cancel=None):
         captured["tools"] = tools
         return SimpleNamespace(
             assistant_message={"role": "assistant", "content": "ok"},

@@ -33,7 +33,7 @@ def _tc(name, call_id):
 def test_schemas_restricted_to_subset():
     captured = {}
 
-    def fake_call_llm(model, messages, tools=None):
+    def fake_call_llm(model, messages, tools=None, cancel=None):
         captured["tools"] = tools
         return _resp(text="ok")
 
@@ -68,7 +68,7 @@ def test_out_of_subset_dispatch_is_rejected():
 
     calls = [0]
 
-    def fake_call_llm(model, messages, tools=None):
+    def fake_call_llm(model, messages, tools=None, cancel=None):
         calls[0] += 1
         if calls[0] == 1:
             return _resp(tool_calls=[_tc("forbidden_tool", "c1")])
@@ -91,7 +91,7 @@ def test_out_of_subset_dispatch_is_rejected():
 def test_model_override_used():
     seen = {}
 
-    def fake_call_llm(model, messages, tools=None):
+    def fake_call_llm(model, messages, tools=None, cancel=None):
         seen["model"] = model
         return _resp(text="ok")
 
@@ -108,7 +108,7 @@ def test_model_override_used():
 def test_iteration_cap_overridden():
     calls = [0]
 
-    def fake_call_llm(model, messages, tools=None):
+    def fake_call_llm(model, messages, tools=None, cancel=None):
         calls[0] += 1
         # Always emit a tool call so the loop keeps going until the cap.
         return _resp(tool_calls=[_tc("allowed_tool", f"c{calls[0]}")])
@@ -127,7 +127,7 @@ def test_iteration_cap_overridden():
 
 
 def test_no_constraints_unchanged():
-    def fake_call_llm(model, messages, tools=None):
+    def fake_call_llm(model, messages, tools=None, cancel=None):
         return _resp(text="normal")
 
     with patch("silica.agent.loop.call_llm", fake_call_llm):

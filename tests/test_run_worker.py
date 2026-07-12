@@ -50,7 +50,7 @@ def test_run_worker_uses_worker_model_and_returns_structured_result():
 
     calls = [0]
 
-    def fake_call_llm(model, messages, tools=None):
+    def fake_call_llm(model, messages, tools=None, cancel=None):
         seen["model"] = model
         seen["tool_names"] = {t["function"]["name"] for t in (tools or [])}
         calls[0] += 1
@@ -76,7 +76,7 @@ def test_run_worker_honours_cancel_token():
     token = threading.Event()
     token.set()
 
-    def fake_call_llm(model, messages, tools=None):
+    def fake_call_llm(model, messages, tools=None, cancel=None):
         return _resp(text="should not be reached")
 
     cfg = SilicaConfig()

@@ -2,6 +2,7 @@
 """retry_transient: 429s get extra attempts and lift a run-wide pacing floor."""
 from __future__ import annotations
 
+import threading
 from unittest.mock import patch
 
 import pytest
@@ -68,3 +69,54 @@ def test_cooldown_capped(mock_sleep):
     with pytest.raises(_RateLimit):
         llm.retry_transient(fn, (_RateLimit,))
     assert llm._run_cooldown <= llm._COOLDOWN_CAP
+
+
+@patch("time.sleep", return_value=None)
+def test_cooldown_decays_on_clean_calls(mock_sleep):
+    """A clean first-try success halves the 429 cooldown floor (and zeroes it
+    below 0.5s) so one bad episode doesn't slow a long-lived GUI server forever."""
+    llm._run_cooldown = 8.0
+    llm.retry_transient(lambda: "ok", (_Transient,))
+    assert llm._run_cooldown == pytest.approx(4.0)
+
+    llm._run_cooldown = 0.4
+    llm.retry_transient(lambda: "ok", (_Transient,))
+    assert llm._run_cooldown == 0.0
+
+
+@patch("time.sleep", return_value=None)
+def test_cancel_event_stops_retries(mock_sleep):
+    """An abandoned call (cancel set) re-raises after the in-flight attempt
+    instead of retrying — orphaned workers must not keep hammering the API."""
+    cancel = threading.Event()
+    cancel.set()
+    calls = {"n": 0}
+
+    def fn():
+        calls["n"] += 1
+        raise _Transient("boom")
+
+    with pytest.raises(_Transient):
+        llm.retry_transient(fn, (_Transient,), cancel=cancel)
+    assert calls["n"] == 1
+
+
+def test_call_llm_forwards_cancel_to_retry():
+    """call_llm(cancel=…) reaches retry_transient: a pre-set event means a
+    transient litellm error is raised after exactly one completion attempt."""
+    import litellm
+
+    cancel = threading.Event()
+    cancel.set()
+    calls = {"n": 0}
+
+    def boom(**kwargs):
+        calls["n"] += 1
+        raise litellm.APIConnectionError(
+            message="down", llm_provider="openrouter", model="m"
+        )
+
+    with patch("litellm.completion", side_effect=boom):
+        with pytest.raises(litellm.APIConnectionError):
+            llm.call_llm(model="m", messages=[{"role": "user", "content": "hi"}], cancel=cancel)
+    assert calls["n"] == 1
