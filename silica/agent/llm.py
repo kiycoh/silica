@@ -143,10 +143,13 @@ def call_llm(
         tool_count = len(tools) if tools else 0
         logger.info("LLM call: model=%s | msg=%d | tools=%d", model, len(messages), tool_count)
 
+    from silica.agent.providers import clamp_max_tokens  # lazy: providers.py imports this module
+
+    input_chars = len(str(messages)) + (len(str(tools)) if tools else 0)
     kwargs: dict = {
         "model": model,
         "messages": messages,
-        "max_tokens": max_tokens if max_tokens is not None else int(os.getenv("MAX_TOKENS", "256000")),
+        "max_tokens": clamp_max_tokens(model.split("/", 1)[0], model, max_tokens, input_chars),
     }
     if tools:
         kwargs["tools"] = tools

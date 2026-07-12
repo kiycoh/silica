@@ -89,6 +89,29 @@ def model_limits(provider: str, model: str) -> tuple[int, int]:
     return (0, 0)
 
 
+def clamp_max_tokens(provider: str, model: str, requested: int | None, input_chars: int = 0) -> int:
+    """Output-token budget for a request: the caller's ask (or the MAX_TOKENS
+    default), never above the provider's live max_completion_tokens, never
+    above the window space left after the input.
+
+    Providers validate input + max_tokens <= context window upfront; without
+    this clamp a default above either limit makes them reject the request
+    (e.g. claude-sonnet-5 on OpenRouter: 128k output cap, 262144 window).
+    input_chars is the serialized request size; // 3 overestimates its token
+    count (English runs ~4 chars/token, JSON/code closer to 3), which errs on
+    the side of a smaller output budget.
+    """
+    want = requested if requested is not None else int(os.getenv("MAX_TOKENS", "65536"))
+    window, out_cap = model_limits(provider, model)
+    if out_cap:
+        want = min(want, out_cap)
+    if window:
+        # ponytail: floor 1024 keeps the request well-formed when input nearly
+        # fills the window; compaction is the real defense at that point.
+        want = min(want, max(window - input_chars // 3, 1024))
+    return want
+
+
 def _to_wire(msg: dict) -> dict:
     """Strip internal provenance and render the CLI marker for the wire.
 
@@ -133,7 +156,9 @@ class OpenAICompatibleProvider:
             kwargs["tools"] = tools
             kwargs["tool_choice"] = "auto"
             
-        kwargs["max_tokens"] = max_tokens if max_tokens is not None else int(os.getenv("MAX_TOKENS", "256000"))
+        provider = "openrouter" if "openrouter.ai" in self.base_url else ""
+        input_chars = len(str(kwargs["messages"])) + (len(str(tools)) if tools else 0)
+        kwargs["max_tokens"] = clamp_max_tokens(provider, self.model, max_tokens, input_chars)
 
         if "openrouter.ai" in self.base_url and (rt := openrouter_routing(openrouter_provider)):
             kwargs["extra_body"] = rt
