@@ -26,6 +26,7 @@ Silica builds a live model of your notes with <i>embeddings, co-occurrence, the 
 
 ## Table of Contents
 - [How it works in one breath](#how-it-works-in-one-breath)
+- [Four ways to run Silica](#four-ways-to-run-silica)
 - [Quick Start](#quick-start)
 - [Interfaces](#interfaces)
 - [What Silica is / is not](#what-silica-is--is-not)
@@ -73,6 +74,39 @@ Silica refuses that shape. There is no open-ended loop holding a key to your vau
 
 ---
 
+## Four ways to run Silica
+
+The same vault model serves four different drivers. What changes is who holds
+the write key, and whether they read or write:
+
+1. **You curate, the machine gates.**
+   Drive Silica from the REPL, the web GUI, or the Obsidian plugin. You propose
+   the ingest, merge, or refactor; the FSM checks it and reverts anything that
+   breaks coherence. Your second brain, with a compiler in front of it.
+
+2. **A coding agent grounds itself in your codebase.**
+   Point Silica at a repo and it keeps a living, human-readable map of the code
+   under `docs/silica/`. A coding agent reads that map over the
+   [MCP server](#mcp-server-silica-as-agent-memory) to work from the real
+   structure instead of re-deriving it every session: faster, cheaper, fewer
+   wrong assumptions. See [Silica for codebases](#silica-for-codebases).
+
+3. **An assistant answers from what you actually know.**
+   Any MCP client recalls from your prose vault before it answers, grounding on
+   your real notes and decisions instead of guessing. The agent stops spending
+   turns on *where and how do I look*; it only asks *what do I need next*.
+
+4. **An autonomous loop remembers safely.**
+   A free-running agent can write back too: it captures what it learned, and
+   every write still passes the same FSM gate and reverts on mismatch, exactly
+   like the human path. A loop holding a write key is bounded by the same
+   guardrail you are, not by trust in the model.
+
+Maturity differs per path (the MCP server and REPL ship today; robustness under
+crash is still being hardened): see [Status](#status).
+
+---
+
 ## Quick Start
 
 ### Installation
@@ -83,6 +117,16 @@ Clone the repository and install it in editable mode:
 git clone https://github.com/kiycoh/silica-agent.git
 cd silica-agent
 uv pip install -e .
+```
+
+Optional features are installed as extras, alone or combined (`'.[gui,pdf]'`):
+
+```bash
+uv pip install -e '.[gui]'      # web GUI (`silica --gui`): FastAPI + SSE chat interface
+uv pip install -e '.[pdf]'      # PDF ingestion via mineru (pulls torch; docling/opendataloader are manual alternatives, see SILICA_PDF_PROVIDER)
+uv pip install -e '.[mcp]'      # stdio MCP server (`silica mcp`): Silica as agent memory
+uv pip install -e '.[connect]'  # Obsidian plugin bridge (`silica connect`)
+uv pip install -e '.[dev]'      # tests and linters (pytest, mypy, import-linter)
 ```
 
 ### Setup
@@ -161,7 +205,7 @@ It is **not**:
 - **Not a backup.** It runs alongside git and your own backups, never in place of them.
 - **Not a free-form orchestrator.** No open-ended tool-calling loop over your vault; the state machine is the only way in.
 
-### Use cases
+### Example workflows
 
 1. **Automated Inbox Ingestion:** Reads raw clippings and drafts from an inbox directory, distills them into atomic markdown concepts, resolves duplicate matches against the existing vault, and writes them safely.
 2. **Conversational Vault Querying:** Query your notes, map paths across the graph, and generate outlines or synthesis documents using semantic search and graph-traversal tools in the REPL.
@@ -213,7 +257,7 @@ The full schematic (interfaces, agent loop, ingress adapters, the Injector FSM s
 | Command | Usage | Description |
 | :--- | :--- | :--- |
 | `/report` | `[folder] [--top-k=N] [--embeddings]` | Structural audit of the vault (hubs, bridges, orphans). Pauses for confirmation. |
-| `/ingest` | `<file...> [--target=DIR] [--hub=H]` | Bring files in: notes via Injector FSM, code as skeleton stubs |
+| `/ingest` | `<file...> [--target=DIR] [--hub=H]` | Bring files in: notes via Injector FSM, code as skeleton stubs. Without `--target` the agent picks the most relevant vault folder for the run |
 | `/organize` | `"<intent>" [--scope=FOLDER] [--file=taxonomy.yaml] [--merge] [--move-uncategorized] [--apply]` | Classify and reorganize vault notes according to a taxonomy |
 | `/summarize` | `<note\|folder...>` | Read-only digest of one or more notes in chat (key points, tables) |
 | `/explain` | `"<concept>" [--level=intro\|expert]` | Explain a concept grounded in the vault, at the chosen register (read-only) |
@@ -246,7 +290,7 @@ The full schematic (interfaces, agent loop, ingress adapters, the Injector FSM s
 | `/path` | `<noteA> <noteB>` | Shortest reading path between two notes (wikilinks + co-occurrence) |
 | `/contested` | | List notes flagged `contested: true` with their unresolved contradictions |
 
-**System:** `/help` · `/model` · `/tools` · `/clear` · `/verbose` · `/thinking` · `/vault [path]` (show or switch the active vault for this session) · `/exit`
+**System:** `/help` · `/model` · `/tools` · `/clear` · `/verbose` · `/thinking` · `/vault [path]` (show or switch the active vault for this session) · `/settings [<key> <value|none>]` (view or edit vault.yaml settings) · `/exit`
 
 ---
 
