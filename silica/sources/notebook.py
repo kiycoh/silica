@@ -16,7 +16,7 @@ from silica.config import CONFIG
 from silica.kernel import codeast, gitstate, ipynb, paths
 from silica.kernel.sanitize import strip_degenerate_runs
 from silica.sources.base import GroundedStub, RawItem
-from silica.sources.code import render_skeleton
+from silica.sources.code import _repo_files, code_note_name, render_skeleton
 
 
 class NotebookAdapter:
@@ -59,7 +59,7 @@ class NotebookAdapter:
     def to_stub(self, item: RawItem) -> GroundedStub:
         path = item.target
         root = Path(item.meta["repo_root"])
-        stem = Path(path).stem
+        name = code_note_name(path)
         language = item.meta.get("language")
         code_source = item.meta.get("code_source") or ""
 
@@ -69,7 +69,8 @@ class NotebookAdapter:
             sections.append(f"## Narrative\n\n{narrative}\n")
         if language is not None and code_source:
             sk = codeast.extract_skeleton(code_source, language, path=path)
-            sections.append(render_skeleton(sk, root))
+            files = _repo_files(str(root), item.meta.get("code_ref", ""))
+            sections.append(render_skeleton(sk, root, path, language, files))
         elif code_source:
             sections.append(
                 "> Skeleton unavailable: unsupported kernel language. "
@@ -83,11 +84,11 @@ class NotebookAdapter:
             f"code_ref: {item.meta.get('code_ref', '')}\n"
             f"tags:\n  - codebase\n"
             f"---\n\n"
-            f"# {stem}\n\n"
+            f"# {name}\n\n"
             + "\n".join(sections)
         )
         inbox = (CONFIG.inbox_dir or "Inbox").strip("/")
-        return GroundedStub(lane="terminal", note_path=f"{inbox}/{stem}.md", body=body)
+        return GroundedStub(lane="terminal", note_path=f"{inbox}/{name}.md", body=body)
 
 
 NOTEBOOK = NotebookAdapter()
