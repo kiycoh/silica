@@ -6,7 +6,7 @@ from __future__ import annotations
 
 import httpx
 
-from silica.kernel.rerank import rerank_related
+from silica.kernel.rerank import _best_window, rerank_related
 from silica.agent.providers import Reranker, get_reranker
 
 
@@ -48,6 +48,27 @@ def test_mismatched_score_length_abstains():
     # A malformed reranker reply must not silently drop/misalign candidates.
     out = rerank_related(_Fake([0.9]), "q", _ITEMS, k=3, document_of=_DOC)
     assert [i["path"] for i in out] == ["a", "b", "c"]
+
+
+# --- query-aware document window (long-note blind-spot fix) ----------------
+
+def test_window_surfaces_query_passage_past_head_slice():
+    # The relevant turn sits far past a naive head slice; the window must find it
+    # so the cross-encoder scores the right text instead of opening chatter.
+    body = ("weather smalltalk " * 80) + "I attend yoga classes for my anxiety " \
+           + ("unrelated filler " * 80)
+    assert len(body) > 800
+    win = _best_window(body, "how often do I attend yoga for anxiety?", 200)
+    assert "yoga classes for my anxiety" in win
+
+
+def test_window_is_noop_when_body_fits():
+    assert _best_window("short body", "anything", 800) == "short body"
+
+
+def test_window_falls_back_to_head_without_query_terms():
+    long = "x" * 2000
+    assert _best_window(long, "a an of", 500) == long[:500]  # no >3-char terms
 
 
 # --- client ---------------------------------------------------------------
