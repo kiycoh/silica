@@ -15,7 +15,7 @@ import pytest
 from silica.kernel.provenance import (
     DEFAULT_PROVENANCE_FILENAME,
     append_record,
-    check_reingest,
+    check_renucleate,
     content_sha256,
     drifted_notes,
     read_records,
@@ -112,7 +112,7 @@ def test_single_version_no_drift(tmp_path):
 
 
 def test_v2_touching_half_the_notes_drifts_the_other_half(tmp_path):
-    """Acceptance criterion: ingest v1 (A,B) -> modify -> re-ingest v2 (A only)
+    """Acceptance criterion: nucleate v1 (A,B) -> modify -> re-nucleate v2 (A only)
     -> B is drifted, A is not."""
     append_record("lezione-03.md", "sha-v1", "r1", ["Nota A", "Nota B"], vault_path=str(tmp_path))
     append_record("lezione-03.md", "sha-v2", "r2", ["Nota A"], vault_path=str(tmp_path))
@@ -137,7 +137,7 @@ def test_drift_scoped_per_source(tmp_path):
 
 
 def test_v2_touching_nothing_drifts_all_v1_notes(tmp_path):
-    """A re-ingest whose sha changed but produced zero write/patch ops still
+    """A re-nucleate whose sha changed but produced zero write/patch ops still
     means every v1 note is now stale relative to the new version."""
     append_record("a.md", "sha1", "r1", ["A", "B"], vault_path=str(tmp_path))
     append_record("a.md", "sha2", "r2", [], vault_path=str(tmp_path))
@@ -147,44 +147,44 @@ def test_v2_touching_nothing_drifts_all_v1_notes(tmp_path):
 
 
 # ---------------------------------------------------------------------------
-# check_reingest — the /ingest warning seam
+# check_renucleate — the /nucleate warning seam
 # ---------------------------------------------------------------------------
 
-def test_check_reingest_no_prior_record_no_warning(tmp_path):
-    modified, count = check_reingest("new-source.md", "sha1", vault_path=str(tmp_path))
+def test_check_renucleate_no_prior_record_no_warning(tmp_path):
+    modified, count = check_renucleate("new-source.md", "sha1", vault_path=str(tmp_path))
     assert modified is False
     assert count == 0
 
 
-def test_check_reingest_same_sha_no_warning(tmp_path):
+def test_check_renucleate_same_sha_no_warning(tmp_path):
     append_record("a.md", "sha1", "r1", ["A", "B"], vault_path=str(tmp_path))
-    modified, count = check_reingest("a.md", "sha1", vault_path=str(tmp_path))
+    modified, count = check_renucleate("a.md", "sha1", vault_path=str(tmp_path))
     assert modified is False
     assert count == 0
 
 
-def test_check_reingest_different_sha_warns_with_prior_note_count(tmp_path):
+def test_check_renucleate_different_sha_warns_with_prior_note_count(tmp_path):
     append_record("a.md", "sha1", "r1", ["A", "B"], vault_path=str(tmp_path))
-    modified, count = check_reingest("a.md", "sha2", vault_path=str(tmp_path))
+    modified, count = check_renucleate("a.md", "sha2", vault_path=str(tmp_path))
     assert modified is True
     assert count == 2
 
 
-def test_check_reingest_uses_most_recent_record(tmp_path):
+def test_check_renucleate_uses_most_recent_record(tmp_path):
     append_record("a.md", "sha1", "r1", ["A"], vault_path=str(tmp_path))
     append_record("a.md", "sha2", "r2", ["A", "B"], vault_path=str(tmp_path))
-    modified, count = check_reingest("a.md", "sha2", vault_path=str(tmp_path))
+    modified, count = check_renucleate("a.md", "sha2", vault_path=str(tmp_path))
     assert modified is False
     assert count == 0
 
-    modified2, count2 = check_reingest("a.md", "sha3", vault_path=str(tmp_path))
+    modified2, count2 = check_renucleate("a.md", "sha3", vault_path=str(tmp_path))
     assert modified2 is True
     assert count2 == 2
 
 
 # ---------------------------------------------------------------------------
 # content_sha256 — matches orchestrator.run()'s hashing exactly (hash parity
-# between the CLEANUP write side and the /ingest pre-check read side)
+# between the CLEANUP write side and the /nucleate pre-check read side)
 # ---------------------------------------------------------------------------
 
 def test_content_sha256_matches_manual_hash(tmp_path, monkeypatch):

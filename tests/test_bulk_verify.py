@@ -303,11 +303,11 @@ def test_commit_ops_rolls_back_on_verify_mismatch(monkeypatch):
 
 
 # ---------------------------------------------------------------------------
-# 6. End-to-end regression: minimal ingest on fs backend -> all ops committed,
+# 6. End-to-end regression: minimal nucleate on fs backend -> all ops committed,
 #    the gate does not alter the happy path
 # ---------------------------------------------------------------------------
 
-def test_minimal_ingest_all_op_types_committed_on_fs_backend(fs_vault):
+def test_minimal_nucleate_all_op_types_committed_on_fs_backend(fs_vault):
     ops = [
         Op(op=OpType.write, heading="New Concept", source_basename="s.md",
            path="Concepts/New Concept.md", snippet="A distilled idea.", hub="AI"),

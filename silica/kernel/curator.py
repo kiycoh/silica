@@ -52,7 +52,7 @@ def _norm_note_path(path: str) -> str:
 
 # Silica's own vault-root artifacts (log.md, GRAPH_REPORT.md) must never be
 # planned for work — --apply would LLM-rewrite the journal or the report on
-# every vault with >=1 ingest. Same predicate now also keeps them out of the
+# every vault with >=1 nucleate. Same predicate now also keeps them out of the
 # graph itself (silica.kernel.graph_export.is_vault_artifact), so orphan/hub
 # metrics no longer self-pollute from the report's own wikilinks.
 

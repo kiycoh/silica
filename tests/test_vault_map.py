@@ -90,7 +90,7 @@ def test_log_tail_appears_when_log_exists(tmp_vault, tmp_path):
 
     store = _populated_store(tmp_path)
     append_log_line(
-        "ingest `a.md` → 1 new, 0 patch, 0 deferred",
+        "nucleate `a.md` → 1 new, 0 patch, 0 deferred",
         "runidabc1234",
         vault_path=CONFIG.vault_path,
     )

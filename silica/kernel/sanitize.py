@@ -40,7 +40,7 @@ _ILLEGAL_FILENAME_CHARS_RE = re.compile(r'[/\\:*?"<>|]')
 # Excludes markdown-structural chars (# = - * _ ` ~): they legitimately repeat
 # — ATX headings up to ######, thematic breaks / setext underlines, emphasis,
 # code fences — and collapsing them corrupts real document structure (the golden
-# integrity probe caught `##### Heading` → `# Heading` on ingest).
+# integrity probe caught `##### Heading` → `# Heading` on nucleate).
 _DEGENERATE_RUN_RE = re.compile(r'([^\n#*_=~`-])\1{4,}')
 
 # Nested wikilink brackets: 3+ consecutive '[' or ']'. A valid wikilink uses

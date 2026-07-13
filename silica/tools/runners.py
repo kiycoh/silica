@@ -19,7 +19,7 @@ from silica.tools.graph import _in_folder
 
 class RunInjectorArgs(BaseModel):
     inbox_file: str = Field(default="", description="Path to a single inbox file (legacy; use inbox_files for multiple files)")
-    inbox_files: list[str] = Field(default_factory=list, description="Paths to one or more inbox files to ingest in a single run")
+    inbox_files: list[str] = Field(default_factory=list, description="Paths to one or more inbox files to nucleate in a single run")
     target_dir: str = Field(description="Destination directory for the extracted concepts")
     hub: str = Field(default="", description="Optional reference hub note")
     resume_run_id: str = Field(default="", description="Run ID to resume (re-processes only failed chunks, skips done ones)")
@@ -33,8 +33,8 @@ def silica_run_injector(
     resume_run_id: str = "",
     cancel_token: Any = None,
 ) -> dict[str, Any]:
-    """Ingest one or more inbox files into the vault — the full pipeline with
-    quality gates and rollback. This is THE tool for "ingest/inject this file".
+    """Nucleate one or more inbox files into the vault — the full pipeline with
+    quality gates and rollback. This is THE tool for "nucleate/inject this file".
 
     Per-chunk failure containment: a failed chunk is rolled back and marked
     'failed' while the remaining chunks continue. Pass resume_run_id to re-run
@@ -67,7 +67,7 @@ class LedgerDigestArgs(BaseModel):
 def silica_ledger_digest(run_id: str = "") -> dict[str, Any]:
     """Compact summary of a run's plan and progress (< 500 tokens).
 
-    Use to inspect an ingest/audit run before advancing it with
+    Use to inspect an nucleate/audit run before advancing it with
     silica_ledger_next. Pass run_id="" for the most recently saved run.
     """
     from silica.kernel.progress import ProgressLedger, latest_run_id

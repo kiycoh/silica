@@ -586,7 +586,7 @@ def _handle_direct_shortcut(raw_input: str, messages: list[dict]) -> bool:
             else:
                 CONSOLE.print("  No stale docs — every documents: note matches its code_ref.")
             return True
-        CONSOLE.print("  Run [bold]/ingest <path>[/] to regenerate, or edit and re-badge.")
+        CONSOLE.print("  Run [bold]/nucleate <path>[/] to regenerate, or edit and re-badge.")
         return True
 
     if cmd == "/impact":
@@ -825,7 +825,7 @@ def _handle_direct_shortcut(raw_input: str, messages: list[dict]) -> bool:
 
 
 def _expand_workflow_shortcut(user_input: str) -> str | None:
-    """Expand workflow shortcuts (e.g. /report, /ingest) into agent-directed messages.
+    """Expand workflow shortcuts (e.g. /report, /nucleate) into agent-directed messages.
 
     Returns the expanded message string, or None if the input is not a
     recognised shortcut. Expanded messages flow through the normal agentic
@@ -833,7 +833,7 @@ def _expand_workflow_shortcut(user_input: str) -> str | None:
 
     Syntax:
         /report [folder] [--top-k=N] [--embeddings]
-        /ingest <file...> [--target=DIR] [--hub=H]
+        /nucleate <file...> [--target=DIR] [--hub=H]
         /convert <file...> [--target=DIR]
         /summarize <note|folder...>
         /explain "<concept>" [--level=intro|expert]
@@ -846,11 +846,11 @@ def _expand_workflow_shortcut(user_input: str) -> str | None:
         /report Concepts/ML
         /report --top-k=15 --embeddings
         /report Inbox --embeddings
-        /ingest Inbox/notes.md --target=Concepts/AI
-        /ingest Inbox/notes.md
-        /ingest silica/cli.py
-        /ingest paper.pdf --target=Concepts/AI
-        /ingest "Inbox/papers/With Spaces.pdf" --target=Concepts/AI
+        /nucleate Inbox/notes.md --target=Concepts/AI
+        /nucleate Inbox/notes.md
+        /nucleate silica/cli.py
+        /nucleate paper.pdf --target=Concepts/AI
+        /nucleate "Inbox/papers/With Spaces.pdf" --target=Concepts/AI
         /convert paper.pdf
     """
     try:
@@ -862,7 +862,7 @@ def _expand_workflow_shortcut(user_input: str) -> str | None:
 
     cmd = parts[0].lower()
 
-    if cmd == "/ingest":
+    if cmd == "/nucleate":
         args = parts[1:]
         files: list[str] = []
         target_dir = ""
@@ -875,7 +875,7 @@ def _expand_workflow_shortcut(user_input: str) -> str | None:
             elif not arg.startswith("-"):
                 files.append(arg)  # preserve original case
         if not files:
-            return "Error: /ingest requires at least one file path. Usage: /ingest <file...> [--target=DIR]"
+            return "Error: /nucleate requires at least one file path. Usage: /nucleate <file...> [--target=DIR]"
 
         from silica.kernel.vault_manifest import get_active_manifest
         from silica.sources.convert import convert
@@ -909,21 +909,21 @@ def _expand_workflow_shortcut(user_input: str) -> str | None:
             return ""  # fully handled inline — sentinel: nothing for the agent
 
         from pathlib import Path as _Path
-        from silica.kernel.provenance import check_reingest, content_sha256
+        from silica.kernel.provenance import check_renucleate, content_sha256
 
         for mf in md_files:
             try:
                 incoming_sha = content_sha256(mf)
                 if not incoming_sha:
                     continue
-                modified, prior_notes = check_reingest(_Path(mf).name, incoming_sha)
+                modified, prior_notes = check_renucleate(_Path(mf).name, incoming_sha)
                 if modified:
                     CONSOLE.print(
-                        f"  [yellow]re-ingest of a modified source: {prior_notes} note(s) "
+                        f"  [yellow]re-nucleate of a modified source: {prior_notes} note(s) "
                         f"derived from the previous version[/]"
                     )
             except Exception as exc:
-                logger.debug("/ingest: re-ingest provenance check skipped for %s (non-fatal): %s", mf, exc)
+                logger.debug("/nucleate: re-nucleate provenance check skipped for %s (non-fatal): %s", mf, exc)
 
         files_json = json.dumps(md_files)
         if target_dir:
@@ -1029,7 +1029,7 @@ def _expand_workflow_shortcut(user_input: str) -> str | None:
                 concept, max_searches=max_searches,
                 tool_progress_callback=make_progress_callback(),
             )
-            CONSOLE.print(f"  Findings → [bold]{note_rel}[/]  (review, then /ingest to bring it in)")
+            CONSOLE.print(f"  Findings → [bold]{note_rel}[/]  (review, then /nucleate to bring it in)")
         except Exception as e:  # missing key, no findings, convergence guard, network
             CONSOLE.print(f"  [yellow]web-search failed: {e}[/]")
         return ""  # fully handled inline — sentinel: nothing for the agent
@@ -1505,12 +1505,12 @@ def main():
         if user_input.startswith("/") and _handle_direct_shortcut(user_input, messages):
             continue
 
-        # Expand workflow shortcuts (/report, /ingest etc.) into agent-directed messages
+        # Expand workflow shortcuts (/report, /nucleate etc.) into agent-directed messages
         is_directive = False
         expanded = _expand_workflow_shortcut(user_input)
         if expanded is not None:
             if not expanded:
-                continue  # shortcut fully handled inline (e.g. /ingest of code files)
+                continue  # shortcut fully handled inline (e.g. /nucleate of code files)
             user_input = expanded
             is_directive = True
 

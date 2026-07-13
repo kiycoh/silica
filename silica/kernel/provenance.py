@@ -4,9 +4,9 @@
 """Note<->source provenance ledger (spec-hermes-coherence §3).
 
 Append-only record of which notes derive from which version (sha256) of an
-ingested source file, keyed by source basename. Written at CLEANUP alongside
-archiving (silica.router.states.finalize, sibling to _log_ingest_completion)
-and read by graph_report (source drift section) and /ingest (re-ingest of a
+nucleated source file, keyed by source basename. Written at CLEANUP alongside
+archiving (silica.router.states.finalize, sibling to _log_nucleate_completion)
+and read by graph_report (source drift section) and /nucleate (re-nucleate of a
 modified source warning).
 
 Storage: `<vault_path>/provenance.json` — a JSON array of records:
@@ -176,7 +176,7 @@ def drifted_notes(
     return out
 
 
-def check_reingest(
+def check_renucleate(
     source: str,
     incoming_sha256: str,
     *,
@@ -185,10 +185,10 @@ def check_reingest(
 ) -> tuple[bool, int]:
     """`(is_modified, notes_derived_from_the_prior_version)`.
 
-    Used by /ingest right before staging a file: warns when the inbox file
-    about to be re-ingested carries a different sha256 than the last known
+    Used by /nucleate right before staging a file: warns when the inbox file
+    about to be re-nucleated carries a different sha256 than the last known
     record for that source basename. No prior record -> (False, 0) — a
-    first ingest is not a re-ingest.
+    first nucleate is not a re-nucleate.
     """
     recs = read_records(source, vault_path=vault_path, filename=filename)
     if not recs:
@@ -287,7 +287,7 @@ def content_sha256(source_path: str) -> str:
 
     Mirrors silica.router.orchestrator.InjectorFSM.run()'s hashing exactly
     (DRIVER.read_note(...).content.encode("utf-8"), falling back to raw file
-    bytes) so a value computed here (e.g. by the /ingest pre-check) compares
+    bytes) so a value computed here (e.g. by the /nucleate pre-check) compares
     equal to the sha256 CLEANUP later records for an unmodified file. Never
     raises — returns "" when the file can't be read either way.
     """

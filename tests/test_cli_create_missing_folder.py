@@ -1,6 +1,6 @@
 """Regression: cli backend create must mkdir a missing target folder.
 
-Root cause: /ingest --target=NewDir on the cli backend failed every write —
+Root cause: /nucleate --target=NewDir on the cli backend failed every write —
 Obsidian's app.vault.create (and the adapter.write fallback) raise if the
 parent folder doesn't exist, and the pipeline deferred the failures silently.
 fs_backend.create already does mkdir(parents=True); create now routes through

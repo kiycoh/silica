@@ -36,7 +36,7 @@ logger = logging.getLogger(__name__)
 PROTOCOL_VERSION = 1
 
 # websockets' 1 MiB default max_size would sever the connection on any note
-# body over ~1 MB (rpc read replies, bulk-ingest creates). 32 MiB matches the
+# body over ~1 MB (rpc read replies, bulk-nucleate creates). 32 MiB matches the
 # no-ceiling behavior of the cli/fs backends. Mirrored in ws_backend.py.
 MAX_FRAME = 2**25
 

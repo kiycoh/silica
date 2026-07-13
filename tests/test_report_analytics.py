@@ -1,6 +1,6 @@
 """Fix 5 — the vault report splits a cheap structural core from expensive analytics.
 
-Ingest only needs Louvain clusters + orphans + degree (cluster routing, orphan
+Nucleate only needs Louvain clusters + orphans + degree (cluster routing, orphan
 repair). PageRank, cross-cluster bridges, god-nodes and per-cluster cohesion are
 read only by the on-demand /graph and /report commands. `compute_report` defaults
 to the structural core (`analytics=False`); the commands opt into the full report.
@@ -47,7 +47,7 @@ def test_default_skips_analytics_keeps_structural():
 
 
 def test_cluster_and_orphan_parity_across_flag():
-    """The two ingest consumers must get identical cluster/orphan data either way."""
+    """The two nucleate consumers must get identical cluster/orphan data either way."""
     nodes, edges = _graph()
     cheap = compute_report(_nodes_edges_override=(nodes, edges))
     full = compute_report(_nodes_edges_override=(nodes, edges), analytics=True)
@@ -70,7 +70,7 @@ def test_analytics_true_restores_full_report():
 
 def test_triage_note_reads_are_analytics_only(monkeypatch):
     """Triage (lean/reformat) reads EVERY note — its output is read only by the
-    on-demand /graph,/report path (analyst_plan + render), never by ingest. So the
+    on-demand /graph,/report path (analyst_plan + render), never by nucleate. So the
     structural core must not pay the per-note read; it is gated under analytics.
     """
     import silica.driver as drv
@@ -86,7 +86,7 @@ def test_triage_note_reads_are_analytics_only(monkeypatch):
     nodes, edges = _graph()
 
     compute_report(_nodes_edges_override=(nodes, edges))  # analytics=False
-    assert calls == [], "ingest path must not read note bodies for triage"
+    assert calls == [], "nucleate path must not read note bodies for triage"
 
     compute_report(_nodes_edges_override=(nodes, edges), analytics=True)
     assert calls, "analytics path still runs triage"
@@ -156,7 +156,7 @@ def test_attention_ranks_idle_and_weakly_linked_first():
 
 
 def test_attention_is_analytics_only():
-    """Cheap structural core (ingest) never computes attention."""
+    """Cheap structural core (nucleate) never computes attention."""
     nodes = [
         {"id": "a.md", "label": "A", "group": 0, "type": "note"},
         {"id": "b.md", "label": "B", "group": 0, "type": "note"},

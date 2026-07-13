@@ -195,7 +195,7 @@ test("create round-trips a LaTeX/CRLF body verbatim (no escaping mangling)", asy
 test("create makes the parent folder first (Obsidian vault.create ENOENTs otherwise)", async () => {
   const files: Record<string, { content: string }> = {};
   const app = makeApp(files);
-  // Exact bridge repro: ingest into a folder that doesn't exist yet. Without
+  // Exact bridge repro: nucleate into a folder that doesn't exist yet. Without
   // ensureFolder this ENOENTs and every note defers (cli_backend already mkdir -p's).
   const r = await dispatchRpc(app, "create", { path: "Machine Learning/Random Variable.md", content: "body" }, idNorm);
   assert.deepEqual(r, { name: "Random Variable", path: "Machine Learning/Random Variable.md" });

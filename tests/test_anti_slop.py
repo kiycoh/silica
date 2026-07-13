@@ -2,7 +2,7 @@
 """The shared anti-slop fragment must reach the body-writing prompts.
 
 Guards against a future refactor silently dropping the injection. Covers the
-distiller (ingestion, highest volume) via the pure render_prompt, plus the
+distiller (nucleation, highest volume) via the pure render_prompt, plus the
 refine/enrich load path, plus the fragment's own content.
 """
 from silica.capabilities._base import load_prompt

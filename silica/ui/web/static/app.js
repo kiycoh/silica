@@ -312,7 +312,7 @@ $("#composer").addEventListener("submit", (e) => {
   const t = input.value;
   input.value = "";
   autoGrow(input);
-  if (staged.length) ingestStaged(t); // files attached: upload + act on them together
+  if (staged.length) nucleateStaged(t); // files attached: upload + act on them together
   else send(t);
 });
 input.addEventListener("input", () => autoGrow(input));
@@ -523,7 +523,7 @@ $("#map-bar").addEventListener("submit", (e) => {
 $("#map-frame").addEventListener("load", () => { $("#map-loading").hidden = true; });
 
 // --- attachments: drop / "+" accumulate files as chips above the input; they
-// are NOT ingested on drop. The next composer submit uploads them together with
+// are NOT nucleated on drop. The next composer submit uploads them together with
 // the typed message, so the agent acts on the files per the user's instruction.
 let staged = []; // File objects awaiting the next submit
 const attachEls = $("#attachments");
@@ -547,7 +547,7 @@ function addFiles(fileList) {
 
 // Upload every staged file + the typed text as one turn (server stages them —
 // converts PDFs, stubs code — then the agent works on them per `text`).
-function ingestStaged(text) {
+function nucleateStaged(text) {
   if (streaming || !staged.length) return;
   const names = staged.map((f) => f.name);
   bubble("user").textContent = (text.trim() ? text.trim() + "\n" : "") + "⇪ " + names.join(", ");
@@ -556,7 +556,7 @@ function ingestStaged(text) {
   fd.append("text", text);
   staged = [];
   renderAttachments();
-  runTurn(fetch("/ingest", { method: "POST", body: fd }));
+  runTurn(fetch("/nucleate", { method: "POST", body: fd }));
 }
 
 let dragDepth = 0;
@@ -570,16 +570,16 @@ window.addEventListener("drop", (e) => {
   if (e.dataTransfer.files.length) addFiles(e.dataTransfer.files);
 });
 
-// "+" opens the native picker, constrained to what the ingest lanes accept.
-const ingestInput = $("#ingest-file");
+// "+" opens the native picker, constrained to what the nucleate lanes accept.
+const nucleateInput = $("#nucleate-file");
 fetch("/supported_types")
   .then((r) => r.json())
-  .then((d) => { ingestInput.accept = (d.extensions || []).join(","); })
+  .then((d) => { nucleateInput.accept = (d.extensions || []).join(","); })
   .catch(() => {}); // accept="" just means the picker shows all files
-$("#attach").addEventListener("click", () => ingestInput.click());
-ingestInput.addEventListener("change", () => {
-  addFiles(ingestInput.files);
-  ingestInput.value = ""; // reset so re-picking the same file fires change again
+$("#attach").addEventListener("click", () => nucleateInput.click());
+nucleateInput.addEventListener("change", () => {
+  addFiles(nucleateInput.files);
+  nucleateInput.value = ""; // reset so re-picking the same file fires change again
 });
 
 // --- note panel (right overlay drawer; opens from .note-link, the graph, and the map) -

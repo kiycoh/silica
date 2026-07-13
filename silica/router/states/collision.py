@@ -93,7 +93,7 @@ def _deferred_op_dict(fsm: "InjectorFSM", d: dict, reason_prefix: str) -> dict:
 
     The bundle in the deferred store is the only durable copy of the concept:
     it must carry the excerpt (snippet) and a real write path, so a retry — or
-    the dedup verdict routing — can act on it without re-ingesting the source.
+    the dedup verdict routing — can act on it without re-nucleating the source.
     """
     from silica.kernel.templates import slugify
 

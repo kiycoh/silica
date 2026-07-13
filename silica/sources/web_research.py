@@ -6,7 +6,7 @@
 ADR-0015 staged acquisition: Silica may *fetch* on request but never *decides*
 what enters the vault. The loop is constrained to the single `web_search` tool
 (it physically cannot write to the vault); its output is one findings note in
-the Inbox, with sources cited. The note enters the vault only via /ingest.
+the Inbox, with sources cited. The note enters the vault only via /nucleate.
 
 `web_search` is `sensitive=True` (ADR-0009): the main agent's default toolset
 excludes it, so it is reachable only here, where web_research() names it

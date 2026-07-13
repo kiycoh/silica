@@ -56,7 +56,7 @@ low-density notes — write like you'd want to re-read.
 ## Know the boundary
 
 The MCP surface is the fast path: search, read, single-note writes. Bulk work
-— multi-file ingestion with quality gates, dedup sweeps, taxonomy, structural
-reports — lives in the Silica REPL (`uv run silica`: `/ingest`, `/report`,
+— multi-file nucleation with quality gates, dedup sweeps, taxonomy, structural
+reports — lives in the Silica REPL (`uv run silica`: `/nucleate`, `/report`,
 `/curate`). When the task is bulk-shaped, say so and point there instead of
 simulating the pipeline note by note.

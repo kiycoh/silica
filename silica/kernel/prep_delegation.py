@@ -60,7 +60,7 @@ def render_prompt(target: str, hub: str | None = None, source_text: str = "") ->
     )
     body = body.replace("{LANGUAGE}", lang_name)
     body = body.replace("{MAX_TAGS}", str(conventions.max_tags))
-    if _ANTI_SLOP_PATH.exists():  # ponytail: optional fragment, missing file must not break ingestion
+    if _ANTI_SLOP_PATH.exists():  # ponytail: optional fragment, missing file must not break nucleation
         body += "\n\n" + _ANTI_SLOP_PATH.read_text(encoding="utf-8")
     return body
 

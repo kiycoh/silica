@@ -822,7 +822,7 @@ class ObsidianCLIBackend(GraphIndexMixin):
         self._reject_hidden(path)
         # Parity with fs_backend.create's mkdir(parents=True): app.vault.create
         # (and the adapter.write fallback) both fail if the parent folder is
-        # missing, silently deferring every note of an /ingest into a new dir.
+        # missing, silently deferring every note of an /nucleate into a new dir.
         self._ensure_dest_dir(path)
         if len(content) > 30000:
             self._write_large_content(path, content, append_mode=False)

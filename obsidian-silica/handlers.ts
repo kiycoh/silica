@@ -230,7 +230,7 @@ async function autolinkNote(app: RpcApp, path: string, candidatesRaw: unknown): 
 
 /** Obsidian's vault.create ENOENTs when the parent folder is missing — unlike
  * fs_backend (Path.mkdir parents=True) and cli_backend (_ensure_dest_dir). Create
- * it first, else every note ingested into a not-yet-existing dir gets deferred. */
+ * it first, else every note nucleated into a not-yet-existing dir gets deferred. */
 async function ensureFolder(app: RpcApp, filePath: string): Promise<void> {
   const slash = filePath.lastIndexOf("/");
   if (slash <= 0) return; // root-level note — no parent to create

@@ -1,11 +1,11 @@
 """CLEANUP-phase wiring of the provenance ledger (spec-hermes-coherence §3).
 
 `_record_provenance` is the seam: a sibling projection to
-`_log_ingest_completion` at the same CLEANUP point, appending one
+`_log_nucleate_completion` at the same CLEANUP point, appending one
 .silica/provenance.json record per (source, run) using data the FSM already
 has — the sha256 computed once at RUN start (`_file_content_hashes`) and the
 write/patch note paths already recorded in the manifest. Exercised directly
-against a minimal fake FSM, same style as tests/test_ingest_log.py.
+against a minimal fake FSM, same style as tests/test_nucleate_log.py.
 """
 from __future__ import annotations
 
@@ -54,7 +54,7 @@ def test_appends_record_with_sha_from_precomputed_hash(tmp_vault):
     assert sorted(rec["notes"]) == ["Concepts/A", "Concepts/B"]
 
 
-def test_reingest_appends_second_record_not_overwrite(tmp_vault):
+def test_renucleate_appends_second_record_not_overwrite(tmp_vault):
     from silica.config import CONFIG
 
     fsm1 = _fake_fsm(
@@ -106,14 +106,14 @@ def test_no_sha_available_skips_silently(tmp_vault):
 
 
 def test_wired_into_handle_cleanup_on_archive(monkeypatch, tmp_vault):
-    """handle_cleanup calls _record_provenance alongside _log_ingest_completion
+    """handle_cleanup calls _record_provenance alongside _log_nucleate_completion
     when a file's last chunk archives successfully."""
     calls = []
     monkeypatch.setattr(
         finalize, "_record_provenance",
         lambda fsm, fi, source_file: calls.append((fi, source_file)),
     )
-    monkeypatch.setattr(finalize, "_log_ingest_completion", lambda *a, **k: None)
+    monkeypatch.setattr(finalize, "_log_nucleate_completion", lambda *a, **k: None)
     monkeypatch.setattr("silica.tools.wrapped.silica_cleanup", lambda *a, **k: {"success": True})
 
     fsm = types.SimpleNamespace(

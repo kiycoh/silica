@@ -596,19 +596,19 @@ async def chat(payload: dict):
 
 @app.get("/supported_types")
 def supported_types():
-    """Extensions the ingest picker offers — drives the `+` button's `accept`."""
-    from silica.sources.registry import supported_ingest_extensions
+    """Extensions the nucleate picker offers — drives the `+` button's `accept`."""
+    from silica.sources.registry import supported_nucleate_extensions
 
-    return {"extensions": supported_ingest_extensions()}
+    return {"extensions": supported_nucleate_extensions()}
 
 
 async def _stage_uploads(files: list[UploadFile]) -> tuple[list[str], list[str]]:
     """Write uploads to Inbox and mechanically stage them, mirroring the inline
-    half of `/ingest` (silica/cli.py): PDFs convert to markdown, code/notebooks
+    half of `/nucleate` (silica/cli.py): PDFs convert to markdown, code/notebooks
     become skeleton stubs, prose stays as-is. Returns (ready, stubs): markdown
     notes ready for the injector/reading, and code stub note paths already
-    written to the vault. The semantic step (ingest? summarize?) is the agent's,
-    driven by the user's message — see `_compose_ingest_turn`.
+    written to the vault. The semantic step (nucleate? summarize?) is the agent's,
+    driven by the user's message — see `_compose_nucleate_turn`.
 
     ponytail: convert() shells out to mineru (can be minutes on a book) and runs
     on the loop thread, same as the old path did during message expansion — the
@@ -632,7 +632,7 @@ async def _stage_uploads(files: list[UploadFile]) -> tuple[list[str], list[str]]
             try:
                 ready.extend(convert(rel))
             except ValueError as exc:
-                logger.warning("ingest: skipped %s: %s", dest.name, exc)
+                logger.warning("nucleate: skipped %s: %s", dest.name, exc)
             continue
         result = stage(adapter, rel)
         if result["status"] == "distill":       # prose → injector re-reads it
@@ -640,30 +640,30 @@ async def _stage_uploads(files: list[UploadFile]) -> tuple[list[str], list[str]]
         elif result["status"] == "ok":            # code/notebook → stub written
             stubs.append(result["note_path"])
         else:
-            logger.warning("ingest: %s: %s", dest.name, result.get("message", ""))
+            logger.warning("nucleate: %s: %s", dest.name, result.get("message", ""))
     return ready, stubs
 
 
-def _compose_ingest_turn(text: str, ready: list[str], stubs: list[str]) -> str:
+def _compose_nucleate_turn(text: str, ready: list[str], stubs: list[str]) -> str:
     """The agent turn for a batch of attached files: the user's instruction plus
-    a factual manifest of what got staged. Empty instruction defaults to ingest."""
+    a factual manifest of what got staged. Empty instruction defaults to nucleate."""
     lines: list[str] = []
     if ready:
-        lines.append("Markdown staged in Inbox, ready to ingest or read:")
+        lines.append("Markdown staged in Inbox, ready to nucleate or read:")
         lines += [f"- {p}" for p in ready]
     if stubs:
         lines.append("Code skeleton stubs already staged in the vault:")
         lines += [f"- {p}" for p in stubs]
     manifest = "\n".join(lines) if lines else "(no files could be staged)"
     base = text.strip() or (
-        "Ingest the attached file(s) into an appropriate folder; "
+        "Nucleate the attached file(s) into an appropriate folder; "
         "ask me if the target is unclear."
     )
     return f"{base}\n\n---\nAttached files:\n{manifest}"
 
 
-@app.post("/ingest")
-async def ingest(files: list[UploadFile] = File(...), text: str = Form("")):
+@app.post("/nucleate")
+async def nucleate(files: list[UploadFile] = File(...), text: str = Form("")):
     if not _begin_turn():
         raise HTTPException(status_code=409, detail="a turn is already in progress")
     try:
@@ -671,7 +671,7 @@ async def ingest(files: list[UploadFile] = File(...), text: str = Form("")):
     except Exception:
         _end_turn()  # release the slot the staging never got to use
         raise
-    return _turn_response(_compose_ingest_turn(text, ready, stubs))
+    return _turn_response(_compose_nucleate_turn(text, ready, stubs))
 
 
 @app.get("/graph")

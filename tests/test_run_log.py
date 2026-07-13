@@ -1,6 +1,6 @@
 """Tests for silica.kernel.run_log — the human-readable <vault>/log.md journal.
 
-Pure kernel helper: format the ingest-completion event, append idempotently
+Pure kernel helper: format the nucleate-completion event, append idempotently
 per run_id, and read back the tail for vault-map injection.
 """
 from __future__ import annotations
@@ -10,14 +10,14 @@ from pathlib import Path
 from silica.kernel.run_log import (
     DEFAULT_LOG_FILENAME,
     append_log_line,
-    format_ingest_event,
+    format_nucleate_event,
     tail_log,
 )
 
 
-def test_format_ingest_event_matches_brief_shape():
-    assert format_ingest_event("lezione-03.md", 7, 3, 2) == (
-        "ingest `lezione-03.md` → 7 new, 3 patch, 2 deferred"
+def test_format_nucleate_event_matches_brief_shape():
+    assert format_nucleate_event("lezione-03.md", 7, 3, 2) == (
+        "nucleate `lezione-03.md` → 7 new, 3 patch, 2 deferred"
     )
 
 
@@ -28,7 +28,7 @@ def test_append_creates_file(tmp_path):
     assert not log_path.exists()
 
     ok = append_log_line(
-        "ingest `a.md` → 1 new, 0 patch, 0 deferred",
+        "nucleate `a.md` → 1 new, 0 patch, 0 deferred",
         "deadbeef1234",
         vault_path=str(vault),
     )
@@ -37,7 +37,7 @@ def test_append_creates_file(tmp_path):
     assert log_path.exists()
     content = log_path.read_text(encoding="utf-8")
     assert content.startswith("- ")
-    assert "ingest `a.md`" in content
+    assert "nucleate `a.md`" in content
     assert "run deadbeef" in content
 
 
@@ -46,12 +46,12 @@ def test_two_appends_two_lines_in_order(tmp_path):
     vault.mkdir()
 
     append_log_line(
-        "ingest `a.md` → 1 new, 0 patch, 0 deferred",
+        "nucleate `a.md` → 1 new, 0 patch, 0 deferred",
         "runidone1234",
         vault_path=str(vault),
     )
     append_log_line(
-        "ingest `b.md` → 2 new, 0 patch, 0 deferred",
+        "nucleate `b.md` → 2 new, 0 patch, 0 deferred",
         "runidtwo5678",
         vault_path=str(vault),
     )
@@ -67,12 +67,12 @@ def test_same_run_id_idempotent_no_duplicate(tmp_path):
     vault.mkdir()
 
     first = append_log_line(
-        "ingest `a.md` → 1 new, 0 patch, 0 deferred",
+        "nucleate `a.md` → 1 new, 0 patch, 0 deferred",
         "samerunid123",
         vault_path=str(vault),
     )
     second = append_log_line(
-        "ingest `a.md` → 1 new, 0 patch, 0 deferred",
+        "nucleate `a.md` → 1 new, 0 patch, 0 deferred",
         "samerunid123",
         vault_path=str(vault),
     )
@@ -90,19 +90,19 @@ def test_same_run_id_different_dedup_keys_appends_both(tmp_path):
     vault.mkdir()
 
     first = append_log_line(
-        "ingest `a.md` → 1 new, 0 patch, 0 deferred",
+        "nucleate `a.md` → 1 new, 0 patch, 0 deferred",
         "sharedrunid1",
         vault_path=str(vault),
         dedup_key="`a.md`",
     )
     second = append_log_line(
-        "ingest `b.md` → 2 new, 0 patch, 0 deferred",
+        "nucleate `b.md` → 2 new, 0 patch, 0 deferred",
         "sharedrunid1",
         vault_path=str(vault),
         dedup_key="`b.md`",
     )
     resumed = append_log_line(  # resume of file a under the same run
-        "ingest `a.md` → 1 new, 0 patch, 0 deferred",
+        "nucleate `a.md` → 1 new, 0 patch, 0 deferred",
         "sharedrunid1",
         vault_path=str(vault),
         dedup_key="`a.md`",
@@ -128,7 +128,7 @@ def test_missing_vault_path_is_noop(monkeypatch):
 def test_append_falls_back_to_config_vault_path(tmp_vault):
     from silica.config import CONFIG
 
-    ok = append_log_line("ingest `a.md` → 1 new, 0 patch, 0 deferred", "cfgrunid1234")
+    ok = append_log_line("nucleate `a.md` → 1 new, 0 patch, 0 deferred", "cfgrunid1234")
 
     assert ok is True
     assert (Path(CONFIG.vault_path) / DEFAULT_LOG_FILENAME).exists()
@@ -139,7 +139,7 @@ def test_tail_log_returns_last_n_lines(tmp_path):
     vault.mkdir()
     for i in range(7):
         append_log_line(
-            f"ingest `f{i}.md` → 1 new, 0 patch, 0 deferred",
+            f"nucleate `f{i}.md` → 1 new, 0 patch, 0 deferred",
             f"run{i:05d}abc",
             vault_path=str(vault),
         )

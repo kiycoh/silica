@@ -83,7 +83,7 @@ def check_vault(config: SilicaConfig) -> CheckResult:
             return CheckResult(
                 "vault", "warn",
                 f"{vault} ok, but inbox folder `{config.inbox_dir}/` is missing",
-                f"create `{config.inbox_dir}/` inside the vault for ingestion",
+                f"create `{config.inbox_dir}/` inside the vault for nucleation",
             )
         return CheckResult("vault", "ok", vault)
     root = gitstate.find_repo_root(Path.cwd())

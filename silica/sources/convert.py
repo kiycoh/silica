@@ -3,7 +3,7 @@
 
 """Non-`.md` → `.md` conversion — ingress frontier (ADR-0009).
 
-A plain function, not a `SourceAdapter`: `/convert` exposes it and `/ingest`
+A plain function, not a `SourceAdapter`: `/convert` exposes it and `/nucleate`
 calls it as the fallback when no source adapter claims a file. Dispatch is by
 extension; PDF is the only converter today, provider-selectable via
 `CONFIG.pdf_provider` (ADR-0011): `mineru` default (heavyweight CLI, best

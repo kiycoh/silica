@@ -1,6 +1,6 @@
 """GUI web backend — the seam that fails if sync→async streaming breaks.
 
-Ponytail: one check per contract (event map, chat stream, ingest, reset, stop,
+Ponytail: one check per contract (event map, chat stream, nucleate, reset, stop,
 messages). No browser e2e in v1. Skipped whole if fastapi isn't installed.
 """
 from __future__ import annotations
@@ -216,7 +216,7 @@ def test_sweep_frees_the_gate_when_no_worker_ever_started(client):
     assert server._busy is False
 
 
-def test_ingest_stages_uploads_and_hands_files_to_the_agent(client, monkeypatch):
+def test_nucleate_stages_uploads_and_hands_files_to_the_agent(client, monkeypatch):
     tc, server = client
 
     ran: dict = {}
@@ -229,7 +229,7 @@ def test_ingest_stages_uploads_and_hands_files_to_the_agent(client, monkeypatch)
     monkeypatch.setattr(server, "run_agent", fake_run_agent)
 
     resp = tc.post(
-        "/ingest",
+        "/nucleate",
         files=[("files", ("note.md", b"# Hi\n\nsome body text to stage", "text/markdown"))],
         data={"text": "file these under Concepts/AI"},
     )
@@ -238,23 +238,23 @@ def test_ingest_stages_uploads_and_hands_files_to_the_agent(client, monkeypatch)
     from silica.config import CONFIG
 
     saved = Path(CONFIG.vault_path) / "Inbox" / "note.md"
-    assert saved.exists()  # upload landed in the inbox (not ingested yet)
+    assert saved.exists()  # upload landed in the inbox (not nucleated yet)
     # the agent turn carries the user's instruction *and* the staged file path
     user = next(m for m in ran["msgs"] if m["role"] == "user")
     assert "file these under Concepts/AI" in user["content"]
     assert "Inbox/note.md" in user["content"]
 
 
-def test_compose_ingest_turn_defaults_empty_text_and_lists_files():
-    from silica.ui.web.server import _compose_ingest_turn
+def test_compose_nucleate_turn_defaults_empty_text_and_lists_files():
+    from silica.ui.web.server import _compose_nucleate_turn
 
-    # empty instruction → default ingest ask; markdown vs code stubs both listed
-    msg = _compose_ingest_turn("", ["Inbox/a.md"], ["Code/b.md"])
-    assert "Ingest the attached file(s)" in msg
+    # empty instruction → default nucleate ask; markdown vs code stubs both listed
+    msg = _compose_nucleate_turn("", ["Inbox/a.md"], ["Code/b.md"])
+    assert "Nucleate the attached file(s)" in msg
     assert "Inbox/a.md" in msg and "Code/b.md" in msg
 
     # a real instruction is kept verbatim as the turn's lead
-    msg2 = _compose_ingest_turn("summarize these", ["Inbox/a.md"], [])
+    msg2 = _compose_nucleate_turn("summarize these", ["Inbox/a.md"], [])
     assert msg2.startswith("summarize these")
     assert "Inbox/a.md" in msg2
 

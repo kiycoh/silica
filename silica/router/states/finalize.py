@@ -162,7 +162,7 @@ def handle_lint(fsm: "InjectorFSM") -> None:
     fsm._transition_success()
 
 
-def _log_ingest_completion(fsm: "InjectorFSM", fi: int, source_file: str) -> None:
+def _log_nucleate_completion(fsm: "InjectorFSM", fi: int, source_file: str) -> None:
     """Append one line to the vault's human journal (log.md).
 
     Pure projection of state WRITE/VALIDATE already recorded — the manifest
@@ -173,7 +173,7 @@ def _log_ingest_completion(fsm: "InjectorFSM", fi: int, source_file: str) -> Non
     duplicate any (dedup_key). Best-effort and must never block CLEANUP.
     """
     try:
-        from silica.kernel.run_log import append_log_line, format_ingest_event
+        from silica.kernel.run_log import append_log_line, format_nucleate_event
 
         basename = os.path.basename(source_file)
         new_count = sum(
@@ -196,7 +196,7 @@ def _log_ingest_completion(fsm: "InjectorFSM", fi: int, source_file: str) -> Non
             except Exception as _de:
                 logger.debug("CLEANUP: deferred count lookup failed (non-fatal): %s", _de)
 
-        event = format_ingest_event(basename, new_count, patch_count, deferred_count)
+        event = format_nucleate_event(basename, new_count, patch_count, deferred_count)
         append_log_line(event, fsm.progress.run_id, dedup_key=f"`{basename}`")
     except Exception as exc:
         logger.debug("CLEANUP: log.md append skipped (non-fatal): %s", exc)
@@ -205,10 +205,10 @@ def _log_ingest_completion(fsm: "InjectorFSM", fi: int, source_file: str) -> Non
 def _record_provenance(fsm: "InjectorFSM", fi: int, source_file: str) -> None:
     """Append one `<vault>/provenance.json` record (spec-hermes-coherence §3).
 
-    Sibling projection to _log_ingest_completion, at the same CLEANUP point:
+    Sibling projection to _log_nucleate_completion, at the same CLEANUP point:
     reuses fsm._file_content_hashes[fi] — the sha256 already computed once
     per file at RUN start (silica.router.orchestrator.InjectorFSM.run), the
-    same value the /ingest pre-check will later compare against. Recomputing
+    same value the /nucleate pre-check will later compare against. Recomputing
     it here would fail anyway: by CLEANUP the source file has already been
     archived (moved) out of its original inbox path. `notes` is the
     projection of this run's validated write/patch ops for this source,
@@ -263,7 +263,7 @@ def handle_cleanup(fsm: "InjectorFSM") -> None:
             res = silica_cleanup(inbox_file_for_fi, "done")
             if "error" in res:
                 fsm.context["cleanup_warning"] = res["error"]
-            _log_ingest_completion(fsm, fi, inbox_file_for_fi)
+            _log_nucleate_completion(fsm, fi, inbox_file_for_fi)
             _record_provenance(fsm, fi, inbox_file_for_fi)
         else:
             logger.info(

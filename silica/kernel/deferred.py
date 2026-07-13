@@ -78,7 +78,7 @@ class DeferredStore:
 
         Runs once per process per vault (the store is cached). A bundle holds
         only regenerable LLM output keyed by source hash; once it ages out
-        nothing re-surfaces it, so deleting is safe — re-ingest the source to
+        nothing re-surfaces it, so deleting is safe — re-nucleate the source to
         regenerate. Bundles with no/zero timestamp are left alone, not guessed.
         """
         cutoff = time.time() - _DEFERRED_TTL_SECONDS

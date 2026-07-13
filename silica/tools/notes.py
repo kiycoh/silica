@@ -35,7 +35,7 @@ def silica_patch_note(
     """Append a snippet under a heading in a single EXISTING note — the fast path
     for interactive edits.
 
-    To create a new note use silica_write_note; for ingesting whole documents
+    To create a new note use silica_write_note; for nucleating whole documents
     into many notes use silica_run_injector. Every successful patch is
     checkpointed and can be reverted with /undo.
     """
@@ -87,7 +87,7 @@ def silica_write_note(path: str, content: str) -> dict[str, Any]:
     """Create a new note in the vault — the fast path for single-note creation.
 
     Fails if the note already exists: use silica_patch_note to append to an
-    existing note, or silica_run_injector for multi-note ingestion with
+    existing note, or silica_run_injector for multi-note nucleation with
     quality gates and rollback. The creation is checkpointed and can be
     reverted with /undo.
     """

@@ -27,9 +27,9 @@ logger = logging.getLogger(__name__)
 DEFAULT_LOG_FILENAME = "log.md"
 
 
-def format_ingest_event(source_basename: str, new: int, patch: int, deferred: int) -> str:
-    """`ingest \\`file.md\\` → 7 new, 3 patch, 2 deferred` — the ingest event shape."""
-    return f"ingest `{source_basename}` → {new} new, {patch} patch, {deferred} deferred"
+def format_nucleate_event(source_basename: str, new: int, patch: int, deferred: int) -> str:
+    """`nucleate \\`file.md\\` → 7 new, 3 patch, 2 deferred` — the nucleate event shape."""
+    return f"nucleate `{source_basename}` → {new} new, {patch} patch, {deferred} deferred"
 
 
 _CURATE_ORDER = ("dedup", "refine", "orphan", "autolink")
@@ -75,7 +75,7 @@ def append_log_line(
     `dedup_key` the unit is the run — any existing line carrying
     `run <short_id>` suppresses the append. With `dedup_key` the unit is
     (run_id, key): only a line carrying BOTH markers suppresses it. Callers
-    that log multiple events under one run_id (e.g. ingest: one line per
+    that log multiple events under one run_id (e.g. nucleate: one line per
     source file of a multi-file run) MUST pass a per-event key, or every
     event after the first is silently swallowed.
 

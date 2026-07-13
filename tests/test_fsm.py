@@ -459,7 +459,7 @@ def test_fsm_recipe_end_to_end_flow(
     assert states_visited == expected_sequence
 
 
-def test_fsm_already_ingested():
+def test_fsm_already_nucleated():
     # We patch get_ledger to return a mock ledger where is_committed is True
     with patch("silica.kernel.ledger.get_ledger") as mock_get_ledger:
         mock_ledger = MagicMock()
@@ -471,7 +471,7 @@ def test_fsm_already_ingested():
 
         # Should short-circuit pre-RECON
         assert fsm.state == InjectorState.INIT
-        assert res.get("final_status") == "already_ingested"
+        assert res.get("final_status") == "already_nucleated"
         # The mock is called with (source_canonical, content_hash=...) — canonical drops .md, lowercased
         call_args = mock_ledger.is_committed.call_args
         assert call_args[0][0] == "already_processed", (

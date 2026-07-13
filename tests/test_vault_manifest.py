@@ -134,7 +134,7 @@ def test_apply_manifest_clears_overlay_on_switch_to_plain_vault(tmp_path, monkey
     assert CONFIG.cooccurrence_lang == "auto"  # not leaked from vault a; "auto" is the real default
 
 
-def test_ingest_gating_sources_prose_only(tmp_path, monkeypatch, capsys):
+def test_nucleate_gating_sources_prose_only(tmp_path, monkeypatch, capsys):
     subprocess.run(["git", "init", "-q"], cwd=tmp_path, check=True)
     subprocess.run(["git", "config", "user.email", "t@t.t"], cwd=tmp_path, check=True)
     subprocess.run(["git", "config", "user.name", "t"], cwd=tmp_path, check=True)
@@ -152,7 +152,7 @@ def test_ingest_gating_sources_prose_only(tmp_path, monkeypatch, capsys):
 
     from silica.cli import _expand_workflow_shortcut
 
-    msg = _expand_workflow_shortcut("/ingest m.py")
+    msg = _expand_workflow_shortcut("/nucleate m.py")
     assert msg == ""  # handled: skipped, nothing for the agent
     assert not (vault / "Inbox" / "m.md").exists()  # code source disabled
     assert "Skipped" in capsys.readouterr().out

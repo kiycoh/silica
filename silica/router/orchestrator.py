@@ -577,7 +577,7 @@ class InjectorFSM(BaseFSM[InjectorState]):
         self.context["source_content_hash"] = self._file_content_hashes[0] if self._file_content_hashes else ""
 
         if all_committed:
-            self.context["final_status"] = "already_ingested"
+            self.context["final_status"] = "already_nucleated"
             return self.context
 
         # Only open a journal run when the pipeline will actually execute writes.

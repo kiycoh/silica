@@ -31,14 +31,14 @@ COMMANDS: tuple[Command, ...] = (
         home_pin=True,
     ),
     Command(
-        name="/ingest",
+        name="/nucleate",
         group="workflow",
         usage="<file...> [--target=DIR] [--hub=H]",
         summary="bring files in: notes via Injector FSM, code as skeleton stubs",
         examples=(
-            "/ingest Inbox/note.md --target=Concepts/AI",
-            "/ingest silica/cli.py",
-            "/ingest paper.pdf --target=Concepts/AI",
+            "/nucleate Inbox/note.md --target=Concepts/AI",
+            "/nucleate silica/cli.py",
+            "/nucleate paper.pdf --target=Concepts/AI",
         ),
         home_pin=True,
     ),
@@ -56,7 +56,7 @@ COMMANDS: tuple[Command, ...] = (
         name="/web-search",
         group="direct",
         usage='"<concept>" [--max-searches=N]',
-        summary="research a concept on the web → cited findings note in the Inbox (then /ingest)",
+        summary="research a concept on the web → cited findings note in the Inbox (then /nucleate)",
         examples=(
             '/web-search "retrieval-augmented generation"',
             '/web-search "graph neural networks" --max-searches=6',

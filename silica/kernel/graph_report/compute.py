@@ -48,12 +48,12 @@ def compute_report(
 
     Uses build_graph_data + detect_communities from graph_export, then
     computes degree, Louvain clusters, orphans, and dangling links from the
-    resolved (EXTRACTED) edge set only — the cheap *structural core* ingest
+    resolved (EXTRACTED) edge set only — the cheap *structural core* nucleate
     reads (cluster routing + orphan repair).
 
     `analytics=True` additionally computes the expensive read-only signals that
     only the on-demand /graph and /report commands consume: PageRank, god-nodes,
-    cross-cluster bridges, and per-cluster cohesion. Ingest leaves it False to
+    cross-cluster bridges, and per-cluster cohesion. Nucleate leaves it False to
     skip the 200-iteration PageRank and the bridge/cohesion edge traversals.
 
     Pass _nodes_edges_override for testing without a live driver.
@@ -102,7 +102,7 @@ def compute_report(
     # Triage for stylistic refinement and enrichment — analytics-only. It reads
     # EVERY note body (the dominant report cost on a large vault) and its output
     # (lean_notes/reformat_notes) is consumed only by build_task_plan + render on
-    # the /graph,/report path. Ingest never reads it, so the structural core skips
+    # the /graph,/report path. Nucleate never reads it, so the structural core skips
     # the per-note read entirely.
     lean_notes: list[str] = []
     reformat_notes: list[str] = []
@@ -227,7 +227,7 @@ def compute_report(
 
     # ------------------------------------------------------------------
     # God nodes + cross-cluster bridges — analytics-only (read by /graph,
-    # /report; ingest never touches them). Skipped for the structural core.
+    # /report; nucleate never touches them). Skipped for the structural core.
     # ------------------------------------------------------------------
     god_nodes: list[NodeStat] = []
     bridges: list[BridgeStat] = []

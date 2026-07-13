@@ -78,9 +78,9 @@ def test_completer_re_display_meta():
     assert meta.get("/refine") == refine_cmd.summary
 
 
-def test_completer_ing_yields_ingest():
-    names = [name for name, _ in _completions("/ing")]
-    assert "/ingest" in names
+def test_completer_nuc_yields_nucleate():
+    names = [name for name, _ in _completions("/nuc")]
+    assert "/nucleate" in names
 
 
 def test_completer_ordering_workflow_direct_system():

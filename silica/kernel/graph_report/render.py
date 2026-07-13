@@ -226,7 +226,7 @@ def to_markdown(r: VaultReport, title: str = "Silica Vault Report") -> str:
               lambda c: f"[[{_short(c.path)}]] ↮ {'; '.join(c.refs) if c.refs else '—'}")
 
     # Source drift — authoritative, from <vault>/provenance.json: notes still
-    # carrying claims from a source version that has since been re-ingested
+    # carrying claims from a source version that has since been re-nucleated
     if r.source_drift:
         add("## Source Drift (Notes From a Superseded Source Version)")
         _fold(add, "warning", f"{len(r.source_drift)} drifted notes", r.source_drift,

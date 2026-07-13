@@ -625,7 +625,7 @@ def test_committed_file_counts_toward_bar_done():
 
     with patch("silica.kernel.ledger.get_ledger"):
         fsm = InjectorFSM(inbox_files=["Inbox/a.md", "Inbox/b.md"], target_dir="Concepts")
-    fsm._committed_file_indices = {0}          # file 0 already ingested → skipped
+    fsm._committed_file_indices = {0}          # file 0 already nucleated → skipped
     fsm._chunk_flat_to_fi_ci = {0: (1, 0)}     # only file 1 got payloaded
     fsm._chunks = [{}]
 
