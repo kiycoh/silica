@@ -127,7 +127,7 @@ def test_render_help_contains_all_group_headers_and_commands():
 # 4. print_home()
 # ---------------------------------------------------------------------------
 
-def test_print_home_contains_pinned_commands_and_footer():
+def test_print_home_shows_model_vault_line_without_command_table():
     con, buf = _make_console()
     with patch("silica.ui.home.print_banner"), \
          patch("silica.ui.home.CONSOLE", con), \
@@ -135,21 +135,15 @@ def test_print_home_contains_pinned_commands_and_footer():
         print_home()
     output = buf.getvalue()
 
-    pinned = [c for c in COMMANDS if c.home_pin]
-    for cmd in pinned:
-        assert cmd.name in output, f"Pinned {cmd.name} missing from print_home() output"
-
-    assert "/help" in output
-    assert "/exit" in output
-
-    non_pinned_content = {c.name for c in COMMANDS if not c.home_pin and c.group in ("workflow", "direct")}
-    for name in non_pinned_content:
-        assert name not in output, f"Non-pinned content command {name} should not appear in print_home()"
-
     from silica.config import CONFIG
     worker_model = CONFIG.worker_model or CONFIG.model
     worker_slug = worker_model.rsplit("/", 1)[-1]
     assert worker_slug in output
     assert "◇" in output
+
+    # the commands overview table was dropped from the launch surface — no
+    # command names appear here anymore; they live in /help.
+    for cmd in COMMANDS:
+        assert cmd.name not in output, f"{cmd.name} should not appear in the slimmed print_home()"
 
 
