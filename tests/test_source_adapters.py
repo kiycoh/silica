@@ -108,6 +108,44 @@ def test_code_stub_is_terminal_with_grounding(code_repo):
     assert "def hi()" in stub.body and "return 1" not in stub.body  # skeleton, never full source
 
 
+def test_code_note_name_qualifies_and_folds_package_init():
+    from silica.sources.code import code_note_name
+
+    assert code_note_name("silica/kernel/codegraph.py") == "silica.kernel.codegraph"
+    assert code_note_name("m.py") == "m"
+    # package import links by the package name, not the __init__ file
+    assert code_note_name("silica/kernel/codeast/__init__.py") == "silica.kernel.codeast"
+    # degenerate root-level __init__: no parent package to fold to
+    assert code_note_name("__init__.py") == "__init__"
+
+
+def test_code_stub_wikilinks_first_party_imports(tmp_path, monkeypatch):
+    subprocess.run(["git", "init", "-q"], cwd=tmp_path, check=True)
+    subprocess.run(["git", "config", "user.email", "t@t.t"], cwd=tmp_path, check=True)
+    subprocess.run(["git", "config", "user.name", "t"], cwd=tmp_path, check=True)
+    (tmp_path / "pkg").mkdir()
+    (tmp_path / "pkg" / "__init__.py").write_text("", encoding="utf-8")
+    (tmp_path / "pkg" / "helper.py").write_text("def h():\n    return 1\n", encoding="utf-8")
+    (tmp_path / "pkg" / "main.py").write_text(
+        "import os\nfrom pkg.helper import h\n\n\ndef run():\n    return h()\n",
+        encoding="utf-8",
+    )
+    subprocess.run(["git", "add", "-A"], cwd=tmp_path, check=True)
+    subprocess.run(["git", "commit", "-q", "-m", "init"], cwd=tmp_path, check=True)
+    vault = tmp_path / ".silica"
+    vault.mkdir()
+    monkeypatch.setattr(CONFIG, "vault_path", str(vault))
+    monkeypatch.setattr(CONFIG, "inbox_dir", "Inbox")
+
+    from silica.sources.code import CODE
+
+    stub = CODE.to_stub(CODE.read("pkg/main.py"))
+    assert stub.note_path == "Inbox/pkg.main.md"   # path-qualified, collision-free
+    assert "[[pkg.helper]]" in stub.body  # first-party import → path-qualified wikilink
+    assert "`os`" in stub.body            # external dep → code span, not linked
+    assert "[[os]]" not in stub.body
+
+
 def test_adapter_for_dispatch():
     from silica.sources.registry import adapter_for
 

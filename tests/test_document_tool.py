@@ -24,8 +24,11 @@ def _init_repo(path: Path) -> None:
     f = path / "src" / "m.py"
     f.parent.mkdir(parents=True, exist_ok=True)
     f.write_text(PY_SRC, encoding="utf-8")
-    # first-party package dir so `silica.kernel` resolves as first-party
+    # real first-party file so `silica.kernel.gitstate` resolves to a wikilink
     (path / "silica" / "kernel").mkdir(parents=True, exist_ok=True)
+    (path / "silica" / "kernel" / "gitstate.py").write_text(
+        "def head_ref():\n    return None\n", encoding="utf-8"
+    )
     (path / "data.csv").write_text("a,b\n", encoding="utf-8")
     subprocess.run(["git", "add", "-A"], cwd=path, check=True)
     subprocess.run(["git", "commit", "-q", "-m", "init"], cwd=path, check=True)
@@ -70,9 +73,9 @@ def test_document_splits_first_party_and_external_imports(repo_vault):
     data = _run("src/m.py")
     written = (vault / data["note_path"]).read_text(encoding="utf-8")
     assert "First-party" in written
-    assert "silica/kernel" in written
+    assert "[[silica.kernel.gitstate]]" in written  # path-qualified wikilink
     assert "External" in written
-    assert "os" in written
+    assert "`os`" in written
 
 
 def test_document_unsupported_language_stub_without_dump(repo_vault):

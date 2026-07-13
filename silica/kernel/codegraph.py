@@ -112,6 +112,34 @@ def classify_import(
         if is_first_party(module, root):
             return ("unresolved", module)
         return ("external", module.split(".")[0])
+    if language == "java":
+        if module.endswith(".*"):
+            return ("unresolved", module)  # wildcard: no single target
+        # suffix match absorbs src/main/java/ prefixes with no configuration
+        suffix = "/" + module.replace(".", "/") + ".java"
+        matches = [f for f in files if f.endswith(suffix) or f == suffix[1:]]
+        if matches:
+            return ("resolved", min(matches, key=lambda p: (len(p), p)))
+        top = module.split(".", 1)[0]
+        if (root / top).is_dir() or any(f.startswith(top + "/") or f"/{top}/" in f
+                                        for f in files):
+            return ("unresolved", module)  # first-party package tree, no file
+        return ("external", ".".join(module.split(".")[:2]))
+    if language in ("c", "cpp"):
+        text = module.strip()
+        if text.startswith("<"):
+            return ("external", text.strip("<>").strip())
+        inc = text.strip('"')
+        # quoted include: importer-dir-relative, then root-relative, then suffix
+        cand = posixpath.normpath(posixpath.join(posixpath.dirname(importer), inc))
+        if cand in files:
+            return ("resolved", cand)
+        if inc in files:
+            return ("resolved", inc)
+        matches = [f for f in files if f.endswith("/" + inc)]
+        if matches:
+            return ("resolved", min(matches, key=lambda p: (len(p), p)))
+        return ("unresolved", inc)
     # TS/JS
     if module.startswith(("./", "../")) or module in (".", ".."):
         resolved = _resolve_ts(module, importer, files)
@@ -165,7 +193,8 @@ def supported_files(root: Path) -> list[str]:
     )
 
 
-def _resolve_calls(sk, rel: str, files: set[str], root: Path) -> list[dict]:
+def _resolve_calls(sk, rel: str, files: set[str], root: Path,
+                   language: str = "python") -> list[dict]:
     """Import-scoped call edges: a call whose spelled name matches an imported
     first-party name is a near-certain usage edge. No scope resolution, no MRO,
     no receivers: only the subset of the call graph that needs no inference.
@@ -174,6 +203,7 @@ def _resolve_calls(sk, rel: str, files: set[str], root: Path) -> list[dict]:
     # ponytail: import-scoped only; scope-stack/receiver if flows read wrong
     """
     imports = [m for m in dict.fromkeys(sk.imports) if m]
+    by_len = sorted(imports, key=len, reverse=True)
     edges: dict[tuple[str, str, str], None] = {}
     for call in sk.calls:
         name = call.name
@@ -183,30 +213,33 @@ def _resolve_calls(sk, rel: str, files: set[str], root: Path) -> list[dict]:
             name = alias + name[len(head):]
         target = callee = None
         if "." in name:
-            for mod in sorted(imports, key=len, reverse=True):
+            # break only on a first-party resolution: an external/unresolved
+            # prefix match (e.g. a bare `import yamlmod` shadowing
+            # `from app.adapters import yamlmod`) must not eat the edge
+            for mod in by_len:
                 if name == mod or name.startswith(mod + "."):
-                    kind, value = classify_import(mod, rel, files, "python", root)
+                    kind, value = classify_import(mod, rel, files, language, root)
                     if kind == "resolved":
                         target = value
                         rest = name[len(mod):].lstrip(".")
                         callee = rest or mod.rsplit(".", 1)[-1]
-                    break
-            else:
+                        break
+            if target is None:
                 # `from pkg import mod; mod.f()` — head equals an import's last segment
                 dotted_head, _, dotted_rest = name.partition(".")
                 for mod in imports:
                     if "." in mod and mod.rsplit(".", 1)[-1] == dotted_head:
-                        kind, value = classify_import(mod, rel, files, "python", root)
+                        kind, value = classify_import(mod, rel, files, language, root)
                         if kind == "resolved":
                             target, callee = value, dotted_rest
-                        break
+                            break
         else:
             for mod in imports:
                 if "." in mod and mod.rsplit(".", 1)[-1] == name:
-                    kind, value = classify_import(mod, rel, files, "python", root)
+                    kind, value = classify_import(mod, rel, files, language, root)
                     if kind == "resolved":
                         target, callee = value, name
-                    break
+                        break
         if target and target != rel:
             edges[(target, callee or "", call.parent)] = None
     return [{"target": t, "callee": ce, "caller": ca} for (t, ce, ca) in sorted(edges)]
@@ -216,24 +249,27 @@ _EMPTY_V2 = {"module_doc": "", "module_comments": [], "dunder_all": None,
              "has_main_guard": False, "calls": []}
 
 
-def _file_entry(root: Path, rel: str, files: set[str]) -> dict:
+def _file_entry(root: Path, rel: str, files: set[str]) -> tuple[dict, list[tuple[str, str]]]:
+    """One store entry, plus the raw (name, parent) call sites for C/C++ —
+    those resolve later in build_codegraph's include join, once every file's
+    symbols exist."""
     language = codeast.language_for(rel)
     try:
         source = (root / rel).read_text(encoding="utf-8", errors="replace")
     except OSError:
         return {"language": language, "imports": [], "external": [],
-                "unresolved": [], "symbols": [], "parse_error": True, **_EMPTY_V2}
+                "unresolved": [], "symbols": [], "parse_error": True, **_EMPTY_V2}, []
     if rel.lower().endswith(".ipynb"):
         from silica.kernel import ipynb
         try:
             cells = ipynb.parse_cells(source)
         except ValueError:
             return {"language": None, "imports": [], "external": [],
-                    "unresolved": [], "symbols": [], "parse_error": True, **_EMPTY_V2}
+                    "unresolved": [], "symbols": [], "parse_error": True, **_EMPTY_V2}, []
         language = ipynb.CODEAST_LANGUAGE.get(cells.language)
         if language is None:  # e.g. an R kernel: node exists, no structure
             return {"language": cells.language, "imports": [], "external": [],
-                    "unresolved": [], "symbols": [], "parse_error": False, **_EMPTY_V2}
+                    "unresolved": [], "symbols": [], "parse_error": False, **_EMPTY_V2}, []
         sk = codeast.extract_skeleton(cells.code, language, path=rel)
     else:
         sk = codeast.extract_skeleton(source, language, path=rel)
@@ -247,7 +283,7 @@ def _file_entry(root: Path, rel: str, files: set[str]) -> dict:
         bucket = {"resolved": imports, "external": external, "unresolved": unresolved}[kind]
         if value not in bucket:
             bucket.append(value)
-    return {
+    entry = {
         "language": language,
         "imports": imports,
         "external": external,
@@ -262,10 +298,31 @@ def _file_entry(root: Path, rel: str, files: set[str]) -> dict:
         "module_comments": sk.module_comments,
         "dunder_all": sk.dunder_all,
         "has_main_guard": sk.has_main_guard,
-        # ponytail: TS call edges empty in v1, matches codeast TS deferral
-        "calls": _resolve_calls(sk, rel, files, root) if language == "python" else [],
+        # ponytail: TS call edges empty in v1, matches codeast TS deferral;
+        # C/C++ edges come from the graph-level include join in build_codegraph
+        "calls": (_resolve_calls(sk, rel, files, root, language)
+                  if language in ("python", "java") else []),
         "parse_error": sk.parse_error,
     }
+    raw_calls = ([(c.name, c.parent) for c in sk.calls]
+                 if language in ("c", "cpp") else [])
+    return entry, raw_calls
+
+
+def _join_c_calls(rel: str, raw: list[tuple[str, str]], entries: dict[str, dict]) -> list[dict]:
+    """C/C++ call edges: includes carry no names, so the import-scoped matcher
+    cannot attach calls. Instead, an edge exists when a spelled callee is
+    among the symbols of a directly included, resolved file.
+    # ponytail: direct includes only, no transitivity; deepen if real repos read thin
+    """
+    edges: dict[tuple[str, str, str], None] = {}
+    for target in entries[rel].get("imports", []):
+        names = {s["name"] for s in entries.get(target, {}).get("symbols", [])}
+        for name, parent in raw:
+            callee = name.rsplit(".", 1)[-1]
+            if callee in names and target != rel:
+                edges[(target, callee, parent)] = None
+    return [{"target": t, "callee": c, "caller": p} for (t, c, p) in sorted(edges)]
 
 
 def build_codegraph(root: Path) -> CodeGraph:
@@ -275,7 +332,15 @@ def build_codegraph(root: Path) -> CodeGraph:
     """
     current = supported_files(root)
     files = set(current)
-    entries = {rel: _file_entry(root, rel, files) for rel in current}
+    entries: dict[str, dict] = {}
+    c_raw: dict[str, list[tuple[str, str]]] = {}
+    for rel in current:
+        entry, raw_calls = _file_entry(root, rel, files)
+        entries[rel] = entry
+        if raw_calls:
+            c_raw[rel] = raw_calls
+    for rel, raw in c_raw.items():
+        entries[rel]["calls"] = _join_c_calls(rel, raw, entries)
     return CodeGraph(head_ref=gitstate.head_ref(root) or "", files=entries)
 
 

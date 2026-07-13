@@ -224,3 +224,150 @@ def test_call_edges_resolved_bare_dotted_alias(tmp_path):
     # external (os.path.join) and local (local()) never become edges
     assert all(e["target"].startswith("pkg/") for e in edges)
     assert ("pkg/app.py", "pkg/util.py", "helper", "main") in graph.call_edges()
+
+
+# ---------------------------------------------------------------------------
+# Languages spec §4: Java import resolution + call edges
+# ---------------------------------------------------------------------------
+
+JAVA_FILES = {
+    "src/main/java/com/example/util/Helper.java",
+    "src/main/java/com/example/app/App.java",
+}
+
+
+def test_java_suffix_resolution_absorbs_src_main_java(tmp_path):
+    kind, val = classify_import(
+        "com.example.util.Helper", "src/main/java/com/example/app/App.java",
+        JAVA_FILES, "java", tmp_path)
+    assert (kind, val) == ("resolved", "src/main/java/com/example/util/Helper.java")
+
+
+def test_java_multiple_matches_shortest_path_wins(tmp_path):
+    files = {"a/com/foo/Bar.java", "vendored/deep/com/foo/Bar.java"}
+    kind, val = classify_import("com.foo.Bar", "a/com/foo/Main.java", files, "java", tmp_path)
+    assert (kind, val) == ("resolved", "a/com/foo/Bar.java")
+
+
+def test_java_wildcard_import_unresolved(tmp_path):
+    kind, val = classify_import(
+        "com.example.io.*", "src/main/java/com/example/app/App.java",
+        JAVA_FILES, "java", tmp_path)
+    assert (kind, val) == ("unresolved", "com.example.io.*")
+
+
+def test_java_zero_match_first_segment_dir_is_unresolved(tmp_path):
+    (tmp_path / "com").mkdir()
+    kind, val = classify_import("com.ghost.Thing", "App.java", JAVA_FILES, "java", tmp_path)
+    assert (kind, val) == ("unresolved", "com.ghost.Thing")
+
+
+def test_java_external_labeled_with_two_segments(tmp_path):
+    kind, val = classify_import(
+        "org.springframework.boot.SpringApplication", "App.java", JAVA_FILES, "java", tmp_path)
+    assert (kind, val) == ("external", "org.springframework")
+
+
+def test_java_build_import_and_call_edges(tmp_path):
+    _init_repo(tmp_path)
+    _write(tmp_path, "src/main/java/com/ex/util/Helper.java",
+           "package com.ex.util;\npublic class Helper {\n"
+           "    public static void assist() {}\n}\n")
+    _write(tmp_path, "src/main/java/com/ex/app/App.java",
+           "package com.ex.app;\n\nimport com.ex.util.Helper;\n"
+           "import org.springframework.boot.SpringApplication;\n\n"
+           "public class App {\n    public static void main(String[] args) {\n"
+           "        Helper.assist();\n        SpringApplication.run();\n    }\n}\n")
+    subprocess.run(["git", "add", "-A"], cwd=tmp_path, check=True)
+    subprocess.run(["git", "commit", "-q", "-m", "seed"], cwd=tmp_path, check=True)
+    g = build_codegraph(tmp_path)
+    app = g.files["src/main/java/com/ex/app/App.java"]
+    assert app["imports"] == ["src/main/java/com/ex/util/Helper.java"]
+    assert app["external"] == ["org.springframework"]
+    assert app["has_main_guard"] is True
+    assert {"target": "src/main/java/com/ex/util/Helper.java",
+            "callee": "assist", "caller": "App"} in app["calls"]
+
+
+# ---------------------------------------------------------------------------
+# Languages spec §4: C/C++ include resolution + graph-level call join
+# ---------------------------------------------------------------------------
+
+C_FILES = {"src/app/main.c", "src/util/helper.h", "src/util/helper.c", "vendor/x/src/util/helper.h"}
+
+
+def test_c_quoted_include_importer_dir_relative(tmp_path):
+    kind, val = classify_import('"util/helper.h"', "src/main.c",
+                                {"src/util/helper.h", "src/main.c"}, "c", tmp_path)
+    assert (kind, val) == ("resolved", "src/util/helper.h")
+
+
+def test_c_quoted_include_root_relative_then_suffix(tmp_path):
+    kind, val = classify_import('"src/util/helper.h"', "src/app/main.c", C_FILES, "c", tmp_path)
+    assert (kind, val) == ("resolved", "src/util/helper.h")
+    # suffix match (shortest path wins over the vendored copy)
+    kind, val = classify_import('"util/helper.h"', "other/place.c", C_FILES, "c", tmp_path)
+    assert (kind, val) == ("resolved", "src/util/helper.h")
+
+
+def test_c_angled_include_external_with_text_label(tmp_path):
+    kind, val = classify_import("<stdio.h>", "src/app/main.c", C_FILES, "c", tmp_path)
+    assert (kind, val) == ("external", "stdio.h")
+
+
+def test_c_quoted_unresolvable_is_unresolved(tmp_path):
+    kind, val = classify_import('"ghost/nope.h"', "src/app/main.c", C_FILES, "c", tmp_path)
+    assert (kind, val) == ("unresolved", "ghost/nope.h")
+
+
+def test_c_call_edge_through_direct_resolved_include(tmp_path):
+    _init_repo(tmp_path)
+    _write(tmp_path, "util/helper.h", "int assist(int x);\n")
+    _write(tmp_path, "util/helper.c",
+           '#include "helper.h"\n\nint assist(int x) { return x; }\n')
+    _write(tmp_path, "main.c",
+           '#include "util/helper.h"\n#include <stdio.h>\n\n'
+           "int main(void) {\n    assist(1);\n    printf(\"x\");\n    return 0;\n}\n")
+    subprocess.run(["git", "add", "-A"], cwd=tmp_path, check=True)
+    subprocess.run(["git", "commit", "-q", "-m", "seed"], cwd=tmp_path, check=True)
+    g = build_codegraph(tmp_path)
+    main = g.files["main.c"]
+    assert main["imports"] == ["util/helper.h"]
+    assert main["external"] == ["stdio.h"]
+    # graph-level join: assist is a symbol of the directly included helper.h
+    assert {"target": "util/helper.h", "callee": "assist", "caller": "main"} in main["calls"]
+    # printf never becomes an edge (no resolved include carries it)
+    assert all(e["callee"] != "printf" for e in main["calls"])
+
+
+def test_bare_file_enters_graph_without_edges(tmp_path):
+    _init_repo(tmp_path)
+    _seed_mini_repo(tmp_path)
+    _write(tmp_path, "site/index.html", "<html><body>hi</body></html>\n")
+    _write(tmp_path, "config.toml", "[tool]\nname = 'x'\n")
+    g = build_codegraph(tmp_path)
+    for rel in ("site/index.html", "config.toml"):
+        entry = g.files[rel]
+        assert entry["parse_error"] is False
+        assert entry["imports"] == [] and entry["calls"] == []
+        assert entry["symbols"] == []
+
+
+def test_call_edge_survives_external_import_shadowing(tmp_path):
+    # `import yamlmod` (unresolvable) prefix-matches yamlmod.load() first; the
+    # resolver must fall through to the first-party `from pkg import yamlmod`
+    # instead of silently dropping the edge
+    _init_repo(tmp_path)
+    _write(tmp_path, "pkg/__init__.py", "")
+    _write(tmp_path, "pkg/yamlmod.py", "def load():\n    pass\n")
+    _write(tmp_path, "app.py", (
+        "import yamlmod\n"
+        "from pkg import yamlmod\n\n"
+        "def main():\n"
+        "    yamlmod.load()\n"
+    ))
+    subprocess.run(["git", "add", "-A"], cwd=tmp_path, check=True)
+    subprocess.run(["git", "commit", "-q", "-m", "seed"], cwd=tmp_path, check=True)
+    graph = build_codegraph(tmp_path)
+    edges = graph.files["app.py"]["calls"]
+    assert {"target": "pkg/yamlmod.py", "callee": "load", "caller": "main"} in edges

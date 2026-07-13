@@ -1,126 +1,10 @@
 # SPDX-License-Identifier: AGPL-3.0-or-later
 # Copyright (C) 2026 Alessandro Carosia
 
-"""codeast — native shallow AST skeleton extraction (ADR-0012).
-
-Deterministic, in-process, LLM-free. Extracts ONLY the skeleton: imports,
-classes, function/method signatures, first docstring line. The parsimony
-line is hard: no call-graph, no scope resolution, no MRO — that is deep
-structural machinery (see ADR-0011's dormant external seam).
-
-Grammars come from tree-sitter-language-pack (one package, no postinstall
-compilation). Language detection is extension-based, GitNexus-style, but
-limited to languages this extractor actually supports.
-
-NOTE: tree-sitter >= 0.23 uses a method-call API — node.kind(), node.start_byte(),
-etc. are methods, not properties. All internal helpers use that calling convention.
-"""
+"""codeast.python — Python skeleton walker."""
 from __future__ import annotations
 
-import re
-from dataclasses import dataclass, field
-from pathlib import Path
-
-_CALL_NAME = re.compile(r"^[A-Za-z_][A-Za-z0-9_.]*$")
-
-EXTENSION_MAP: dict[str, str] = {
-    ".py": "python",
-    ".ts": "typescript",
-    ".tsx": "typescript",
-    ".js": "javascript",
-    ".jsx": "javascript",
-    ".mjs": "javascript",
-    ".cjs": "javascript",
-}
-
-
-@dataclass(frozen=True)
-class Symbol:
-    kind: str        # "class" | "function" | "method"
-    name: str
-    signature: str   # declaration line, whitespace-collapsed
-    doc: str = ""    # first docstring line ("" when absent)
-    parent: str = "" # enclosing class name for methods
-    doc_full: str = ""  # whole docstring, per-line stripped ("" when absent)
-    decorators: list[str] = field(default_factory=list)  # names, '@' and call args stripped
-
-
-@dataclass(frozen=True)
-class Call:
-    name: str    # called name as written, dotted allowed ("x.f")
-    parent: str  # enclosing top-level symbol ("" at module level)
-
-
-@dataclass(frozen=True)
-class ModuleSkeleton:
-    path: str                  # repo-relative source path
-    language: str              # EXTENSION_MAP value
-    imports: list[str] = field(default_factory=list)   # module strings, duplicates possible
-    symbols: list[Symbol] = field(default_factory=list)  # document order
-    parse_error: bool = False  # tree-sitter setup failed — consumers must not read "empty" as "no structure"
-    module_doc: str = ""                                   # module-level docstring, whole
-    module_comments: list[str] = field(default_factory=list)  # top-level comment blocks
-    dunder_all: list[str] | None = None  # literal __all__, or None (absent / dynamic)
-    calls: list[Call] = field(default_factory=list)  # call sites, deduped by (name, parent)
-    import_aliases: dict[str, str] = field(default_factory=dict)  # alias -> real dotted name
-    has_main_guard: bool = False  # `if __name__ == "__main__"` present
-
-
-def language_for(path: str | Path) -> str | None:
-    """Map a file path to a supported language, or None."""
-    return EXTENSION_MAP.get(Path(path).suffix.lower())
-
-
-def extract_skeleton(source: str, language: str, path: str = "") -> ModuleSkeleton:
-    """Parse `source` and return its shallow skeleton. Never raises: any
-    parser failure degrades to an empty skeleton (tree-sitter itself is
-    error-tolerant, so partial sources still yield partial skeletons)."""
-    try:
-        from tree_sitter_language_pack import get_parser
-        tree = get_parser(language).parse_bytes(source.encode("utf-8"))
-    except Exception:
-        return ModuleSkeleton(path=path, language=language, parse_error=True)
-
-    src = source.encode("utf-8")
-    imports: list[str] = []
-    symbols: list[Symbol] = []
-    root = tree.root_node()
-    module_doc, module_comments, dunder_all = ("", [], None)
-    calls: list[Call] = []
-    aliases: dict[str, str] = {}
-    has_main_guard = False
-    if language == "python":
-        for i in range(root.named_child_count()):
-            _py_extract(root.named_child(i), src, imports, symbols, aliases=aliases)
-        module_doc, module_comments = _py_module_docs(root, src)
-        dunder_all = _py_dunder_all(root, src)
-        calls = _py_calls(root, src)
-        has_main_guard = _py_has_main_guard(root, src)
-    else:
-        # ponytail: TS doc/comment/call capture deferred with the rest of the TS lane
-        for i in range(root.named_child_count()):
-            _ts_extract(root.named_child(i), src, imports, symbols)
-    return ModuleSkeleton(path=path, language=language, imports=imports,
-                          symbols=symbols, module_doc=module_doc,
-                          module_comments=module_comments, dunder_all=dunder_all,
-                          calls=calls, import_aliases=aliases,
-                          has_main_guard=has_main_guard)
-
-
-# ---------------------------------------------------------------------------
-# helpers
-# ---------------------------------------------------------------------------
-
-def _text(node, src: bytes) -> str:
-    return src[node.start_byte():node.end_byte()].decode("utf-8", errors="replace")
-
-
-def _signature(node, src: bytes) -> str:
-    """Declaration text up to (excluding) the body, whitespace-collapsed."""
-    body = node.child_by_field_name("body")
-    end = body.start_byte() if body is not None else node.end_byte()
-    sig = src[node.start_byte():end].decode("utf-8", errors="replace")
-    return " ".join(sig.split()).rstrip(":")
+from silica.kernel.codeast.base import _CALL_NAME, Call, Symbol, _signature, _text
 
 
 def _py_doc_node(node):
@@ -270,10 +154,6 @@ def _py_has_main_guard(root, src: bytes) -> bool:
     return False
 
 
-# ---------------------------------------------------------------------------
-# Python
-# ---------------------------------------------------------------------------
-
 def _py_extract(node, src: bytes, imports: list[str], symbols: list[Symbol],
                 decorators: list[str] | None = None,
                 aliases: dict[str, str] | None = None) -> None:
@@ -362,78 +242,3 @@ def _py_extract(node, src: bytes, imports: list[str], symbols: list[Symbol],
                     parent=cls_name,
                     decorators=method_decos,
                 ))
-
-
-# ---------------------------------------------------------------------------
-# TypeScript / JavaScript
-# ---------------------------------------------------------------------------
-
-def _ts_extract(node, src: bytes, imports: list[str], symbols: list[Symbol]) -> None:
-    if node.kind() == "export_statement":
-        decl = node.child_by_field_name("declaration")
-        if decl is not None:
-            _ts_extract(decl, src, imports, symbols)
-        return
-    if node.kind() == "import_statement":
-        source = node.child_by_field_name("source")
-        if source is not None:
-            imports.append(_text(source, src).strip("\"'"))
-        return
-    if node.kind() == "function_declaration":
-        name = node.child_by_field_name("name")
-        symbols.append(Symbol(
-            kind="function",
-            name=_text(name, src) if name is not None else "?",
-            signature=_signature(node, src),
-        ))
-        return
-    if node.kind() in ("class_declaration", "abstract_class_declaration"):
-        name_node = node.child_by_field_name("name")
-        cls_name = _text(name_node, src) if name_node is not None else "?"
-        symbols.append(Symbol(kind="class", name=cls_name, signature=_signature(node, src)))
-        body = node.child_by_field_name("body")
-        for i in range(body.named_child_count() if body is not None else 0):
-            child = body.named_child(i)
-            if child.kind() == "method_definition":
-                mname = child.child_by_field_name("name")
-                symbols.append(Symbol(
-                    kind="method",
-                    name=_text(mname, src) if mname is not None else "?",
-                    signature=_signature(child, src),
-                    parent=cls_name,
-                ))
-
-
-# ---------------------------------------------------------------------------
-# structural diff (COSMETIC vs STRUCTURAL, spec-code-lane §2)
-# ---------------------------------------------------------------------------
-
-def diff_skeletons(old: ModuleSkeleton, new: ModuleSkeleton) -> list[str]:
-    """Structural differences old→new, one human-readable line each; empty
-    list = same shape. Compares import sets, symbol sets (kind, name, parent)
-    and whitespace-collapsed signatures — the COSMETIC/STRUCTURAL verdict
-    for git-native staleness classification."""
-    out: list[str] = []
-    old_imp, new_imp = set(old.imports), set(new.imports)
-    out.extend(f"+ import {m}" for m in sorted(new_imp - old_imp))
-    out.extend(f"- import {m}" for m in sorted(old_imp - new_imp))
-
-    def _key(s: Symbol) -> tuple[str, str, str]:
-        return (s.kind, s.name, s.parent)
-
-    def _label(k: tuple[str, str, str]) -> str:
-        kind, name, parent = k
-        return f"{kind} {parent + '.' if parent else ''}{name}"
-
-    def _qual(k: tuple[str, str, str]) -> str:
-        _, name, parent = k
-        return f"{parent + '.' if parent else ''}{name}"
-
-    old_syms = {_key(s): s for s in old.symbols}
-    new_syms = {_key(s): s for s in new.symbols}
-    out.extend(f"+ {_label(k)}" for k in sorted(new_syms.keys() - old_syms.keys()))
-    out.extend(f"- {_label(k)}" for k in sorted(old_syms.keys() - new_syms.keys()))
-    for k in sorted(old_syms.keys() & new_syms.keys()):
-        if old_syms[k].signature != new_syms[k].signature:
-            out.append(f"signature changed: {_qual(k)}")
-    return out
