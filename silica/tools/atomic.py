@@ -273,8 +273,13 @@ class GraphExplainArgs(BaseModel):
 
 @tool(GraphExplainArgs, cls="atomic")
 def silica_graph_explain(note: str, depth: int = 1) -> dict:
-    """Explain a note's structural position: cluster, degree rank, out-links,
-    backlinks, and any cross-cluster bridges it participates in.
+    """Explain a note's structural position: cluster, degree rank, betweenness,
+    out-links, backlinks, and any cross-cluster bridges it participates in.
+
+    `betweenness` is the fraction of shortest paths running through the note — a
+    bottleneck signal distinct from degree. A note with LOW degree but HIGH
+    betweenness is a bridge whose removal fragments the vault: worth reinforcing
+    even though it has few links.
     """
     from silica.kernel.graph_report import compute_report
 
@@ -350,6 +355,7 @@ def silica_graph_explain(note: str, depth: int = 1) -> dict:
         "cluster": cluster_id,
         "degree": degree,
         "degree_rank": degree_rank,
+        "betweenness": report.betweenness_map.get(resolved_id, 0.0),
         "out_links": out_links[:depth * 10],
         "backlinks": backlinks[:depth * 10],
         "bridges": bridges_involving,
