@@ -15,9 +15,9 @@
 Point it at a folder of notes or a codebase. Silica builds a live model of what's inside, so the LLM answers from your actual material, and every edit it makes is checked and rolled back if it broke something. <b>Local-first</b>, Obsidian-compatible.<br/>
 </p>
 
-<p align="center">
-  <video src="https://github.com/kiycoh/silica-agent/raw/main/assets/presentation.mp4" width="100%" controls></video>
-</p>
+
+https://github.com/user-attachments/assets/9f603fb6-cc70-469d-a4bc-b520e9f5836f
+
 
 > **License:** AGPL-3.0-or-later, *strong copyleft*. Copying any part obliges your whole project to AGPL, including network-only use (§13). [Details below](#license).
 
