@@ -16,7 +16,7 @@ Point it at a folder of notes or a codebase. Silica builds a live model of what'
 </p>
 
 <p align="center">
-  <video src="assets/presentation.mp4" width="100%" controls></video>
+  <video src="https://github.com/kiycoh/silica-agent/raw/main/assets/presentation.mp4" width="100%" controls></video>
 </p>
 
 > **License:** AGPL-3.0-or-later, *strong copyleft*. Copying any part obliges your whole project to AGPL, including network-only use (§13). [Details below](#license).
