@@ -5,7 +5,6 @@ from __future__ import annotations
 
 from pathlib import Path
 
-from rich.padding import Padding
 from rich.text import Text
 
 from silica.config import CONFIG
@@ -29,27 +28,17 @@ def _model_vault_line(model_slug: str, worker_slug: str, vault: str) -> Text:
 
 
 def print_home() -> None:
-    """Banner + model/vault + commands overview. Shown at launch and after /clear."""
-    from silica.ui.commands import COMMANDS
-    from silica.ui.style import command_table
-
+    """Banner + model/vault line. Shown at launch and after /clear."""
     vault = Path(CONFIG.vault_path).name if CONFIG.vault_path else (CONFIG.vault_name or "—")
     model_slug = (CONFIG.model or "(not configured)").rsplit("/", 1)[-1]
     worker_model = CONFIG.worker_model or CONFIG.model or "(not configured)"
     worker_slug = worker_model.rsplit("/", 1)[-1]
-    pinned = [c for c in COMMANDS if c.home_pin]
-    help_cmd = next(c for c in COMMANDS if c.name == "/help")
-    exit_cmd = next(c for c in COMMANDS if c.name == "/exit")
-    all_cmds = pinned + [help_cmd, exit_cmd]
 
+    CONSOLE.print()
     print_banner()
     from silica.update import behind_count
     if n := behind_count():
         CONSOLE.print(f"  [yellow]⚠ {n} update(s) behind — run[/] [bold yellow]silica update[/]")
     CONSOLE.print()
     CONSOLE.print(_model_vault_line(model_slug, worker_slug, vault))
-    CONSOLE.print()
-    CONSOLE.print("  [bold]Commands overview[/]")
-    CONSOLE.print()
-    CONSOLE.print(Padding(command_table(all_cmds, show_summary=False), (0, 0, 0, 4)))
     CONSOLE.print()

@@ -18,7 +18,7 @@ In scope is anything that lets a write reach the vault **outside the FSM's contr
 
 - a side channel that mutates vault files without passing the Injector FSM;
 - an edit that orphans a note or breaks a link and is **not** caught by the verify gate or graph-safe move;
-- external content (web search, ingested files) reaching the vault without the zero-trust `Inbox/` staging;
+- external content (web search, nucleated files) reaching the vault without the zero-trust `Inbox/` staging;
 - a rollback (`/undo`, `/revert`, git safety net) that silently fails to restore prior state;
 - secret leakage (API keys from `.env`) into notes, logs, or exports.
 
