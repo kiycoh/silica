@@ -6,7 +6,7 @@
 [![Powered by UV](https://img.shields.io/badge/package--manager-uv-6366f1.svg)](https://github.com/astral-sh/uv)
 
 <p align="center">
-  <img src="docs/assets/sili_no_bg.png" alt="Silica Mascot Sili" width="200" />
+  <img src="assets/sili_no_bg.png" alt="Silica Mascot Sili" width="200" />
 </p>
 
 <h3 align="center">Silica istantly knows what you're working on, helping you edit and organize your content without corrupting it.</h3>
@@ -108,17 +108,17 @@ The same vault model serves four different drivers. What changes is who holds th
 1. **GUI (`silica --gui`)**
    A chat-first web interface (default `http://localhost:8765`). Query and curate the vault from the browser, watch answers stream in, and open the graph. The friendliest way in, and the best first impression.
 
-    ![Web UI Screenshot](web_gui_screenshot.png)
+    ![Web UI Screenshot](assets/web_gui_screenshot.png)
 
 2. **CLI / TUI (`silica`)**
    The interactive terminal REPL. Every command in the [reference](#command-reference) lives here: nucleate, audit, search, refactor, visualize. Fastest for real work once you know the verbs.
 
-    ![CLI Screenshot](cli_screenshot.png)
+    ![CLI Screenshot](assets/cli_screenshot.png)
 
 3. **Obsidian plugin (`silica connect`)**
    A live bridge into the Obsidian desktop app, so Silica reads and writes the vault you already have open, with its rollback and cache backing every change. *Feature-complete, pending end-to-end hardening.*
 
-    ![Obsidian Plugin Screenshot](obsidian_plugin_screenshot.png)
+    ![Obsidian Plugin Screenshot](assets/obsidian_plugin_screenshot.png)
 
 4. **MCP server (`silica mcp`)**
    Silica serves the vault over stdio to any MCP client. An assistant recalls from your real notes before it answers, grounding on your real decisions instead of guessing. For Claude Code, the repo is also a plugin:
@@ -127,7 +127,7 @@ The same vault model serves four different drivers. What changes is who holds th
    claude plugin install silica@silica
    ```
    
-    ![Claude Code Screenshot](mcp_screenshot.png)
+    ![Claude Code Screenshot](assets/mcp_screenshot.png)
 ---
 
 ## What you can do
@@ -166,7 +166,7 @@ You already let deterministic tools rewrite and reject your work every day. You 
 | a **formatter** rewrite your code without asking | drift and inconsistency | graph-safe refactors that redirect links so a merge or split never orphans a note |
 
 <p align="center">
-  <img src="docs/assets/pipeline.svg" alt="Silica vault pipeline mapped onto a software engineering pipeline" width="880" />
+  <img src="assets/pipeline.svg" alt="Silica vault pipeline mapped onto a software engineering pipeline" width="880" />
 </p>
 
 ### Design contracts
@@ -180,7 +180,7 @@ Silica is not a free-form agent. Every vault mutation passes through a finite-st
 - **Layered rollback:** `/undo` (per note), `/revert` (per run), and optional `SILICA_GIT_COMMIT=auto` stack as independent safety nets.
 
 <p align="center">
-  <img src="docs/assets/architecture.svg" alt="Silica Architectural Schematic" width="880" />
+  <img src="assets/architecture.svg" alt="Silica Architectural Schematic" width="880" />
 </p>
 
 ---
