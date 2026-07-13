@@ -484,7 +484,7 @@ def test_contested_section_rendered(tmp_vault):
 # ---------------------------------------------------------------------------
 
 def test_source_drift_acceptance_v2_touching_half_drifts_the_other_half(tmp_vault):
-    """Ingest v1 (A,B) -> modify source -> re-ingest v2 (A only) -> graph_report
+    """Nucleate v1 (A,B) -> modify source -> re-nucleate v2 (A only) -> graph_report
     lists B as drifted from lezione-03.md."""
     from silica.kernel.provenance import append_record
 
@@ -560,3 +560,57 @@ def test_source_drift_matches_despite_md_suffix_on_node_ids(tmp_vault):
 
     assert [(d.note, d.source) for d in r.source_drift] == [("Concepts/B", "lezione-03.md")]
     assert r.totals["source_drift"] == 1
+
+
+def test_to_digest_analytics_signals():
+    # Tier A: shape/bet/coh/gaps/missing-hubs/integration reach the digest
+    # (previously markdown-only, invisible to the agent).
+    from silica.kernel.graph_report.models import (
+        ClusterStat,
+        IntegrationDeficit,
+        MissingHub,
+        NodeStat,
+        StructuralGap,
+        VaultReport,
+    )
+
+    r = VaultReport(
+        generated_at="t", scope="", totals={},
+        god_nodes=[NodeStat(id="a", label="A", cluster=0, out_degree=2,
+                            in_degree=3, degree=5, pagerank=0.0, betweenness=0.42)],
+        bridges=[], orphans=[], dangling=[],
+        clusters=[ClusterStat(cluster_id=0, size=3, hub="Hub/H.md",
+                              members=["a"], cohesion=0.5)],
+        structural_gaps=[StructuralGap(cluster_a=0, cluster_b=1, hub_a="Hub/H.md",
+                                       hub_b="Other/O.md", inter_edges=0, gap_score=9.0)],
+        missing_hubs=[MissingHub(concept="statistics", centrality=12.5)],
+        integration_deficits=[IntegrationDeficit(path="Concepts/Rich", concepts=14,
+                                                 degree=1, score=7.0)],
+        discourse_state="Focused",
+    )
+    d = to_digest(r)
+    assert "shape=Focused" in d
+    assert "bet=0.42" in d
+    assert "coh=0.5" in d
+    assert "GAPS  H↮O(links=0)" in d
+    assert "MISSING HUBS  statistics(cent=12.5)" in d
+    assert "INTEGRATION DEFICIT  Rich(concepts=14,deg=1)" in d
+
+
+def test_betweenness_map_populated_and_bridge_ranks_high(report):
+    # Tier B: betweenness for ALL nodes (mirrors pagerank_map), not just hubs.
+    # C is the sole cross-cluster bridge (C→D) → highest betweenness; the orphan
+    # F (unresolved link only, no EXTRACTED edge) sits at zero.
+    bm = report.betweenness_map
+    assert set(bm) == {"A", "B", "C", "D", "E", "F"}
+    assert bm["C"] == max(bm.values()) and bm["C"] > 0
+    assert bm["F"] == 0.0
+
+
+def test_betweenness_map_zero_without_analytics(synthetic_graph):
+    nodes, edges = synthetic_graph
+    r = compute_report(_nodes_edges_override=(nodes, edges), analytics=False)
+    # Structural core skips betweenness entirely — map present but all-zero,
+    # exactly like pagerank_map on this path.
+    assert set(r.betweenness_map) == {"A", "B", "C", "D", "E", "F"}
+    assert all(v == 0.0 for v in r.betweenness_map.values())

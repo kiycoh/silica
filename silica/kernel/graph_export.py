@@ -279,7 +279,7 @@ def structural_gaps(
     where the linking edges are ABSENT. Returns tuples
     (cluster_a, cluster_b, hub_a, hub_b, inter_edges, gap_score) with
     gap_score = size_a * size_b / (1 + inter_edges) — two large areas with no
-    connecting edge rank highest (the InfraNodus structural-hole read).
+    connecting edge rank highest.
 
     Reads node["group"] (set by detect_communities) and EXTRACTED edges, so it
     agrees node-for-node with the exported graph. Pure dict counting, no nx.
@@ -328,7 +328,7 @@ def structural_gaps(
 
 
 def discourse_shape(n_nodes: int, giant: int, cluster_sizes: list[int]) -> str:
-    """One-word topology diagnosis from primitives, InfraNodus-style.
+    """One-word topology diagnosis from primitives.
 
     The single source of the rule, shared by the /graph report Summary and the
     graph HUD badge so the two surfaces never disagree.
@@ -349,6 +349,116 @@ def discourse_shape(n_nodes: int, giant: int, cluster_sizes: list[int]) -> str:
     if linked and linked[0] / sum(linked) > 0.5:
         return "Focused"
     return "Diversified"
+
+
+# ---------------------------------------------------------------------------
+# Vault cluster-context cache
+#
+# Per-note cluster membership ({path: {cluster_id, hub, is_hub}}) persisted
+# under index_dir() so any layer can annotate a note with its graph community
+# without re-running Louvain. Written by the router's payload phase
+# (build_vault_graph_ctx) and by silica_vault_report; read best-effort by
+# build_substrate and silica_related. Bounded staleness by design: a note
+# added after the last write reads as "no cluster" until the next refresh.
+# ---------------------------------------------------------------------------
+
+def cluster_ctx_path() -> Path:
+    # Function, not constant: resolves per current vault; tests monkeypatch it.
+    from silica.kernel import paths
+
+    return paths.index_dir() / "clusters_ctx.json"
+
+
+def load_cluster_ctx() -> dict | None:
+    """Full cache envelope {"sig": [nodes, edges], "ctx": {...}} or None."""
+    import orjson
+
+    p = cluster_ctx_path()
+    if not p.exists():
+        return None
+    try:
+        return orjson.loads(p.read_bytes())
+    except Exception:
+        return None
+
+
+def save_cluster_ctx(sig: list[int], ctx: dict) -> None:
+    import orjson
+
+    try:
+        p = cluster_ctx_path()
+        p.parent.mkdir(parents=True, exist_ok=True)
+        p.write_bytes(orjson.dumps({"sig": sig, "ctx": ctx}))
+    except Exception as e:
+        logger.debug("graph_export: cluster ctx cache save skipped (%s)", e)
+
+
+def cluster_ctx_map() -> dict[str, dict]:
+    """Just the ctx map from the cached envelope; {} when cold or unreadable."""
+    return (load_cluster_ctx() or {}).get("ctx") or {}
+
+
+def ctx_from_report(report) -> dict[str, dict]:
+    """Per-note cluster ctx from a VaultReport (duck-typed: importing
+    graph_report here would be a cycle — its compute imports this module)."""
+    ctx: dict[str, dict] = {}
+    for cs in report.clusters:
+        for member in cs.members:
+            ctx[member] = {
+                "cluster_id": cs.cluster_id,
+                "hub": cs.hub,
+                "is_hub": member == cs.hub,
+            }
+    # Isolated nodes too (cluster -1 = "no cluster" for consumers);
+    # pagerank_map carries every real node id, zero-valued without analytics.
+    for node_id in report.pagerank_map:
+        if node_id not in ctx:
+            ctx[node_id] = {"cluster_id": -1, "hub": None, "is_hub": False}
+    return ctx
+
+
+def graph_distances(source: str, *, folder: str = "") -> dict[str, int] | None:
+    """BFS hop distances from `source` over the resolved wikilink graph.
+
+    Returns {node_id (no .md): hops} for every note reachable from `source`,
+    or None when the graph is unavailable or `source` is not in it. The
+    structural complement of a semantic score: high similarity + absent/large
+    distance = a missing link worth creating; distance 1 = already linked.
+    ponytail: full snapshot + BFS per call; cache per run if it shows hot.
+    """
+    try:
+        import networkx as nx
+
+        nodes, edges = build_graph_data(folder=folder)
+    except Exception:
+        return None
+    real = {n["id"] for n in nodes if n.get("type") != "ghost"}
+    src = source if source in real else source + ".md"
+    if src not in real:
+        src = source.removesuffix(".md")
+        if src not in real:
+            return None
+    G = nx.Graph()
+    G.add_nodes_from(real)
+    for e in edges:
+        if e.get("type") == "EXTRACTED" and e["from"] in real and e["to"] in real:
+            G.add_edge(e["from"], e["to"])
+    dist = nx.single_source_shortest_path_length(G, src)
+    return {p.removesuffix(".md"): d for p, d in dist.items()}
+
+
+def cluster_hub_of(ctx: dict, path: str) -> str | None:
+    """Short hub label of `path`'s cluster in a cached ctx map, or None.
+
+    Ctx keys are driver graph node ids, whose .md suffix varies by backend;
+    facade paths carry none — try both forms at the seam.
+    """
+    p = path.removesuffix(".md")
+    gctx = ctx.get(p) or ctx.get(p + ".md")
+    hub = (gctx or {}).get("hub")
+    if not hub:
+        return None
+    return hub.rsplit("/", 1)[-1].removesuffix(".md")
 
 
 def canvas_metrics(nodes: list[dict], edges: list[dict], k: int = 400) -> tuple[dict[str, float], int]:

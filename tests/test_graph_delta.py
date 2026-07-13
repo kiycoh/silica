@@ -15,6 +15,7 @@ import pytest
 from silica.kernel.cooccurrence import CooccurStore, build_contribution
 from silica.kernel.graph_report import (
     AutolinkCandidate,
+    IntegrationDeficit,
     MissingHub,
     StaleLink,
     VaultReport,
@@ -271,10 +272,10 @@ def test_missing_hubs_sorted_by_centrality_desc(delta_report):
 
 
 # ---------------------------------------------------------------------------
-# Unit: _compute_cooccur_delta is injectable and returns three lists
+# Unit: _compute_cooccur_delta is injectable and returns four lists
 # ---------------------------------------------------------------------------
 
-def test_compute_cooccur_delta_returns_three_lists(synthetic_graph, cooccur_store):
+def test_compute_cooccur_delta_returns_four_lists(synthetic_graph, cooccur_store):
     import networkx as nx
     nodes, edges = synthetic_graph
     real_ids = {n["id"] for n in nodes if n.get("type") != "ghost"}
@@ -288,12 +289,13 @@ def test_compute_cooccur_delta_returns_three_lists(synthetic_graph, cooccur_stor
         generated_at="", scope="", totals={}, god_nodes=[], bridges=[],
         orphans=[], dangling=[], clusters=[],
     )
-    al, sl, mh = _compute_cooccur_delta(
+    al, sl, mh, idf = _compute_cooccur_delta(
         report, G, node_label, cooccur_store=cooccur_store, k=10
     )
     assert all(isinstance(x, AutolinkCandidate) for x in al)
     assert all(isinstance(x, StaleLink) for x in sl)
     assert all(isinstance(x, MissingHub) for x in mh)
+    assert all(isinstance(x, IntegrationDeficit) for x in idf)
 
 
 # ---------------------------------------------------------------------------
@@ -304,6 +306,34 @@ def test_totals_include_delta_counts(delta_report):
     assert "autolink_candidates" in delta_report.totals
     assert "stale_links" in delta_report.totals
     assert "missing_hubs" in delta_report.totals
+    assert "integration_deficits" in delta_report.totals
+
+
+# ---------------------------------------------------------------------------
+# INTEGRATION DEFICIT: concept-rich note, weakly wikilinked
+#
+# F carries 3 concepts ("isolated lonely topic") but has ZERO resolved
+# wikilinks (its only edge is AMBIGUOUS) -> highest divergence, ranks first.
+# A carries the same 3 concepts but 2 wikilinks -> lower score.
+# ---------------------------------------------------------------------------
+
+def test_integration_deficit_ranks_unlinked_rich_note_first(delta_report):
+    deficits = delta_report.integration_deficits
+    assert deficits, "expected a non-empty integration-deficit ranking"
+    top = deficits[0]
+    assert top.path == "F"
+    assert top.degree == 0
+    # score is the pure ranking formula, no hidden weights
+    for d in deficits:
+        assert d.score == pytest.approx(d.concepts / (1 + d.degree), abs=1e-3)
+    # descending order
+    scores = [d.score for d in deficits]
+    assert scores == sorted(scores, reverse=True)
+
+
+def test_markdown_renders_integration_deficit_section(delta_report):
+    md = to_markdown(delta_report)
+    assert "Integration Deficit" in md
 
 
 def test_markdown_renders_delta_sections(delta_report):
@@ -387,7 +417,7 @@ def test_autolink_convergence_counts_hubs_and_drives_ranking(convergence_store):
         bridges=[], orphans=[], dangling=[], clusters=[],
     )
 
-    al, _sl, _mh = _compute_cooccur_delta(
+    al, _sl, _mh, _idf = _compute_cooccur_delta(
         report, G, node_label, cooccur_store=convergence_store, k=20
     )
 

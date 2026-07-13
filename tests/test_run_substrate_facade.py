@@ -153,3 +153,48 @@ def test_no_vocabulary_with_empty_cooccur_index(tmp_path, monkeypatch):
 
     assert out is not None
     assert "## Vault vocabulary" not in out  # omitted, related-notes intact
+
+
+def test_substrate_annotates_degree_and_cluster(tmp_path, monkeypatch):
+    # Tier A: candidate lines carry wikilink degree (links=N, from the same
+    # read as graph-far) and cluster membership (cached ctx, hub-labeled).
+    monkeypatch.setattr(embed_mod, "_index_path", lambda: tmp_path / "emb.json")
+    es = EmbedStore()
+    es.upsert("Concepts/Near", "Near", [1.0, 0.0])
+    es.save()
+    monkeypatch.setattr(providers, "get_embedder", lambda *a, **k: _FakeEmbedder([1.0, 0.0]))
+
+    import silica.kernel.graph_export as ge
+    ge.save_cluster_ctx(
+        [2, 1], {"Concepts/Near": {"cluster_id": 0, "hub": "Concepts/ML.md", "is_hub": False}}
+    )
+
+    from silica.driver.base import NoteRef
+
+    class _FakeDriver:
+        def links(self, ref):
+            return [NoteRef(name="Other", path="Concepts/Other.md")]
+
+        def backlinks(self, ref):
+            return [NoteRef(name="In", path="Concepts/In.md")]
+
+    import silica.driver as driver_mod
+    monkeypatch.setattr(driver_mod, "DRIVER", _FakeDriver())
+
+    out = build_substrate(_chunk(), manifest_titles=[])
+    assert out is not None
+    assert "links=2" in out      # 1 outgoing + 1 backlink
+    assert "cluster=ML" in out   # hub label, .md stripped
+
+
+def test_substrate_omits_annotations_when_cold(tmp_path, monkeypatch):
+    # No ctx cache, driver links unavailable -> plain line, no links=/cluster=.
+    monkeypatch.setattr(embed_mod, "_index_path", lambda: tmp_path / "emb.json")
+    es = EmbedStore()
+    es.upsert("Concepts/Near", "Near", [1.0, 0.0])
+    es.save()
+    monkeypatch.setattr(providers, "get_embedder", lambda *a, **k: _FakeEmbedder([1.0, 0.0]))
+
+    out = build_substrate(_chunk(), manifest_titles=[])
+    assert out is not None and "[[Near]]" in out
+    assert "cluster=" not in out

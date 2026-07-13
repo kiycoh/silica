@@ -25,18 +25,20 @@ from typing import Any
 
 logger = logging.getLogger(__name__)
 
-# Search + read + single-note write: the surface a coding agent needs to use
-# the vault as memory. Everything else (pipelines, batches, taxonomy, graph
-# exports) stays behind --all.
+# Search + read + single-note write + structural lookup: the surface a coding
+# agent needs to use the vault as memory. Everything else (pipelines, batches,
+# taxonomy, graph exports) stays behind --all.
 CORE_TOOLS = (
     "silica_semantic_search",
     "silica_similar",
     "silica_related",
+    "silica_concepts",
     "silica_search",
     "silica_search_context",
     "silica_read_note",
     "silica_outline",
     "silica_links",
+    "silica_graph_explain",
     "silica_props",
     "silica_files",
     "silica_exists",

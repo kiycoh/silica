@@ -348,6 +348,7 @@ def compute_report(
         dangling=dangling,
         clusters=clusters,
         pagerank_map={nid: round(pr.get(nid, 0.0), 5) for nid in real_ids},
+        betweenness_map={nid: round(bet.get(nid, 0.0), 4) for nid in real_ids},
         attention_candidates=attention,
         lean_notes=lean_notes,
         reformat_notes=reformat_notes,
@@ -362,13 +363,14 @@ def compute_report(
         report.duplicate_pairs, report.confirmed_duplicate_pairs = _compute_duplicate_pairs(report)
 
     if with_cooccurrence:
-        autolinks, stale, hubs = _compute_cooccur_delta(
+        autolinks, stale, hubs, deficits = _compute_cooccur_delta(
             report, G_und, node_label,
             cooccur_store=_cooccur_store_override, k=top_k,
         )
         report.autolink_candidates = autolinks
         report.stale_links = stale
         report.missing_hubs = hubs
+        report.integration_deficits = deficits
 
     if analytics:
         try:
@@ -394,6 +396,7 @@ def compute_report(
         "autolink_candidates": len(report.autolink_candidates),
         "stale_links": len(report.stale_links),
         "missing_hubs": len(report.missing_hubs),
+        "integration_deficits": len(report.integration_deficits),
         "attention_candidates": len(attention),
         "lean_notes": len(lean_notes),
         "reformat_notes": len(reformat_notes),

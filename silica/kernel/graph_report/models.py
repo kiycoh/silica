@@ -96,6 +96,14 @@ class MissingHub:          # central concept in the discourse with no hub note
 
 
 @dataclass
+class IntegrationDeficit:  # PROPOSED — concept-rich note, weakly wikilinked
+    path: str              # node id (store key, no .md)
+    concepts: int          # distinct concepts contributed to the co-occurrence graph
+    degree: int            # wikilink degree (structural integration)
+    score: float           # concepts / (1 + degree) — higher = richer text, fewer links
+
+
+@dataclass
 class AttentionCandidate:   # PROPOSED — spaced-repetition, idle-time × weak-linkage decay
     path: str              # node id
     days_idle: int         # days since last file mtime (ANY touch, not just human review — see ceiling in compute.py)
@@ -138,6 +146,7 @@ class VaultReport:
     autolink_candidates: list[AutolinkCandidate] = field(default_factory=list)
     stale_links: list[StaleLink] = field(default_factory=list)
     missing_hubs: list[MissingHub] = field(default_factory=list)
+    integration_deficits: list[IntegrationDeficit] = field(default_factory=list)
     attention_candidates: list[AttentionCandidate] = field(default_factory=list)
     lean_notes: list[str] = field(default_factory=list)
     reformat_notes: list[str] = field(default_factory=list)
@@ -146,4 +155,5 @@ class VaultReport:
     structural_gaps: list[StructuralGap] = field(default_factory=list)
     discourse_state: str = ""     # "Focused" | "Diversified" | "Fragmented" | "" — topology one-word diagnosis
     pagerank_map: dict[str, float] = field(default_factory=dict)  # all nodes: vault-relative path (no .md) → pagerank
+    betweenness_map: dict[str, float] = field(default_factory=dict)  # all nodes → betweenness (analytics-only; zero-filled otherwise)
     code_coverage: CodeCoverage | None = None

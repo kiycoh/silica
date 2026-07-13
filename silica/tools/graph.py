@@ -388,7 +388,10 @@ def silica_related(note: str, k: int = 5) -> dict[str, Any]:
     "what's related/relevant to note X" INSTEAD of reading X and keyword-searching
     from its words. For free-form text that is not a note, use silica_similar. Each
     result carries `evidence` (embed:0.83, cooccur:w9, edge:0.57) naming which metric
-    proposed it; verify with silica_read_note before acting.
+    proposed it, plus `cluster` (its graph community, labeled by hub note) when the
+    cluster cache is warm, and `distance` (wikilink hops from the query; null =
+    unreachable). High score + null/large distance = a missing link worth creating;
+    distance 1 = already linked. Verify with silica_read_note before acting.
     """
     from silica.config import CONFIG
     from silica.driver import DRIVER
@@ -432,6 +435,18 @@ def silica_related(note: str, k: int = 5) -> dict[str, Any]:
         memory_cooccur_store=mem_cooccur,
         k=k,
     )
+    # Cluster membership from the cached ctx (last Louvain run; {} when cold):
+    # tells the caller whether a candidate sits in the query's own knowledge
+    # area or across a cluster boundary. Memory-lane notes are another vault —
+    # never annotated.
+    from silica.kernel.graph_export import cluster_ctx_map, cluster_hub_of, graph_distances
+
+    gctx_map = cluster_ctx_map()
+    # Structural distance: wikilink hops from the query to each result — the
+    # per-pair coherence read. High fused score + null (unreachable) or large
+    # distance = a missing link worth creating; distance 1 = already linked.
+    # Omitted entirely when the wikilink graph is unavailable.
+    dists = graph_distances(query_path)
     out: dict[str, Any] = {
         "note": note,
         "results": [
@@ -440,6 +455,16 @@ def silica_related(note: str, k: int = 5) -> dict[str, Any]:
                 "name": r.name,
                 "score": round(r.score, 4),
                 "evidence": r.evidence,
+                **(
+                    {"cluster": hub}
+                    if r.origin != "memory" and (hub := cluster_hub_of(gctx_map, r.path))
+                    else {}
+                ),
+                **(
+                    {"distance": dists.get(r.path)}
+                    if dists is not None and r.origin != "memory"
+                    else {}
+                ),
                 **({"origin": "memory"} if r.origin == "memory" else {}),
             }
             for r in results
@@ -451,6 +476,59 @@ def silica_related(note: str, k: int = 5) -> dict[str, Any]:
             out["hint"] = f"note '{note}' did not resolve to a vault note — check the name/path."
         elif len(embed_store) == 0:
             out["hint"] = "embedding index empty — co-occurrence only. Run silica_embed_refresh for semantic neighbors."
+    return out
+
+
+class ConceptsArgs(BaseModel):
+    term: str = Field(description="A single word/concept to look up in the vault's co-occurrence graph")
+    k: int = Field(default=10, description="Number of neighbouring concepts and containing notes to return")
+
+@tool(ConceptsArgs, cls="composed")
+def silica_concepts(term: str, k: int = 10) -> dict[str, Any]:
+    """What the vault's discourse associates with a concept: co-occurring terms and the notes that carry it.
+
+    Embedder-free read of the deterministic concept co-occurrence graph. Returns
+    the concept's canonical surface label, its weighted centrality in the
+    discourse, the top-k co-occurring concepts, and the notes mentioning it most.
+    Use it for terminology decisions (does the vault already have a word for
+    this?) and to pick wikilink targets for a concept BEFORE coining a synonym;
+    for ranked related NOTES use silica_related or silica_semantic_search
+    instead. Single-word concepts only — for a phrase, query its most
+    distinctive word.
+    """
+    from silica.config import CONFIG
+    from silica.kernel.cooccurrence import get_cooccur_store
+    from silica.kernel.text import stem_word
+
+    try:
+        store = get_cooccur_store(lang=CONFIG.cooccurrence_lang)
+    except Exception as e:
+        return {"error": f"co-occurrence store unavailable ({e}) — run silica_cooccurrence_refresh"}
+    if len(store) == 0:
+        return {"error": "co-occurrence index empty. Run silica_cooccurrence_refresh first."}
+
+    stem = stem_word(term.strip().lower(), lang=store.lang)
+    neighbors = store.neighbors(term, k=k)
+
+    # Concept -> notes inverted lookup, ranked by contribution count.
+    notes = sorted(
+        ((p, c[stem]) for p in store.paths() if (c := store.note_nodes(p)).get(stem)),
+        key=lambda kv: (-kv[1], kv[0]),
+    )[:k]
+
+    out: dict[str, Any] = {
+        "term": term,
+        "concept": store.node_label(stem),
+        "centrality": round(sum(store.adjacency().get(stem, {}).values()), 1),
+        "neighbors": neighbors,
+        "notes": [{"path": p, "count": c} for p, c in notes],
+    }
+    if not neighbors and not notes:
+        out["hint"] = (
+            f"'{term}' is not a concept node in the co-occurrence graph — "
+            "concepts are single content words; try another word, or run "
+            "silica_cooccurrence_refresh if the index is stale."
+        )
     return out
 
 
@@ -646,6 +724,20 @@ def silica_vault_report(
         folder=folder, top_k=top_k, analytics=True,
         with_embeddings=with_embeddings, with_cooccurrence=with_cooccurrence,
     )
+
+    # Warm the cluster-ctx cache so silica_related/build_substrate can annotate
+    # candidates with their community without a nucleate run having happened.
+    # Whole-vault only: a folder-scoped map would clobber the global one.
+    if not folder:
+        try:
+            from silica.kernel.graph_export import ctx_from_report, save_cluster_ctx
+
+            save_cluster_ctx(
+                [report.totals.get("notes", 0), report.totals.get("links", 0)],
+                ctx_from_report(report),
+            )
+        except Exception as exc:
+            logger.debug("silica_vault_report: cluster ctx warm skipped (%s)", exc)
 
     # 2. Determine output path
     vault_path = getattr(CONFIG, "vault_path", None) or ""

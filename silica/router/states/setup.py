@@ -134,32 +134,6 @@ def handle_crossdedup(fsm: "InjectorFSM") -> None:
     fsm._transition_success()
 
 
-def _cluster_ctx_cache_path():
-    from silica.kernel import paths
-    return paths.index_dir() / "clusters_ctx.json"
-
-
-def _load_cluster_ctx_cache() -> dict | None:
-    import orjson
-    p = _cluster_ctx_cache_path()
-    if not p.exists():
-        return None
-    try:
-        return orjson.loads(p.read_bytes())
-    except Exception:
-        return None
-
-
-def _save_cluster_ctx_cache(sig: list[int], ctx: dict) -> None:
-    import orjson
-    try:
-        p = _cluster_ctx_cache_path()
-        p.parent.mkdir(parents=True, exist_ok=True)
-        p.write_bytes(orjson.dumps({"sig": sig, "ctx": ctx}))
-    except Exception as e:
-        logger.debug("PAYLOAD: cluster ctx cache save skipped (%s)", e)
-
-
 def _within_cluster_tol(cached_sig, sig: list[int]) -> bool:
     """Reuse cached clusters while the graph drifted < ~2% (or 50 nodes / 100 edges)."""
     if not cached_sig or len(cached_sig) != 2:
@@ -186,7 +160,12 @@ def build_vault_graph_ctx(fsm: "InjectorFSM") -> dict[str, dict]:
     next recompute — fine for routing context.
     """
     try:
-        from silica.kernel.graph_export import build_graph_data
+        from silica.kernel.graph_export import (
+            build_graph_data,
+            ctx_from_report,
+            load_cluster_ctx,
+            save_cluster_ctx,
+        )
         from silica.kernel.graph_report import compute_report
         _t = orch.time.monotonic()
 
@@ -195,7 +174,7 @@ def build_vault_graph_ctx(fsm: "InjectorFSM") -> dict[str, dict]:
             sum(1 for n in nodes if n.get("type") != "ghost"),
             sum(1 for e in edges if e.get("type") == "EXTRACTED"),
         ]
-        cached = _load_cluster_ctx_cache()
+        cached = load_cluster_ctx()
         if cached and _within_cluster_tol(cached.get("sig"), sig):
             ctx = cached.get("ctx") or {}
             logger.info(
@@ -205,20 +184,8 @@ def build_vault_graph_ctx(fsm: "InjectorFSM") -> dict[str, dict]:
             return ctx
 
         report = compute_report(_nodes_edges_override=(nodes, edges))  # Louvain on miss
-        ctx: dict[str, dict] = {}
-        for cs in report.clusters:
-            for member in cs.members:
-                ctx[member] = {
-                    "cluster_id": cs.cluster_id,
-                    "hub": cs.hub,
-                    "is_hub": member == cs.hub,
-                }
-        # Include isolated nodes (not in any cluster) so consumers see them too.
-        # pagerank_map carries every real node id (zero-valued without analytics).
-        for node_id in report.pagerank_map:
-            if node_id not in ctx:
-                ctx[node_id] = {"cluster_id": -1, "hub": None, "is_hub": False}
-        _save_cluster_ctx_cache(sig, ctx)
+        ctx = ctx_from_report(report)
+        save_cluster_ctx(sig, ctx)
         logger.info(
             "PAYLOAD: vault graph context built — %d nodes, %d clusters (%.2fs)",
             len(ctx), len(report.clusters), orch.time.monotonic() - _t,

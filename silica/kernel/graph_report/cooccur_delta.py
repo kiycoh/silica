@@ -15,6 +15,7 @@ from typing import Any
 
 from silica.kernel.graph_report.models import (
     AutolinkCandidate,
+    IntegrationDeficit,
     MissingHub,
     StaleLink,
     VaultReport,
@@ -30,10 +31,10 @@ def _compute_cooccur_delta(
     *,
     cooccur_store: Any | None = None,
     k: int = 10,
-) -> tuple[list[AutolinkCandidate], list[StaleLink], list[MissingHub]]:
+) -> tuple[list[AutolinkCandidate], list[StaleLink], list[MissingHub], list[IntegrationDeficit]]:
     """Delta between the co-occurrence graph and the wikilink graph.
 
-    Three PROPOSED, embedder-free signals (no network, pure local compute):
+    Four PROPOSED, embedder-free signals (no network, pure local compute):
 
       - AUTOLINK  (co-occurrence − wikilink): note pairs the author co-mentions
         in text but never wikilinked, more than 2 hops apart.
@@ -41,6 +42,8 @@ def _compute_cooccur_delta(
         no concepts in text — a structural link without textual co-presence.
       - MISSING HUB (centrality − hub): a concept central in the discourse for
         which no note is titled — the next hub note to create.
+      - INTEGRATION DEFICIT (concepts − degree): per-note divergence between
+        textual richness and wikilink integration — a dense note never linked in.
 
     `cooccur_store` is injectable for testing; loaded from disk when None.
     Returns empty lists when the index is empty (best-effort, never raises).
@@ -53,9 +56,9 @@ def _compute_cooccur_delta(
         store = cooccur_store if cooccur_store is not None else get_cooccur_store()
     except Exception as exc:
         logger.debug("graph_report: co-occurrence index unavailable (%s)", exc)
-        return [], [], []
+        return [], [], [], []
     if len(store) == 0:
-        return [], [], []
+        return [], [], [], []
 
     scope = report.scope or None
 
@@ -194,6 +197,29 @@ def _compute_cooccur_delta(
     if len(autolinks) < k:
         autolinks += direct_leg[take: take + k - len(autolinks)]
 
+    # --- INTEGRATION DEFICIT: concept-rich note, weakly wikilinked ----------
+    # Per-note divergence between textual richness (concepts contributed to the
+    # co-occurrence graph) and structural integration (wikilink degree). The
+    # common decay pattern: a dense note written and never linked in. Pure
+    # ranking, no weights — same shape as AttentionCandidate's score.
+    # ponytail: raw concept count favours long notes; IDF-weight the count if
+    # boilerplate stems ever dominate the ranking.
+    deficits: list[IntegrationDeficit] = []
+    for nid in store.paths():
+        gid = gid_by_key.get(nid)
+        if gid is None:
+            continue  # outside the graph scope
+        concepts = len(store.note_nodes(nid))
+        if concepts == 0:
+            continue  # abstain: a note with no concepts can't be assessed
+        d = int(G_und.degree(gid))
+        deficits.append(IntegrationDeficit(
+            path=nid, concepts=concepts, degree=d,
+            score=round(concepts / (1 + d), 3),
+        ))
+    deficits.sort(key=lambda x: (-x.score, x.path))
+    deficits = deficits[:k]
+
     # --- STALE: wikilinked but the two notes share no concepts --------------
     stale: list[StaleLink] = []
     for u, v in G_und.edges():
@@ -220,4 +246,4 @@ def _compute_cooccur_delta(
     hubs.sort(key=lambda h: (-h.centrality, h.concept))
     hubs = hubs[:k]
 
-    return autolinks, stale, hubs
+    return autolinks, stale, hubs, deficits

@@ -118,6 +118,13 @@ def build_substrate(
 
         manifest_lower = {t.lower() for t in manifest_titles}
 
+        # Cluster membership of candidates (cached ctx from the last Louvain run;
+        # {} when cold — annotation simply absent). Same cluster = cohesion,
+        # different cluster = deliberate bridge: the distiller's parent choice
+        # needs to know which.
+        from silica.kernel.graph_export import cluster_ctx_map, cluster_hub_of
+        gctx_map = cluster_ctx_map()
+
         lines: list[str] = []
         for r in related:
             # The cosine threshold gates only the embedding leg; pure
@@ -145,17 +152,33 @@ def build_substrate(
 
             # Graph-far flag: related but not already adjacent to run notes.
             # Light check (1-hop links of this candidate) — best-effort.
+            # The same read yields the candidate's wikilink degree: a weakly
+            # integrated candidate (links=0/1) is a repair opportunity — linking
+            # to it during the write costs nothing.
             graph_far = False
+            deg: int | None = None
             try:
                 path_with_ext = path + ".md" if not path.endswith(".md") else path
                 ref = NoteRef(name=name, path=path_with_ext)
-                neighbour_names = {lr.name.lower() for lr in DRIVER.links(ref)}
+                out_links = DRIVER.links(ref)
+                neighbour_names = {lr.name.lower() for lr in out_links}
                 graph_far = not neighbour_names.intersection(manifest_lower)
+                deg = len(out_links)
+                try:
+                    deg += len(DRIVER.backlinks(ref))
+                except Exception:
+                    pass  # out-degree only on backends without backlinks
             except Exception:
                 pass
 
+            extras = [score_label]
+            if deg is not None:
+                extras.append(f"links={deg}")
+            hub_label = cluster_hub_of(gctx_map, path) if gctx_map else None
+            if hub_label:
+                extras.append(f"cluster={hub_label}")
             flag = " [graph-far]" if graph_far else ""
-            lines.append(f"- [[{name}]] ({score_label}){flag}")
+            lines.append(f"- [[{name}]] ({', '.join(extras)}){flag}")
 
         # Append forward-reference hints: parent notes cleared by validate because
         # they don't exist yet.  High probability of appearing in future injections —

@@ -117,6 +117,95 @@ def test_empty_embed_but_isolated_note_hints_embed_refresh(tmp_path, monkeypatch
     assert "embedding index empty" in out["hint"]
 
 
+# --- Tier B: structural distance on silica_related results ---------------
+
+def _patch_graph(monkeypatch, nodes, edges):
+    import silica.kernel.graph_export as ge
+    monkeypatch.setattr(ge, "build_graph_data", lambda folder="": (list(nodes), list(edges)))
+
+
+def test_related_carries_structural_distance(tmp_path, monkeypatch):
+    # Node ids carry .md (real backends); store keys don't — normalization at the seam.
+    from silica.tools.graph import silica_related
+    _wire(monkeypatch, tmp_path, names={"Alpha": "A"})
+    _patch_graph(
+        monkeypatch,
+        [{"id": "A.md", "type": "note"}, {"id": "B.md", "type": "note"}],
+        [{"from": "A.md", "to": "B.md", "type": "EXTRACTED"}],
+    )
+
+    out = silica_related("Alpha", k=5)
+    by_path = {r["path"]: r for r in out["results"]}
+    assert by_path["B"]["distance"] == 1     # directly linked — already coherent
+
+
+def test_related_distance_null_when_unreachable(tmp_path, monkeypatch):
+    # High score + no path = the missing-link signal.
+    from silica.tools.graph import silica_related
+    _wire(monkeypatch, tmp_path, names={"Alpha": "A"})
+    _patch_graph(
+        monkeypatch,
+        [{"id": "A.md", "type": "note"}, {"id": "B.md", "type": "note"}],
+        [],  # no wikilinks at all
+    )
+
+    out = silica_related("Alpha", k=5)
+    by_path = {r["path"]: r for r in out["results"]}
+    assert by_path["B"]["distance"] is None
+
+
+def test_related_omits_distance_when_graph_unavailable(tmp_path, monkeypatch):
+    from silica.tools.graph import silica_related
+    import silica.kernel.graph_export as ge
+    _wire(monkeypatch, tmp_path, names={"Alpha": "A"})
+    monkeypatch.setattr(
+        ge, "build_graph_data",
+        lambda folder="": (_ for _ in ()).throw(RuntimeError("no driver")),
+    )
+
+    out = silica_related("Alpha", k=5)
+    assert all("distance" not in r for r in out["results"])
+
+
+# --- Tier B: silica_concepts (concept co-occurrence graph query) -----------
+
+def test_concepts_neighbors_notes_centrality(tmp_path, monkeypatch):
+    from silica.tools.graph import silica_concepts
+    st = CooccurStore(path=tmp_path / "c.json", lang="english")
+    st.upsert_note("A", build_contribution("A", "neural network model training"))
+    st.upsert_note("B", build_contribution("B", "neural network inference"))
+    monkeypatch.setattr("silica.kernel.cooccurrence.get_cooccur_store", lambda **_: st)
+
+    out = silica_concepts("network")
+    assert out["concept"] == "network"
+    assert any(n["concept"] == "neural" for n in out["neighbors"])
+    assert {n["path"] for n in out["notes"]} == {"A", "B"}
+    assert out["centrality"] > 0
+    assert "hint" not in out
+
+
+def test_concepts_unknown_term_hints(tmp_path, monkeypatch):
+    from silica.tools.graph import silica_concepts
+    st = CooccurStore(path=tmp_path / "c.json", lang="english")
+    st.upsert_note("A", build_contribution("A", "alpha beta gamma"))
+    monkeypatch.setattr("silica.kernel.cooccurrence.get_cooccur_store", lambda **_: st)
+
+    out = silica_concepts("zzzzz")
+    assert out["neighbors"] == [] and out["notes"] == []
+    assert "hint" in out
+
+
+def test_concepts_empty_index_errors(tmp_path, monkeypatch):
+    from silica.tools.graph import silica_concepts
+    monkeypatch.setattr(
+        "silica.kernel.cooccurrence.get_cooccur_store",
+        lambda **_: CooccurStore(path=tmp_path / "empty.json", lang="english"),
+    )
+
+    out = silica_concepts("anything")
+    assert "error" in out and "refresh" in out["error"].lower()
+
+
 if __name__ == "__main__":
     import sys
     import pytest

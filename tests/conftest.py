@@ -63,9 +63,9 @@ def _isolate_cluster_ctx_cache(tmp_path, monkeypatch: pytest.MonkeyPatch) -> Non
     real ~/.silica index AND a cache from one test could leak into the next. Per
     tmp_path keeps each test's cache private and out of the real index.
     """
-    import silica.router.states.setup as setup_mod
+    import silica.kernel.graph_export as ge_mod
     monkeypatch.setattr(
-        setup_mod, "_cluster_ctx_cache_path", lambda: tmp_path / "clusters_ctx.json"
+        ge_mod, "cluster_ctx_path", lambda: tmp_path / "clusters_ctx.json"
     )
 
 

@@ -35,6 +35,7 @@ _TOTAL_LABELS = {
     "duplicate_pairs": "Related pairs (borderline — link, not merge)",
     "confirmed_duplicates": "Likely duplicates (merge candidates)",
     "autolink_candidates": "Autolink candidates",
+    "integration_deficits": "Integration deficit (rich text, few links)",
     "lean_notes": "Thin notes (enrich?)",
     "reformat_notes": "Notes to reformat",
     "orphans": "Orphans (no incoming links)",
@@ -276,6 +277,13 @@ def to_markdown(r: VaultReport, title: str = "Silica Vault Report") -> str:
         for h in r.missing_hubs:
             lines.append(f"| {h.concept} | {h.centrality} |")
 
+    if r.integration_deficits:
+        lines.append("\n## Integration Deficit _(concept-rich, weakly linked — not authoritative)_")
+        lines.append("| Note | Concepts | Links | Score |")
+        lines.append("|---|---|---|---|")
+        for idf in r.integration_deficits:
+            lines.append(f"| [[{_short(idf.path)}]] | {idf.concepts} | {idf.degree} | {idf.score} |")
+
     if r.code_coverage:
         cc = r.code_coverage
         add("\n## Code Coverage _(codegraph — supported files documented by a note)_")
@@ -322,17 +330,24 @@ def to_digest(report: VaultReport, *, max_items: int = 8) -> str:
     """Compact summary targeting < 500 tokens."""
     lines: list[str] = []
     t = report.totals
-    lines.append(
+    header = (
         f"VAULT AUDIT  scope={report.scope or 'all'}  "
         f"notes={t.get('notes',0)}  links={t.get('links',0)}  "
         f"clusters={t.get('clusters',0)}  orphans={t.get('orphans',0)}  "
         f"unresolved={t.get('unresolved',0)}"
     )
+    if report.discourse_state:
+        header += f"  shape={report.discourse_state}"
+    lines.append(header)
     lines.append("─" * 36)
 
     if report.god_nodes:
+        # bet= only when analytics computed it: a popular hub vs a bottleneck
+        # whose removal fragments the discourse are different signals.
         hubs = ", ".join(
-            f"{n.label}(deg={n.degree})"
+            f"{n.label}(deg={n.degree}"
+            + (f",bet={n.betweenness}" if n.betweenness else "")
+            + ")"
             for n in report.god_nodes[:max_items]
         )
         lines.append(f"TOP HUBS  {hubs}")
@@ -344,6 +359,13 @@ def to_digest(report: VaultReport, *, max_items: int = 8) -> str:
             for b in shown
         )
         lines.append(f"BRIDGES  {blist}")
+
+    if report.structural_gaps:
+        gaps = ", ".join(
+            f"{_short(g.hub_a)}↮{_short(g.hub_b)}(links={g.inter_edges})"
+            for g in report.structural_gaps[:max_items]
+        )
+        lines.append(f"GAPS  {gaps}")
 
     if report.orphans:
         orp = ", ".join(
@@ -383,10 +405,26 @@ def to_digest(report: VaultReport, *, max_items: int = 8) -> str:
 
     if report.clusters:
         clist = ", ".join(
-            f"C{c.cluster_id}(n={c.size},hub={c.hub.rsplit('/',1)[-1].removesuffix('.md') if c.hub else '-'})"
+            f"C{c.cluster_id}(n={c.size},hub={c.hub.rsplit('/',1)[-1].removesuffix('.md') if c.hub else '-'}"
+            + (f",coh={c.cohesion}" if c.cohesion else "")
+            + ")"
             for c in report.clusters[:max_items]
         )
         lines.append(f"CLUSTERS  {clist}")
+
+    if report.missing_hubs:
+        mh = ", ".join(
+            f"{h.concept}(cent={h.centrality})"
+            for h in report.missing_hubs[:max_items]
+        )
+        lines.append(f"MISSING HUBS  {mh}")
+
+    if report.integration_deficits:
+        idf = ", ".join(
+            f"{_short(i.path)}(concepts={i.concepts},deg={i.degree})"
+            for i in report.integration_deficits[:max_items]
+        )
+        lines.append(f"INTEGRATION DEFICIT  {idf}")
 
     if report.missing_links:
         ml = ", ".join(
