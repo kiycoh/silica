@@ -17,9 +17,11 @@ from pathlib import Path
 
 import orjson
 
+from silica.kernel.codeast import BARE_LANGUAGES, language_for
 from silica.kernel.codegraph import CodeGraph
 
 _EXCLUDED_TOP = {"tests", "test", "docs"}
+_ROOT_KEY = "(root)"   # synthetic subsystem for loose files under the source root
 # ponytail: single source root in v1; multi-package monorepo deferred, seam here
 
 
@@ -30,12 +32,22 @@ class Subsystem:
     members: list[str]  # repo-relative files, sorted
 
 
+def _symbol_bearing(path: str) -> bool:
+    """Only these count toward source-root density: bare files (toml/html/css)
+    enter the graph but a site/ full of HTML must never win source-root."""
+    lang = language_for(path)
+    return (lang is not None and lang not in BARE_LANGUAGES) \
+        or path.lower().endswith(".ipynb")
+
+
 def source_root(graph: CodeGraph) -> str:
-    """Top-level dir with the most supported files; "" when loose files at
-    the repo root outnumber every dir (the repo root is the source root)."""
+    """Top-level dir with the most symbol-bearing files; "" when loose files
+    at the repo root outnumber every dir (the repo root is the source root)."""
     counts: Counter[str] = Counter()
     loose = 0
     for path in graph.files:
+        if not _symbol_bearing(path):
+            continue
         top, _, rest = path.partition("/")
         if rest:
             if top in _EXCLUDED_TOP:
@@ -63,11 +75,14 @@ def partition(graph: CodeGraph) -> list[Subsystem]:
         head, _, tail = rest.partition("/")
         if not root_prefix and head in _EXCLUDED_TOP:
             continue
-        key = head if tail else "core"
+        # "(root)" cannot be a package name, so loose files under the source
+        # root can never merge with a real directory (a repo with <root>/core/
+        # would otherwise silently conflate the two under one key)
+        key = head if tail else _ROOT_KEY
         groups.setdefault(key, []).append(path)
     out: list[Subsystem] = []
     for key, members in sorted(groups.items()):
-        if key == "core":
+        if key == _ROOT_KEY:
             sub_path = root_prefix
         elif root_prefix:
             sub_path = f"{root_prefix}/{key}"
@@ -128,8 +143,16 @@ def _public_symbols(entry: dict) -> list[dict]:
     return out
 
 
-def _struct_sig(members: list[str], call_set: list[tuple[str, str, str]]) -> str:
-    payload = orjson.dumps({"members": members, "calls": sorted(call_set)})
+def _struct_sig(members: list[str], call_set: list[tuple[str, str, str]],
+                entries: dict[str, dict]) -> str:
+    """Signature over everything the digest grounds prose on: member set, call
+    set, and each member's stored entry (signatures, docstrings, module docs
+    and comments, imports). Doc-only edits must flip the sig — gate (a) sees
+    only structural skeleton diffs, so gate (b) is the one gate that fires on
+    the digest's prose payload."""
+    payload = orjson.dumps(
+        {"members": members, "calls": sorted(call_set), "entries": entries},
+        option=orjson.OPT_SORT_KEYS)
     return hashlib.sha256(payload).hexdigest()[:16]
 
 
@@ -232,7 +255,8 @@ def build_digests(graph: CodeGraph, subsystems: list[Subsystem],
         eps = _entry_points(graph, sub, scripts, call_in, call_out)
         digests.append(SubsystemDigest(
             key=sub.key, path=sub.path, members=sub.members,
-            struct_sig=_struct_sig(sub.members, sub_calls),
+            struct_sig=_struct_sig(sub.members, sub_calls,
+                                   {p: graph.files[p] for p in sub.members}),
             public_symbols={p: _public_symbols(graph.files[p]) for p in sub.members},
             module_docs={p: graph.files[p].get("module_doc", "") for p in sub.members},
             module_comments={p: graph.files[p].get("module_comments", []) for p in sub.members},
@@ -317,9 +341,15 @@ def flow_sketches(adj: dict[str, list[str]], entries: list[str]) -> list[list[st
 
 def render_mermaid(edges: list[tuple[str, str, int, int]]) -> str:
     """Cross-subsystem graph as a Mermaid block. Deterministic and
-    byte-stable: sorted input, rendered by code, never by the LLM."""
+    byte-stable: sorted input, rendered by code, never by the LLM.
+    Node ids are enumerated with the key as a quoted label: a key that is a
+    Mermaid reserved word (`end`) or carries non-word characters (`(root)`)
+    must never break the diagram."""
+    nodes = sorted({n for a, b, _, _ in edges for n in (a, b)})
+    nid = {n: f"n{i}" for i, n in enumerate(nodes)}
     lines = ["```mermaid", "graph LR"]
     for a, b, _iw, _cw in sorted(edges):
-        lines.append(f"  {a} --> {b}")
+        qa, qb = a.replace('"', "'"), b.replace('"', "'")
+        lines.append(f'  {nid[a]}["{qa}"] --> {nid[b]}["{qb}"]')
     lines.append("```")
     return "\n".join(lines)

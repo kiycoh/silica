@@ -110,6 +110,15 @@ def _parse_conventions(raw: dict) -> VaultConventions:
 
     wiki_dir = conv_raw.get("wiki_dir")
     wiki_dir = wiki_dir.strip() if isinstance(wiki_dir, str) else ""
+    if wiki_dir:
+        # trust boundary: vault.yaml is user-authored, and wiki_dir reaches the
+        # write path — a traversal or absolute path would scatter derived notes
+        # outside the vault, invisible to the index, /undo and snapshots
+        parts = wiki_dir.replace("\\", "/").split("/")
+        if wiki_dir.startswith(("/", "\\")) or ".." in parts or ":" in parts[0]:
+            logger.warning("vault.yaml: conventions.wiki_dir must be a relative "
+                           "path inside the vault — ignoring %r", wiki_dir)
+            wiki_dir = ""
 
     return VaultConventions(
         language=language,

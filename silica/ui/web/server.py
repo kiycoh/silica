@@ -251,6 +251,9 @@ def _linkify_text(text: str, resolve) -> str:
         bang, inner = m.group(1), m.group(2)
         target, _, alias = inner.partition("|")
         target, alias = target.strip(), alias.strip()
+        # Obsidian subpath (#center alignment hint, #heading anchor): irrelevant
+        # to serving a raster attachment, and it would defeat the ext check.
+        target = target.split("#", 1)[0].strip()
         if bang and "." + target.rsplit(".", 1)[-1].lower() in _ASSET_EXTS:
             out.append(_embed_img(target, alias))
         else:
@@ -778,16 +781,24 @@ def note(path: str = ""):
 @app.get("/asset")
 def asset(path: str = ""):
     """Vault-relative attachment for the note drawer, `<img>`-only by contract.
-    Extension whitelist + resolved-inside-the-vault check close traversal."""
+    Extension whitelist + resolved-inside-the-vault check close traversal.
+
+    `![[img.png]]` embeds name an attachment by basename even when the file
+    lives in an attachments subfolder, so an exact-path miss falls back to a
+    first-match basename search under the vault (Obsidian's shortest-path rule
+    minus the nearest-to-note tiebreak). rglob stays inside root, so traversal
+    is still closed on the fallback path.
+    ponytail: per-request rglob on the miss case; build a basename index if a
+    large vault makes it slow."""
     if not path or not CONFIG.vault_path:
+        raise HTTPException(status_code=404)
+    if Path(path).suffix.lower() not in _ASSET_EXTS:
         raise HTTPException(status_code=404)
     root = Path(CONFIG.vault_path).resolve()
     target = (root / path).resolve()
-    if (
-        not target.is_relative_to(root)
-        or target.suffix.lower() not in _ASSET_EXTS
-        or not target.is_file()
-    ):
+    if not (target.is_relative_to(root) and target.is_file()):
+        target = next((p for p in root.rglob(Path(path).name) if p.is_file()), None)
+    if target is None or not target.is_relative_to(root) or target.suffix.lower() not in _ASSET_EXTS:
         raise HTTPException(status_code=404)
     return FileResponse(target)
 

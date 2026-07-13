@@ -141,6 +141,26 @@ def test_note_verdict_aggregates_multi_path():
     assert note_verdict([a])[0] == CHANGE_COSMETIC
 
 
+def test_java_change_classified_like_python(tmp_path):
+    # confirmation, no new logic: classify_change is language-agnostic over
+    # skeleton fields, so Java gets cosmetic/structural verdicts too
+    _init_repo(tmp_path)
+    v1 = "public class A {\n    public int go() { return 1; }\n}\n"
+    ref0 = _commit(tmp_path, "src/A.java", v1, "c1")
+    vault = tmp_path / "docs"; vault.mkdir()
+    _write_note(vault, "a.md", ["src/A.java"], ref0)
+    _commit(tmp_path, "src/A.java",
+            "public class A {\n    public int go() { return 2; }\n}\n", "c2")
+    stale = codedocs.stale_docs(vault, repo_root=tmp_path)
+    assert stale[0].change_level == codedocs.CHANGE_COSMETIC   # body-only edit
+    _commit(tmp_path, "src/A.java",
+            "public class A {\n    public int go() { return 2; }\n"
+            "    public void stop() {}\n}\n", "c3")
+    stale = codedocs.stale_docs(vault, repo_root=tmp_path)
+    assert stale[0].change_level == codedocs.CHANGE_STRUCTURAL
+    assert any("+ method A.stop" in d for d in stale[0].details)
+
+
 def test_notebook_staleness_classifies_like_code(tmp_path):
     import json as _json
     _init_repo(tmp_path)

@@ -407,6 +407,17 @@ def test_linkify_without_resolver_is_plain_render():
     assert _linkify("see [[Foo]] here").strip() == "<p>see [[Foo]] here</p>"
 
 
+def test_embed_with_subpath_fragment_still_renders_image():
+    # Obsidian embeds carry a #center/#heading subpath and a width alias:
+    # the fragment must not defeat the asset-extension check (regression).
+    from silica.ui.web.server import _linkify
+
+    html = _linkify("![[Pasted image 1.png#center|500]]", _fake_resolve)
+    assert '<img src="/asset?path=Pasted%20image%201.png"' in html
+    assert 'width="500"' in html
+    assert "note-link broken" not in html
+
+
 # ---------------------------------------------------------------------------
 # OFM sugar — highlights, tags, callouts, tasks, mermaid, comments/block-ids,
 # frontmatter. Same pure-resolver setup as the _linkify tests above.
@@ -499,14 +510,26 @@ def test_fence_gets_pygments_spans():
 
 
 def test_asset_endpoint_serves_vault_images_and_closes_traversal(client, tmp_vault):
+    from pathlib import Path as _Path
+
+    from silica.config import CONFIG
+
     tc, _server = client
     tmp_vault.note("img/pic.png", "fake-bytes")
     tmp_vault.note("secret.txt", "no")
+    # image that only exists one level above the vault root
+    (_Path(CONFIG.vault_path).parent / "outside.png").write_text("leak", encoding="utf-8")
 
     assert tc.get("/asset", params={"path": "img/pic.png"}).status_code == 200
-    assert tc.get("/asset", params={"path": "../pic.png"}).status_code == 404
+    # `![[pic.png]]` names the attachment by basename though it lives in img/
+    assert tc.get("/asset", params={"path": "pic.png"}).status_code == 200
     assert tc.get("/asset", params={"path": "secret.txt"}).status_code == 404  # not whitelisted
     assert tc.get("/asset", params={"path": "missing.png"}).status_code == 404
+    # traversal stays closed: the basename fallback only ever serves an in-vault
+    # file, never one living outside the vault, whatever the path spelling.
+    assert tc.get("/asset", params={"path": "outside.png"}).status_code == 404
+    assert tc.get("/asset", params={"path": "../outside.png"}).status_code == 404
+    assert tc.get("/asset", params={"path": "../../outside.png"}).status_code == 404
 
 
 def test_latex_inline_and_block_become_mathml():

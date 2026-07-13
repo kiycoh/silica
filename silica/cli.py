@@ -458,7 +458,10 @@ def _handle_direct_shortcut(raw_input: str, messages: list[dict]) -> bool:
         result = run_wiki(CONFIG.vault_path, CONFIG, folder=folder,
                           overview_only=overview_only, force=force)
         if result["status"] == "no_repo":
-            CONSOLE.print("  [yellow]wiki: vault is not inside a git repo — nothing to describe.[/]")
+            CONSOLE.print("  [yellow]wiki: vault is not inside a git repo, nothing to describe.[/]")
+        elif result["status"] == "empty":
+            CONSOLE.print("  [yellow]wiki: no supported source files found "
+                          "(code lane parses Python/TypeScript/JavaScript only).[/]")
         elif result["status"] == "error":
             CONSOLE.print(f"  [yellow]wiki: {result.get('reason', 'error')}[/]")
         else:
@@ -467,6 +470,8 @@ def _handle_direct_shortcut(raw_input: str, messages: list[dict]) -> bool:
                 f"{len(result['skipped'])} up-to-date"
                 + (f", {result['parse_errors']} file(s) not analyzable" if result["parse_errors"] else "")
             )
+            for fail in result.get("failed", []):
+                CONSOLE.print(f"  [red]wiki: write failed:[/] {fail['path']}: {fail['reason']}")
         return True
 
     if cmd == "/graph":

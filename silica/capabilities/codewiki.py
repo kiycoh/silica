@@ -176,6 +176,12 @@ def _note_body(front: str, prose: str) -> str:
     return front + prose.strip() + "\n"
 
 
+def _first_line(text: str) -> str:
+    # next(iter(...)) not [0]: a whitespace-only body splits to [] and must
+    # yield "" instead of IndexError (hand-edited or sync-corrupted note)
+    return next(iter((text or "").strip().splitlines()), "")
+
+
 def _subsystem_frontmatter(d, head: str) -> str:
     docs = "\n".join(f'  - "{m}"' for m in d.members)
     return ("---\n"
@@ -231,34 +237,43 @@ def run_wiki(vault, config, folder: str | None = None,
     """
     from pathlib import Path
 
-    from silica.agent.bounds import refiner_bounds
-    from silica.agent.commit import commit_ops
+    from silica.agent.commit import commit_derived
     from silica.kernel import frontmatter, gitstate, paths
     from silica.kernel.codedocs import CHANGE_STRUCTURAL, stale_docs
     from silica.kernel.codegraph import load_codegraph
     from silica.kernel.codewiki import (
         build_digests, cross_edges, edges_ref, partition, render_mermaid,
     )
-    from silica.kernel.ops import Op, OpType
     from silica.kernel.vault_manifest import load_manifest
 
     vault = Path(vault)
     root = paths.repo_root_for(vault)
     if root is None:
-        return {"status": "no_repo", "written": [], "skipped": [], "parse_errors": 0}
+        return {"status": "no_repo", "written": [], "skipped": [], "failed": [],
+                "parse_errors": 0}
 
     graph = load_codegraph(vault)
     if graph is None:
-        return {"status": "no_repo", "written": [], "skipped": [], "parse_errors": 0}
-    subs = partition(graph)
+        return {"status": "no_repo", "written": [], "skipped": [], "failed": [],
+                "parse_errors": 0}
+    all_subs = partition(graph)
+    if not all_subs:
+        # No supported source files (code lane parses py/ts/js only). Abort
+        # before the LLM stage: an empty digest would let the overview prompt
+        # hallucinate an architecture with nothing to ground on.
+        logger.warning("wiki: no supported source files under %s (code lane parses "
+                       "Python/TypeScript/JavaScript)", root)
+        return {"status": "empty", "written": [], "skipped": [], "failed": [],
+                "parse_errors": 0}
+    subs = all_subs
     if folder:
-        subs = [s for s in subs if s.key == folder.strip("/")]
+        subs = [s for s in all_subs if s.key == folder.strip("/")]
         if not subs:
             return {"status": "error", "reason": f"unknown subsystem: {folder}",
-                    "written": [], "skipped": [], "parse_errors": 0}
+                    "written": [], "skipped": [], "failed": [], "parse_errors": 0}
     digests = build_digests(graph, subs, root)
     head = gitstate.head_ref(root) or ""
-    edges = cross_edges(graph, partition(graph))   # full graph, even when scoped
+    edges = cross_edges(graph, all_subs)   # full graph, even when scoped
     ref = edges_ref(edges)
 
     wiki_dir = ""
@@ -268,75 +283,76 @@ def run_wiki(vault, config, folder: str | None = None,
         pass
     prefix = f"{wiki_dir}/" if wiki_dir else ""
 
-    structurally_stale = {d.note_path for d in stale_docs(vault)
-                          if d.change_level == CHANGE_STRUCTURAL}
+    # gate (a) input; one git history walk, so skip it when force/overview_only
+    # make the result unreachable (regen is already decided on those paths)
+    structurally_stale: set[str] = set()
+    if not (force or overview_only):
+        structurally_stale = {d.note_path for d in stale_docs(vault)
+                              if d.change_level == CHANGE_STRUCTURAL}
 
     written: list[str] = []
     skipped: list[str] = []
+    failed: list[dict] = []
     any_regen = False
 
     def _read(rel: str) -> str:
-        p = vault / rel
+        # through the DRIVER seam: with the ws backend a raw read_text would
+        # miss Obsidian's live buffer and misclassify an existing note as new
+        from silica.driver import DRIVER
         try:
-            return p.read_text(encoding="utf-8")
-        except OSError:
+            return DRIVER.read_note(rel).content or ""
+        except Exception:
             return ""
 
-    def _commit(rel: str, content: str, reason: str) -> bool:
-        existing = _read(rel)
-        if not existing:
-            # ponytail: direct create for new notes. overwrite raises on absent
-            # files and the ingest write-op validators are shaped for distilled
-            # notes (hub-in-body, containment, snippet gate); anti-info-loss
-            # bounds add nothing with no prior prose. Regen below keeps the
-            # commit_ops + refiner_bounds channel where it matters.
-            from silica.driver import DRIVER
-            DRIVER.create(rel, content)
+    def _commit(rel: str, content: str) -> bool:
+        res = commit_derived(rel, content)
+        if res.get("status") == "committed":
             return True
-        parent = Path(rel).parent
-        target_dir = "" if str(parent) == "." else str(parent)
-        # hub=None on purpose: a wiki note IS its subsystem, so the refiner's
-        # anti-hub-clobber guard (which forbids the hub note) would reject the
-        # note's own path (core.md ~ hub "core"). The anti-info-loss guard and
-        # transactional rollback still apply.
-        op = Op(op=OpType.overwrite,
-                heading=Path(rel).stem, source_basename=Path(rel).name,
-                path=rel, content=content, reason=reason)
-        result = commit_ops([op], target_dir=target_dir,
-                            bounds=refiner_bounds(rel),
-                            read_note=lambda _p: _read(rel))
-        return result.get("status") == "committed"
+        failed.append({"path": rel, "reason": res.get("reason", "unknown")})
+        return False
 
     summaries: list[tuple[str, str]] = []
     for d in digests:
         rel = f"{prefix}subsystems/{d.key}.md"
         existing = _read(rel)
+        body = ""
         regen = force or not existing
-        if existing and not regen:
-            data, _, _ = frontmatter.split(existing)
+        if existing:
+            data, _, body = frontmatter.split(existing)
             data = data or {}
-            if rel in structurally_stale:
-                regen = True                              # gate (a)
-            if str(data.get("wiki_struct_sig", "")) != d.struct_sig:
-                regen = True                              # gate (b)
+            if not regen:
+                if rel in structurally_stale:
+                    regen = True                              # gate (a)
+                if str(data.get("wiki_struct_sig", "")) != d.struct_sig:
+                    regen = True                              # gate (b)
         if overview_only:
             regen = False
         if not regen:
             skipped.append(rel)
             if existing:
-                _, _, body = frontmatter.split(existing)
-                summaries.append((d.key, (body or "").strip().splitlines()[0] if body else ""))
+                summaries.append((d.key, _first_line(body)))
             continue
         digest_text = render_digest(d)
         note = generate_subsystem_note(d, digest_text, config)
         if not note.content.strip():
             skipped.append(rel)                           # no_change, others proceed
             continue
-        if _commit(rel, _note_body(_subsystem_frontmatter(d, head), note.content),
-                   reason="code wiki subsystem note"):
+        if _commit(rel, _note_body(_subsystem_frontmatter(d, head), note.content)):
             written.append(rel)
             any_regen = True
-            summaries.append((d.key, note.content.strip().splitlines()[0]))
+            summaries.append((d.key, _first_line(note.content)))
+
+    # A scoped or failed regen must not shrink the overview's grounding to the
+    # subsystems touched this run: backfill from the notes already on disk.
+    have = {key for key, _ in summaries}
+    for s in all_subs:
+        if s.key in have:
+            continue
+        existing = _read(f"{prefix}subsystems/{s.key}.md")
+        if existing:
+            _, _, body = frontmatter.split(existing)
+            summaries.append((s.key, _first_line(body)))
+    summaries.sort()
 
     arch_rel = f"{prefix}ARCHITECTURE.md"
     existing_arch = _read(arch_rel)
@@ -350,17 +366,15 @@ def run_wiki(vault, config, folder: str | None = None,
         note = generate_overview(summaries, edges, flows, project_info, config)
         if note.content.strip():
             body = _mermaid_section(mermaid) + note.content
-            if _commit(arch_rel, _note_body(_overview_frontmatter(head, ref), body),
-                       reason="code wiki overview"):
+            if _commit(arch_rel, _note_body(_overview_frontmatter(head, ref), body)):
                 written.append(arch_rel)
         else:
             skipped.append(arch_rel)
     elif existing_arch:
         refreshed = _replace_mermaid(arch_body or "", mermaid)
         if refreshed != (arch_body or ""):
-            _commit(arch_rel, _note_body(_overview_frontmatter(head, ref), refreshed),
-                    reason="code wiki mermaid refresh")
+            _commit(arch_rel, _note_body(_overview_frontmatter(head, ref), refreshed))
         skipped.append(arch_rel)
 
-    return {"status": "ok", "written": written, "skipped": skipped,
+    return {"status": "ok", "written": written, "skipped": skipped, "failed": failed,
             "parse_errors": sum(d.parse_errors for d in digests)}

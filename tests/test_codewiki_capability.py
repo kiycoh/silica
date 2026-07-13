@@ -148,12 +148,46 @@ def wiki_env(tmp_path, monkeypatch):
     silica.driver._driver = None
 
 
+def test_no_supported_source_aborts_before_llm(tmp_path, monkeypatch):
+    # A git repo with no supported source (rust is outside the extension map):
+    # /wiki must return "empty" and never call the LLM (an empty digest would
+    # let the overview prompt hallucinate).
+    root = tmp_path / "rustrepo"
+    root.mkdir()
+    _git(root, "init", "-q")
+    (root / "main.rs").write_text("fn main() {}\n", encoding="utf-8")
+    (root / "README.md").write_text("# app\n", encoding="utf-8")
+    _git(root, "add", "-A")
+    _git(root, "-c", "user.email=t@t", "-c", "user.name=t", "commit", "-q", "-m", "init")
+    vault = root / ".silica"
+    vault.mkdir()
+
+    fake = _FakeProvider('{"content": "should never be produced"}')
+    monkeypatch.setattr("silica.agent.providers.get_provider", lambda config, role: fake)
+    from silica.kernel import paths as kpaths
+    monkeypatch.setattr(kpaths, "index_dir", lambda: vault / ".index")
+    (vault / ".index").mkdir(parents=True, exist_ok=True)
+    import silica.config
+    import silica.driver
+    monkeypatch.setattr(silica.config.CONFIG, "backend", "fs")
+    monkeypatch.setattr(silica.config.CONFIG, "vault_path", str(vault))
+    silica.driver._driver = None
+    try:
+        result = run_wiki(vault, config=None)
+    finally:
+        silica.driver._driver = None
+
+    assert result["status"] == "empty"
+    assert fake.messages is None                       # LLM never invoked
+    assert not (vault / "ARCHITECTURE.md").exists()    # no fabricated overview
+
+
 def test_first_run_builds_everything(wiki_env):
     root, vault, fake = wiki_env
     result = run_wiki(vault, config=None)
-    assert result["status"] == "ok"
+    assert result["status"] == "ok" and result["failed"] == []
     arch = vault / "ARCHITECTURE.md"
-    note = vault / "subsystems" / "core.md"
+    note = vault / "subsystems" / "(root).md"
     assert arch.is_file() and note.is_file()
     text = note.read_text(encoding="utf-8")
     assert "wiki_struct_sig:" in text and "code_ref:" in text and "documents:" in text
@@ -179,7 +213,56 @@ def test_body_only_call_change_triggers_regen(wiki_env):
         "def main():\n    pass\n\n\n"
         'if __name__ == "__main__":\n    main()\n', encoding="utf-8")
     result = run_wiki(vault, config=None)
-    assert any(p.endswith("core.md") for p in result["written"])
+    assert any(p.endswith("(root).md") for p in result["written"])
+    # the regen write channel must not let the nucleate hub fallback inject a
+    # junk "subsystems" hub note (or anything else) into the vault
+    md = {p.relative_to(vault).as_posix() for p in vault.rglob("*.md")}
+    assert md == {"ARCHITECTURE.md", "subsystems/(root).md"}
+
+
+def test_regen_may_shrink_and_drop_links(wiki_env):
+    # ground truth is the digest, not the previous prose: a legitimately
+    # shorter regen without the old wikilink must commit, not wedge the note
+    root, vault, fake = wiki_env
+    fake._text = ('{"content": "Long behavioral prose about the subsystem '
+                  'with a [[kernel]] link and considerably more detail padding '
+                  'so that the rewrite below shrinks far under any ratio."}')
+    run_wiki(vault, config=None)
+    (root / "pkg" / "core.py").write_text(
+        '"""Core module."""\n\n\ndef main():\n    pass\n', encoding="utf-8")
+    fake._text = '{"content": "Tiny note."}'
+    result = run_wiki(vault, config=None)
+    assert any(p.endswith("(root).md") for p in result["written"])
+    assert result["failed"] == []
+    assert "Tiny note." in (vault / "subsystems" / "(root).md").read_text(encoding="utf-8")
+
+
+def test_scoped_run_keeps_other_subsystems_in_overview(wiki_env):
+    root, vault, fake = wiki_env
+    (root / "pkg" / "sub").mkdir()
+    (root / "pkg" / "sub" / "mod.py").write_text(
+        '"""Sub module."""\n\n\ndef work():\n    pass\n', encoding="utf-8")
+    _git(root, "add", "-A")
+    _git(root, "-c", "user.email=t@t", "-c", "user.name=t", "commit", "-q", "-m", "sub")
+    run_wiki(vault, config=None)
+    (root / "pkg" / "sub" / "mod.py").write_text(
+        '"""Sub module."""\n\n\ndef work():\n    pass\n\n\ndef more():\n    pass\n',
+        encoding="utf-8")
+    result = run_wiki(vault, config=None, folder="sub")
+    assert any(p.endswith("sub.md") for p in result["written"])
+    # overview regen was grounded on ALL subsystems, not just the scoped one
+    assert "[[(root)]]" in fake.messages[1]["content"]
+
+
+def test_whitespace_only_note_body_does_not_crash(wiki_env):
+    root, vault, fake = wiki_env
+    run_wiki(vault, config=None)
+    note = vault / "subsystems" / "(root).md"
+    content = note.read_text(encoding="utf-8")
+    head, sep, _ = content.partition("\n---\n")
+    note.write_text(head + sep + "   ", encoding="utf-8")   # frontmatter kept, prose blanked
+    result = run_wiki(vault, config=None, overview_only=True)
+    assert result["status"] == "ok"
 
 
 def test_no_repo_degrades_soft(tmp_path, monkeypatch):
@@ -196,3 +279,11 @@ def test_conventions_wiki_dir_parsed(tmp_path):
     from silica.kernel.vault_manifest import _parse_conventions
     assert _parse_conventions({"conventions": {"wiki_dir": "docs/wiki"}}).wiki_dir == "docs/wiki"
     assert _parse_conventions({}).wiki_dir == ""
+
+
+def test_conventions_wiki_dir_rejects_escape(tmp_path):
+    # vault.yaml is user-authored: traversal/absolute paths must never reach
+    # the write path (they would scatter notes outside the vault)
+    from silica.kernel.vault_manifest import _parse_conventions
+    for bad in ("../elsewhere", "a/../../b", "/abs/path", "C:/win", "..\\up"):
+        assert _parse_conventions({"conventions": {"wiki_dir": bad}}).wiki_dir == "", bad

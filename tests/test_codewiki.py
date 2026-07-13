@@ -34,17 +34,43 @@ def test_partition_subdirs_and_core():
                 "silica/kernel/a.py", "silica/kernel/graph/deep.py",
                 "silica/router/r.py"])
     subs = {s.key: s for s in partition(g)}
-    assert set(subs) == {"core", "kernel", "router"}
-    assert subs["core"].members == ["silica/cli.py", "silica/config.py"]
+    assert set(subs) == {"(root)", "kernel", "router"}
+    assert subs["(root)"].members == ["silica/cli.py", "silica/config.py"]
     # deep files roll up to the immediate subdir
     assert "silica/kernel/graph/deep.py" in subs["kernel"].members
+
+
+def test_root_key_never_collides_with_a_real_core_dir():
+    # a repo with <root>/core/ AND loose files: two distinct subsystems, never
+    # silently merged under one key
+    g = _graph(["pkg/main.py", "pkg/core/engine.py"])
+    subs = {s.key: s for s in partition(g)}
+    assert subs["(root)"].members == ["pkg/main.py"]
+    assert subs["core"].members == ["pkg/core/engine.py"]
+
+
+def test_source_root_density_ignores_bare_files():
+    # a site/ directory full of HTML must not win source-root over the real
+    # code package; bare files under the source root still enter the partition
+    g = _graph(["src/a.py", "src/b.py",
+                "site/x.html", "site/y.html", "site/z.html",
+                "src/config.toml"])
+    assert source_root(g) == "src"
+    subs = {s.key: s for s in partition(g)}
+    assert "src/config.toml" in subs["(root)"].members
+
+
+def test_source_root_loose_bare_files_do_not_count():
+    # loose HTML at the repo root must not drag the source root to ""
+    g = _graph(["a.html", "b.html", "c.html", "src/a.py", "src/b.py"])
+    assert source_root(g) == "src"
 
 
 def test_flat_repo_root_excludes_tests_and_docs():
     g = _graph(["app.py", "lib/x.py", "tests/test_x.py", "docs/conf.py"])
     subs = {s.key: s for s in partition(g)}
     assert "tests" not in subs and "docs" not in subs
-    assert "core" in subs and "lib" in subs
+    assert "(root)" in subs and "lib" in subs
 
 
 # ---------------------------------------------------------------------------
@@ -92,10 +118,10 @@ def _rich_graph():
 def test_digest_collaborators_two_weights_and_publics(tmp_path):
     g = _rich_graph()
     digests = {d.key: d for d in build_digests(g, partition(g), tmp_path)}
-    core = digests["core"]
+    core = digests["(root)"]
     assert ("kernel", 1, 1) in core.collaborators_out       # 1 import edge, 1 call edge
     kernel = digests["kernel"]
-    assert ("core", 1, 1) in kernel.collaborators_in
+    assert ("(root)", 1, 1) in kernel.collaborators_in
     assert ("router", 1, 0) in kernel.collaborators_in      # import-only, zero calls
     names = [s["name"] for s in kernel.public_symbols["silica/kernel/util.py"]]
     assert names == ["helper"]                              # __all__ is the authority
@@ -105,7 +131,7 @@ def test_digest_collaborators_two_weights_and_publics(tmp_path):
 def test_digest_entry_points_labeled(tmp_path):
     g = _rich_graph()
     digests = {d.key: d for d in build_digests(g, partition(g), tmp_path)}
-    labels = dict(digests["core"].entry_points)
+    labels = dict(digests["(root)"].entry_points)
     assert "__main__ guard" in labels["silica/cli.py"]
     labels_r = dict(digests["router"].entry_points)
     assert "registration decorator" in labels_r["silica/router/r.py"]
@@ -117,14 +143,26 @@ def test_struct_sig_changes_on_body_only_call_change(tmp_path):
     g2 = _rich_graph()
     g2.files["silica/cli.py"]["calls"] = []   # body-only edit: call removed
     d2 = {d.key: d for d in build_digests(g2, partition(g2), tmp_path)}
-    assert d1["core"].struct_sig != d2["core"].struct_sig
-    assert d1["core"].members == d2["core"].members
+    assert d1["(root)"].struct_sig != d2["(root)"].struct_sig
+    assert d1["(root)"].members == d2["(root)"].members
+
+
+def test_struct_sig_changes_on_docstring_only_change(tmp_path):
+    # the digest's main prose payload is docs, not structure: a docstring
+    # rewrite must flip the sig or the wiki narrates the old behavior forever
+    g1 = _rich_graph()
+    d1 = {d.key: d for d in build_digests(g1, partition(g1), tmp_path)}
+    g2 = _rich_graph()
+    g2.files["silica/kernel/util.py"]["module_doc"] = "Now caches results."
+    d2 = {d.key: d for d in build_digests(g2, partition(g2), tmp_path)}
+    assert d1["kernel"].struct_sig != d2["kernel"].struct_sig
+    assert d1["(root)"].struct_sig == d2["(root)"].struct_sig  # untouched subsystem stable
 
 
 def test_cross_edges_and_ref(tmp_path):
     g = _rich_graph()
     edges = cross_edges(g, partition(g))
-    assert ("core", "kernel", 1, 1) in edges
+    assert ("(root)", "kernel", 1, 1) in edges
     assert ("router", "kernel", 1, 0) in edges
     ref = edges_ref(edges)
     # weight-only change must NOT move the ref
@@ -159,4 +197,44 @@ def test_render_mermaid_byte_stable():
     block = render_mermaid(edges)
     assert block.startswith("```mermaid\ngraph LR")
     assert block == render_mermaid(list(reversed(edges)))  # order-insensitive
-    assert "core --> kernel" in block and "router --> kernel" in block
+    # nodes sorted: core=n0, kernel=n1, router=n2
+    assert 'n0["core"] --> n1["kernel"]' in block
+    assert 'n2["router"] --> n1["kernel"]' in block
+
+
+def test_wiki_over_mixed_language_fixture(tmp_path):
+    # end-to-end: build_codegraph → partition → build_digests on a repo mixing
+    # java, c, and bare html; the html file rides along, the code drives
+    import subprocess
+    from silica.kernel.codegraph import build_codegraph
+    subprocess.run(["git", "init", "-q"], cwd=tmp_path, check=True)
+
+    def w(rel, text):
+        p = tmp_path / rel
+        p.parent.mkdir(parents=True, exist_ok=True)
+        p.write_text(text, encoding="utf-8")
+
+    w("src/util/Helper.java",
+      "package util;\npublic class Helper {\n    public static void assist() {}\n}\n")
+    w("src/app/App.java",
+      "package app;\nimport util.Helper;\npublic class App {\n"
+      "    public static void main(String[] args) { Helper.assist(); }\n}\n")
+    w("src/core/lib.c", "int go(void) { return 0; }\n")
+    w("src/app/page.html", "<html></html>\n")
+    g = build_codegraph(tmp_path)
+    subs = partition(g)
+    digests = {d.key: d for d in build_digests(g, subs, tmp_path)}
+    assert source_root(g) == "src"
+    assert "src/app/page.html" in digests["app"].members   # bare file rides along
+    assert ("util", 1, 1) in digests["app"].collaborators_out  # import + call edge
+    labels = dict(digests["app"].entry_points)
+    assert "__main__ guard" in labels["src/app/App.java"]
+
+
+def test_render_mermaid_survives_reserved_and_symbol_keys():
+    # `end` is a Mermaid reserved word; `(root)` carries non-word characters —
+    # both must render as labels on enumerated ids, never as bare node ids
+    block = render_mermaid([("(root)", "end", 1, 0)])
+    assert '["(root)"] --> ' in block and '["end"]' in block
+    for line in block.splitlines():
+        assert not line.strip().startswith("end")

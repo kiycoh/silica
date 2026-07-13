@@ -106,15 +106,49 @@ def is_ignored(root: Path | str, paths: list[Path]) -> set[Path]:
     return {Path(line) for line in proc.stdout.splitlines() if line.strip()}
 
 
-def log_for_path(root: Path | str, path: str, limit: int = 1) -> list[CommitInfo]:
-    """Latest `limit` commits touching `path` (rename-following). Empty on failure."""
-    proc = _run(
-        ["log", f"-{limit}", "--follow", f"--format=%H{_FS}%cI{_FS}%s", "--", path],
-        root,
-    )
-    if proc is None or proc.returncode != 0:
-        return []
-    return _parse_log(proc.stdout)
+def latest_shas(root: Path | str, paths: list[str]) -> dict[str, str]:
+    """Newest commit sha per path, in ONE history walk (`git log --name-only`
+    limited to `paths`) instead of one subprocess per path — wiki notes list
+    every member file under `documents:`, so per-path spawning is a fork storm.
+    The first mention of a path (walk is newest-first) is its latest commit;
+    the walk stops early once every path is resolved. Paths absent from the
+    result have no history (or git failed) — callers treat them as unknown.
+    # ponytail: paths as argv, fine up to ARG_MAX (~2 MB); chunk if ever hit
+    """
+    if not paths:
+        return {}
+    wanted = set(paths)
+    out: dict[str, str] = {}
+    try:
+        proc = subprocess.Popen(
+            ["git", "-c", "core.quotepath=off", "log", f"--format={_FS}%H",
+             "--name-only", "--", *paths],
+            cwd=str(root), stdout=subprocess.PIPE, stderr=subprocess.DEVNULL,
+            text=True,
+        )
+    except (FileNotFoundError, OSError):
+        return {}
+    sha = ""
+    try:
+        assert proc.stdout is not None
+        for line in proc.stdout:
+            line = line.rstrip("\n")
+            if line.startswith(_FS):
+                sha = line[len(_FS):]
+            elif line and sha and line in wanted and line not in out:
+                out[line] = sha
+                if len(out) == len(wanted):
+                    proc.terminate()
+                    break
+    except OSError:
+        pass
+    finally:
+        try:
+            proc.stdout.close()
+            proc.wait(timeout=_TIMEOUT_S)
+        except Exception:
+            proc.kill()
+    return out
 
 
 def commits_since(root: Path | str, since_ref: str, path: str) -> list[CommitInfo]:

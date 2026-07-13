@@ -124,16 +124,22 @@ def stale_docs(vault: Path | str, repo_root: Path | str | None = None) -> list[S
     if root is None:
         return []
 
+    notes = list(iter_documenting_notes(vault))
+    wanted: set[str] = set()
+    for _, data, _ in notes:
+        if str(data.get("code_ref") or "").strip():
+            wanted.update(_documents_of(data))
+    latest = gitstate.latest_shas(root, sorted(wanted))
+
     out: list[StaleDoc] = []
-    for note_path, data, _ in iter_documenting_notes(vault):
+    for note_path, data, _ in notes:
         recorded = str(data.get("code_ref") or "").strip()
         if not recorded:
             continue  # unknown → not stale
         for code_path in _documents_of(data):
-            latest = gitstate.log_for_path(root, code_path, limit=1)
-            if not latest:
+            current = latest.get(code_path, "")
+            if not current:
                 continue  # path has no history → unknown, not stale
-            current = latest[0].sha
             if current != recorded:
                 level, details = classify_change(root, recorded, code_path)
                 out.append(

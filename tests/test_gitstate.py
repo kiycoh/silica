@@ -57,23 +57,27 @@ def test_is_ignored_empty_without_git(tmp_path):
     assert gitstate.is_ignored(tmp_path, [Path("x.md")]) == set()
 
 
-def test_log_for_path_latest_commit(tmp_path):
+def test_latest_shas_one_walk_many_paths(tmp_path):
     _init_repo(tmp_path)
     _commit(tmp_path, "src/m.py", "v1\n", "add m")
-    commits = gitstate.log_for_path(tmp_path, "src/m.py", limit=1)
-    assert len(commits) == 1
-    assert commits[0].sha == gitstate.head_ref(tmp_path)
-    assert commits[0].subject == "add m"
-    assert commits[0].committed_at  # ISO string, non-empty
+    old = gitstate.head_ref(tmp_path)
+    _commit(tmp_path, "src/n.py", "v1\n", "add n")
+    head = gitstate.head_ref(tmp_path)
+    shas = gitstate.latest_shas(tmp_path, ["src/m.py", "src/n.py", "ghost.py"])
+    assert shas == {"src/m.py": old, "src/n.py": head}  # no-history path absent
 
 
-def test_log_for_path_follows_rename(tmp_path):
+def test_latest_shas_sees_rename_commit(tmp_path):
     _init_repo(tmp_path)
     _commit(tmp_path, "old.py", "v1\n", "add old")
     subprocess.run(["git", "mv", "old.py", "new.py"], cwd=tmp_path, check=True)
     subprocess.run(["git", "commit", "-q", "-m", "rename"], cwd=tmp_path, check=True)
-    commits = gitstate.log_for_path(tmp_path, "new.py", limit=10)
-    assert len(commits) == 2  # follow tracks across the rename
+    shas = gitstate.latest_shas(tmp_path, ["new.py"])
+    assert shas == {"new.py": gitstate.head_ref(tmp_path)}
+
+
+def test_latest_shas_soft_outside_repo(tmp_path):
+    assert gitstate.latest_shas(tmp_path, ["x.py"]) == {}
 
 
 def test_commits_since_lists_intervening(tmp_path):
