@@ -547,3 +547,55 @@ def test_regroup_failure_never_fails_capture(tmp_path, monkeypatch):
                   run_id="r1", seen="2026-07-01")
     assert len(store.live_facts()) == 1
     assert store.live_facts()[0].group is None
+
+
+def test_render_lists_group_mates_date_descending_capped(tmp_path, monkeypatch):
+    from silica.kernel import episodic
+
+    assert episodic._RENDER_MATES == 5   # pin the shipped cap
+    store = _store(tmp_path)
+    store.capture([{"key": "user.marathon.date", "text": "Race on Oct 5"}],
+                  run_id="r1", seen="2026-06-01")
+    store.capture([{"key": "user.marathon.training_plan", "text": "Plan: 5k daily"}],
+                  run_id="r2", seen="2026-06-10")
+    store.capture([{"key": "user.marathon.shoes", "text": "Bought racing shoes"}],
+                  run_id="r3", seen="2026-06-20")
+
+    hits = store.recall("marathon date", query_vec=None, k=1, now="2026-07-01")
+    assert hits[0].fact.key == "user.marathon.date"
+    lines = episodic.render(hits, store=store).splitlines()
+    assert lines[0] == "- [since 2026-06-01] Race on Oct 5"
+    # Mates are date-DESCENDING with since-dates (the KU render mechanism).
+    assert lines[1] == "  (related: Bought racing shoes, since 2026-06-20)"
+    assert lines[2] == "  (related: Plan: 5k daily, since 2026-06-10)"
+
+    monkeypatch.setattr(episodic, "_RENDER_MATES", 1)
+    assert len(episodic.render(hits, store=store).splitlines()) == 2
+
+
+def test_render_never_duplicates_facts_already_rendered(tmp_path):
+    from silica.kernel import episodic
+
+    store = _store(tmp_path)
+    store.capture([{"key": "user.marathon.date", "text": "Race on Oct 5"}],
+                  run_id="r1", seen="2026-06-01")
+    store.capture([{"key": "user.marathon.training_plan", "text": "Plan: 5k daily"}],
+                  run_id="r2", seen="2026-06-10")
+    hits = store.recall("marathon", query_vec=None, k=5, now="2026-07-01")
+    assert len(hits) == 2
+    text = episodic.render(hits, store=store)
+    assert "related" not in text           # both mates are already hits
+    assert text.count("Race on Oct 5") == 1
+
+
+def test_render_ignores_group_with_single_live_member(tmp_path):
+    from silica.kernel import episodic
+
+    store = _store(tmp_path)
+    store.capture([{"key": "user.marathon.date", "text": "Race on Oct 5"}],
+                  run_id="r1", seen="2026-06-01")
+    (f,) = store.live_facts()
+    f.group = "f_9999"   # dangling/corrupt group id on a stale store
+    hits = store.recall("marathon", query_vec=None, k=5, now="2026-07-01")
+    assert hits
+    assert "related" not in episodic.render(hits, store=store)

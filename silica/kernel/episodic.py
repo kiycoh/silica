@@ -168,6 +168,9 @@ _RARE_DF = 3
 # ponytail: _MAX_GROUP=12 blob backstop; probe says healthy groups are 2-10.
 _MAX_GROUP = 12
 
+# Render-side bound on group-mate lines per hit: bounded, read-only.
+_RENDER_MATES = 5
+
 
 def key_vocabulary(store: "EpisodicStore", *, cap: int = 60) -> list[str]:
     """Raw keys of live heads, most recently seen first, capped.
@@ -433,8 +436,14 @@ def capture_from_distill(result: dict, *, run_id: str, seen: str) -> None:
 
 
 def render(hits: list[FactHit], *, store: EpisodicStore) -> str:
-    """Render recalled facts with their supersede history, dates included —
-    knowledge-update and temporal-reasoning questions need the chain."""
+    """Render recalled facts with supersede history and group-mates, dates
+    included: knowledge-update needs the chain, aggregative questions need
+    the group, and both need date framing to prefer the fresh value."""
+    by_group: dict[str, list[Fact]] = {}
+    for f in store.live_facts():
+        if f.group:
+            by_group.setdefault(f.group, []).append(f)
+    shown = {f.id for hit in hits for f in store.chain(hit.fact)}
     lines: list[str] = []
     for hit in hits:
         links = store.chain(hit.fact)
@@ -443,6 +452,14 @@ def render(hits: list[FactHit], *, store: EpisodicStore) -> str:
             lines.append(
                 f"  (previously: {older.text}, {older.first_seen} to {newer.first_seen})"
             )
+        members = by_group.get(hit.fact.group or "", [])
+        if len(members) < 2:   # dangling group id on a stale store: no group
+            continue
+        mates = sorted((m for m in members if m.id not in shown),
+                       key=lambda m: m.last_seen, reverse=True)[:_RENDER_MATES]
+        for m in mates:
+            shown.add(m.id)
+            lines.append(f"  (related: {m.text}, since {m.first_seen})")
     return "\n".join(lines)
 
 
