@@ -38,6 +38,9 @@ class Fact(BaseModel):
     last_seen: str
     runs: list[str] = Field(default_factory=list)
     supersedes: str | None = None
+    # Layer C topic group: id of the group's founding fact. Additive, no
+    # schema bump; legacy facts are None and join lazily on a future match.
+    group: str | None = None
     status: str = "live"
     # ponytail: inline float list, not npz packing — the store is TTL-bounded
     # to hundreds of facts; the 10k scaling fix targeted note stores.
@@ -123,6 +126,13 @@ def key_tokens(key: str) -> set[str]:
     if len(segs) > 1 and segs[0] in _ENTITY_PREFIXES:
         segs = segs[1:]
     return {t for s in segs for t in s.split("_") if len(t) > 1}
+
+
+# ponytail: _RARE_DF=3, probe-validated on the frozen corpus; revisit only
+# with a new probe sweep.
+_RARE_DF = 3
+# ponytail: _MAX_GROUP=12 blob backstop; probe says healthy groups are 2-10.
+_MAX_GROUP = 12
 
 
 def key_vocabulary(store: "EpisodicStore", *, cap: int = 60) -> list[str]:
@@ -220,9 +230,15 @@ class EpisodicStore:
                         runs=[run_id])
             if head is not None:
                 fact.supersedes = head.id
+                fact.group = head.group  # the chain keeps its topic group
                 head.status = "superseded"
             self.facts.append(fact)
             heads[nkey] = fact
+            if head is None:
+                try:
+                    self.attach_group(fact, heads)
+                except Exception as e:  # grouping must never fail the ingest
+                    logger.debug("episodic attach skipped (%s)", e)
             created.append(fact)
         if embedder is not None and created:
             try:
@@ -232,6 +248,40 @@ class EpisodicStore:
             except Exception as e:
                 logger.debug("episodic capture: embedding skipped (%s)", e)
         self.save()
+
+    def attach_group(self, fact: Fact, heads: dict[str, Fact]) -> None:
+        """Layer C rare-token attachment for a fact starting a NEW chain
+        (spec 2026-07-15). Pairwise, never union: the fact joins the single
+        best candidate's group (most shared rare tokens, ties to most recent
+        last_seen), founding it when the candidate is ungrouped. Bridging two
+        existing groups is structurally impossible. ``heads`` holds the live
+        heads at this moment, the new fact included (it counts in df).
+        """
+        new_toks = key_tokens(fact.key)
+        if not new_toks:
+            return
+        toks = {h.id: key_tokens(h.key) for h in heads.values()}
+        df: dict[str, int] = {}
+        for ts in toks.values():
+            for t in ts:
+                df[t] = df.get(t, 0) + 1
+        rare = {t for t in new_toks if df[t] <= _RARE_DF}
+        if not rare:
+            return
+        scored = [(len(rare & toks[h.id]), h.last_seen, h.id, h)
+                  for h in heads.values() if h.id != fact.id]
+        if not scored:
+            return
+        score, _, _, cand = max(scored, key=lambda s: s[:3])
+        if score == 0:
+            return
+        gid = cand.group or cand.id
+        members = sum(1 for f in self.facts
+                      if f.status == "live" and f.group == gid) or 1
+        if members + 1 > _MAX_GROUP:
+            return
+        cand.group = gid
+        fact.group = gid
 
     # ------------------------------------------------------------------
     # TTL sweep
