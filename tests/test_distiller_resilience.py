@@ -11,10 +11,14 @@ These cover the two structural fixes for the truncated-JSON failure mode:
 from __future__ import annotations
 
 import json
+import time
 from unittest.mock import MagicMock, patch
+
+import pytest
 
 from silica.agent.llm import LLMResponse
 from silica.kernel.prep_delegation import (
+    _call_with_deadline,
     compute_distiller_max_tokens,
     estimate_prompt_tokens,
     run_distiller,
@@ -240,3 +244,22 @@ class TestRunDistillerDynamicBudget:
 
         sent = mock_provider.call_llm.call_args.kwargs["max_tokens"]
         assert sent == 5000
+
+
+# ---------------------------------------------------------------------------
+# #3 — wall-clock deadline (transport read-timeouts reset on keep-alive bytes)
+# ---------------------------------------------------------------------------
+
+class TestWallClockDeadline:
+    def test_hung_call_raises_timeout(self):
+        with pytest.raises(TimeoutError, match="wall-clock deadline"):
+            _call_with_deadline(lambda: time.sleep(5), 0.05)
+
+    def test_value_and_error_pass_through(self):
+        assert _call_with_deadline(lambda: 42, 1.0) == 42
+
+        def boom():
+            raise ValueError("upstream")
+
+        with pytest.raises(ValueError, match="upstream"):
+            _call_with_deadline(boom, 1.0)

@@ -16,6 +16,7 @@ import hashlib
 import json
 import logging
 import os
+import threading
 from pathlib import Path
 
 logger = logging.getLogger(__name__)
@@ -181,6 +182,34 @@ def salvage_distiller_json(raw: str) -> dict | None:
     return {"main_thematic_axes": axes if isinstance(axes, list) else [], "updates": updates}
 
 
+def _call_with_deadline(fn, seconds: float):
+    """Run fn() under a wall-clock deadline; raise TimeoutError past it.
+
+    The transport read-timeout cannot bound a hung distiller call: OpenRouter
+    trickles keep-alive bytes while "processing", and every byte resets httpx's
+    per-chunk read timer, so a dead upstream holds the socket open forever.
+    Only real elapsed time is trustworthy here.
+    """
+    # ponytail: daemon thread leaks on timeout (dies with socket/process);
+    # acceptable for a single-turn call, revisit if calls pile up.
+    box: dict = {}
+
+    def _run():
+        try:
+            box["value"] = fn()
+        except Exception as e:
+            box["error"] = e
+
+    t = threading.Thread(target=_run, daemon=True, name="distiller-call")
+    t.start()
+    t.join(seconds)
+    if t.is_alive():
+        raise TimeoutError(f"distiller call exceeded {seconds:.0f}s wall-clock deadline")
+    if "error" in box:
+        raise box["error"]
+    return box["value"]
+
+
 def run_distiller(
     payload: dict,
     target: str,
@@ -268,26 +297,27 @@ def run_distiller(
         ceiling if ceiling > 0 else "none",
     )
 
+    deadline = float(os.getenv("DISTILLER_TIMEOUT", "300"))
     try:
         provider = get_provider(CONFIG, role="worker")
-        response = provider.call_llm(
+        response = _call_with_deadline(lambda: provider.call_llm(
             messages=[{"role": "user", "content": user_message}],
             tools=None,
             response_schema=DistillerOutput,
             max_tokens=max_tokens,
             openrouter_provider=CONFIG.openrouter_provider_distiller,
-        )
+        ), deadline)
     except Exception as e:
         logger.warning("Distiller provider call failed, falling back to litellm: %s", e)
         from silica.agent.llm import call_llm
-        response = call_llm(
+        response = _call_with_deadline(lambda: call_llm(
             model=CONFIG.model,
             messages=[{"role": "user", "content": user_message}],
             tools=None,
             max_tokens=max_tokens,
             response_format=DistillerOutput,
             openrouter_provider=CONFIG.openrouter_provider_distiller,
-        )
+        ), deadline)
 
     raw_output = response.text or ""
     if not raw_output.strip():
