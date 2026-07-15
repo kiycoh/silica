@@ -5,7 +5,7 @@
 (docs spec 2026-07-14). Store unit tests use an explicit path; no global state."""
 from __future__ import annotations
 
-from silica.kernel.episodic import EpisodicStore
+from silica.kernel.episodic import EpisodicStore, Fact
 
 
 def _store(tmp_path):
@@ -316,3 +316,71 @@ def test_distiller_prompt_routes_ephemerals():
     assert '"ephemerals"' in prompt
     assert "user.dog.name" in prompt  # the canonical key example
     assert "entity.attribute" in prompt
+
+
+def test_normalize_key_merges_morphological_variants():
+    from silica.kernel.episodic import normalize_key
+
+    assert normalize_key("model_kits.gifts") == normalize_key("model_kit.gift")
+    assert normalize_key("User.Car.Model") == "user.car.model"
+    assert normalize_key("user.cities") == normalize_key("user.city")
+    # snowball, not naive strip-s: these survive intact
+    assert normalize_key("user.status") == "user.status"
+    assert normalize_key("user.address") == "user.address"
+    # dots stay segment separators, underscores stay token separators
+    assert normalize_key("model_kits.last_project") == "model_kit.last_project"
+
+
+def test_normalize_key_idempotent():
+    from silica.kernel.episodic import normalize_key
+
+    for k in ("model_kits.gifts", "user.preferences.color", "user.cities",
+              "assistant.recipe.oven_temp"):
+        once = normalize_key(k)
+        assert normalize_key(once) == once
+
+
+def test_capture_links_chain_across_plural_key_variants(tmp_path):
+    store = _store(tmp_path)
+    store.capture([{"key": "model_kit.project", "text": "Working on a Spitfire kit"}],
+                  run_id="run_1", seen="2026-06-01")
+    store.capture([{"key": "model_kits.projects", "text": "Now building a B-29 kit"}],
+                  run_id="run_2", seen="2026-06-20")
+
+    live = store.live_facts()
+    assert len(live) == 1
+    head = live[0]
+    assert head.key == "model_kits.projects"   # raw key stored as emitted
+    assert head.text == "Now building a B-29 kit"
+    old = next(f for f in store.facts if f.id == head.supersedes)
+    assert old.key == "model_kit.project" and old.status == "superseded"
+
+
+def test_capture_reinforces_across_key_variants_when_text_matches(tmp_path):
+    store = _store(tmp_path)
+    store.capture([{"key": "model_kit.project", "text": "Building a Spitfire"}],
+                  run_id="run_1", seen="2026-06-01")
+    store.capture([{"key": "model_kits.project", "text": "building a spitfire!"}],
+                  run_id="run_2", seen="2026-06-10")
+
+    live = store.live_facts()
+    assert len(live) == 1
+    assert live[0].key == "model_kit.project"   # first spelling kept
+    assert live[0].runs == ["run_1", "run_2"]
+    assert live[0].last_seen == "2026-06-10"
+
+
+def test_capture_matches_legacy_head_written_before_layer_a(tmp_path):
+    # A store written before normalization existed: raw plural head on disk.
+    store = _store(tmp_path)
+    store.facts.append(Fact(id="f_0001", key="model_kits.gifts",
+                            text="Got a B-29 kit", first_seen="2026-05-01",
+                            last_seen="2026-05-01", runs=["run_0"]))
+    store.next_id = 2
+    store.save()
+
+    store.capture([{"key": "model_kit.gifts", "text": "Got a Camaro kit"}],
+                  run_id="run_1", seen="2026-06-01")
+    live = store.live_facts()
+    assert len(live) == 1
+    assert live[0].supersedes == "f_0001"

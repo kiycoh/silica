@@ -94,6 +94,25 @@ def _normalize(text: str) -> str:
     return "".join(out)
 
 
+def normalize_key(key: str) -> str:
+    """Canonical `entity.attribute` form for MATCHING: casefold, then
+    snowball-stem every `_`-token of every `.` segment. Merges morphological
+    key drift (`model_kits.gifts` == `model_kit.gift`); semantic synonyms stay
+    distinct. Stored keys are never rewritten — this is lookup identity only.
+    """
+    # ponytail: lang hardcoded to english — the distiller prompt shapes keys
+    # as English-style slugs; non-English-keyed stores under-merge. Upgrade
+    # path: a per-store language knob, when a non-English store shows drift.
+    from silica.kernel.text import stem_word
+
+    segs: list[str] = []
+    for seg in key.casefold().split("."):
+        toks = [stem_word(t, lang="english") for t in seg.split("_") if t]
+        if toks:
+            segs.append("_".join(toks))
+    return ".".join(segs)
+
+
 class EpisodicStore:
     """JSON-file-backed fact store. Facts are not notes; they nucleate INTO notes."""
 
@@ -143,14 +162,19 @@ class EpisodicStore:
         New/changed facts are embedded when `embedder` is served; embedding
         failure is silent (recall falls back to lexical).
         """
-        heads = {f.key: f for f in self.facts if f.status == "live"}
+        # Heads keyed by canonical form: keys written before Layer A still
+        # match variant arrivals. On a legacy collision (two live heads with
+        # the same canonical form) the later chain wins the lookup; TTL
+        # retires the other.
+        heads = {normalize_key(f.key): f for f in self.facts if f.status == "live"}
         created: list[Fact] = []
         for raw in facts:
             key = (raw.get("key") or "").strip()
             text = (raw.get("text") or "").strip()
             if not key or not text:
                 continue
-            head = heads.get(key)
+            nkey = normalize_key(key)
+            head = heads.get(nkey)
             if head is not None and _normalize(head.text) == _normalize(text):
                 head.last_seen = seen
                 if run_id not in head.runs:
@@ -164,7 +188,7 @@ class EpisodicStore:
                 fact.supersedes = head.id
                 head.status = "superseded"
             self.facts.append(fact)
-            heads[key] = fact
+            heads[nkey] = fact
             created.append(fact)
         if embedder is not None and created:
             try:
