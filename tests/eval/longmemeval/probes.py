@@ -35,19 +35,6 @@ def key_prefix(key: str, n: int = 2) -> str:
     return ".".join(key.split(".")[:n])
 
 
-_ENTITY_PREFIXES = {"user", "assist"}  # canonical forms of user. / assistant.
-
-
-def key_tokens(key: str) -> set[str]:
-    """Stemmed tokens of a key, entity prefix dropped: the clustering alphabet."""
-    from silica.kernel.episodic import normalize_key
-
-    segs = normalize_key(key).split(".")
-    if len(segs) > 1 and segs[0] in _ENTITY_PREFIXES:
-        segs = segs[1:]
-    return {t for s in segs for t in s.split("_") if len(t) > 1}
-
-
 def cluster_keys(keys: list[str], *, max_df: int | None = None) -> dict[str, str]:
     """Post-hoc key clustering: connected components over shared stemmed tokens.
 
@@ -59,6 +46,8 @@ def cluster_keys(keys: list[str], *, max_df: int | None = None) -> dict[str, str
     frozen corpus covers 15/17 gold sessions at cluster sizes 2-10). Returns
     key -> component display name (lexicographically first member key,
     `(+N)` suffix for the rest)."""
+    from silica.kernel.episodic import key_tokens
+
     toks = {k: key_tokens(k) for k in keys}
     if max_df is not None:
         df: dict[str, int] = defaultdict(int)

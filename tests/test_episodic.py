@@ -414,3 +414,18 @@ def test_key_vocabulary_section_renders_or_abstains(tmp_path):
     assert section is not None
     assert section.startswith("## Episodic keys")
     assert "user.car.model" in section
+
+
+def test_key_tokens_stemmed_entity_prefix_dropped():
+    from silica.kernel.episodic import key_tokens
+
+    # The probe-proven KU pair shares exactly two stemmed tokens.
+    shared = (key_tokens("user.fitness.tournament.date")
+              & key_tokens("user.tennis_tournament_date"))
+    assert len(shared) == 2
+    # Entity prefixes are dropped, never tokens.
+    assert not key_tokens("user.laundry.schedule") & {"user", "assist"}
+    # Morphological variants and user/assistant prefixes merge.
+    assert key_tokens("assistant.laundry.tips") == key_tokens("user.laundry.tip")
+    # Single-char tokens are noise, not alphabet.
+    assert key_tokens("user.a_b.c") == set()

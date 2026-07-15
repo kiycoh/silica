@@ -113,6 +113,18 @@ def normalize_key(key: str) -> str:
     return ".".join(segs)
 
 
+_ENTITY_PREFIXES = {"user", "assist"}  # canonical forms of user. / assistant.
+
+
+def key_tokens(key: str) -> set[str]:
+    """Stemmed tokens of a key, entity prefix dropped: the grouping alphabet
+    shared by Layer C attachment and the eval key-drift probes."""
+    segs = normalize_key(key).split(".")
+    if len(segs) > 1 and segs[0] in _ENTITY_PREFIXES:
+        segs = segs[1:]
+    return {t for s in segs for t in s.split("_") if len(t) > 1}
+
+
 def key_vocabulary(store: "EpisodicStore", *, cap: int = 60) -> list[str]:
     """Raw keys of live heads, most recently seen first, capped.
 
