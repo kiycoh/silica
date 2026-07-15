@@ -141,6 +141,19 @@ def _note(session_id: str, date: str, turns: list[dict]) -> str:
     return _frontmatter_note(session_id, date, render_session(turns))
 
 
+def _episodic_keys_substrate() -> str | None:
+    """Live episodic keys as the only substrate section for the eval distill:
+    capture snaps to the established key vocabulary instead of coining
+    synonyms. Failure never blocks the distill (the section is advisory)."""
+    try:
+        from silica.kernel.episodic import EpisodicStore, key_vocabulary_section
+
+        return key_vocabulary_section(EpisodicStore())
+    except Exception as e:
+        logger.warning("episodic keys substrate failed (distill proceeds): %s", e)
+        return None
+
+
 def distill_session(session_id: str, date: str, turns: list[dict]) -> str:
     """Distill one session's transcript into a knowledge-note body via the Silica
     distiller — the mem0-comparable ingest (LLM-driven memory formation).
@@ -159,7 +172,8 @@ def distill_session(session_id: str, date: str, turns: list[dict]) -> str:
                      "concepts": [{"name": session_id, "inbox_excerpt": excerpt}]}],
     }
     try:
-        result = prep_delegation.run_distiller(payload, target="sessions")
+        result = prep_delegation.run_distiller(
+            payload, target="sessions", substrate=_episodic_keys_substrate())
     except Exception as e:  # ponytail: distiller hiccup -> keep the session verbatim
         logger.warning("distiller failed for session %s: %s — keeping verbatim", session_id, e)
         return excerpt
