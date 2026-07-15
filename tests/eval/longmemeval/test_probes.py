@@ -111,3 +111,33 @@ def test_run_probes_filters_to_probed_types(tmp_path, monkeypatch):
             _inst("q3", "knowledge-update", ["answer_s1"])]
     rows = run_probes(data, tmp_path / "run")
     assert [r["question_id"] for r in rows] == ["q1", "q3"]
+
+
+def test_normalize_merges_plural_split_prefixes(tmp_path, monkeypatch):
+    from tests.eval.longmemeval.runner import question_vault
+
+    run_root = tmp_path / "run"
+    inst = _inst("q6", "multi-session", ["answer_s1", "answer_s2"])
+    _write_store(question_vault(run_root, "q6"), [
+        _fact("f_0001", "model_kit.gifts", ["answer_s1"]),
+        _fact("f_0002", "model_kits.gifts", ["answer_s2"]),
+    ], monkeypatch, tmp_path)
+
+    plain = probe_question(inst, run_root)
+    assert plain["groups"] == 2 and plain["best_coverage"] == 1
+    merged = probe_question(inst, run_root, normalize=True)
+    assert merged["groups"] == 1 and merged["best_coverage"] == 2
+
+
+def test_normalize_merges_ku_full_key_variants(tmp_path, monkeypatch):
+    from tests.eval.longmemeval.runner import question_vault
+
+    run_root = tmp_path / "run"
+    inst = _inst("q7", "knowledge-update", ["answer_s1", "answer_s2"])
+    _write_store(question_vault(run_root, "q7"), [
+        _fact("f_0001", "user.car.model", ["answer_s1"]),
+        _fact("f_0002", "user.car.models", ["answer_s2"]),
+    ], monkeypatch, tmp_path)
+
+    assert probe_question(inst, run_root)["best_coverage"] == 1
+    assert probe_question(inst, run_root, normalize=True)["best_coverage"] == 2

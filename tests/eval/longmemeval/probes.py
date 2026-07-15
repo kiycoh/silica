@@ -45,8 +45,12 @@ def _load_live_facts(vault: Path) -> list[dict]:
     return [f for f in facts if f.get("status") == "live"]
 
 
-def probe_question(inst: dict, run_root: Path) -> dict:
-    """Probe one question's frozen store; returns a flat metrics dict."""
+def probe_question(inst: dict, run_root: Path, *, normalize: bool = False) -> dict:
+    """Probe one question's frozen store; returns a flat metrics dict.
+
+    normalize=True groups keys in their canonical (Layer A) form — the
+    store's effective key identity, since capture matches normalized."""
+    from silica.kernel.episodic import normalize_key
     from tests.eval.longmemeval.runner import question_vault
 
     qid = inst["question_id"]
@@ -57,7 +61,11 @@ def probe_question(inst: dict, run_root: Path) -> dict:
     covered = {g for f in live for g in f["runs"] if g in gold}
     gold_facts = [f for f in live if gold & set(f["runs"])]
 
-    group_of = (lambda k: k) if qtype == "knowledge-update" else key_prefix
+    canon = normalize_key if normalize else (lambda k: k)
+    if qtype == "knowledge-update":
+        group_of = canon
+    else:
+        group_of = lambda k: key_prefix(canon(k))  # noqa: E731
     by_group: dict[str, set[str]] = defaultdict(set)
     for f in gold_facts:
         by_group[group_of(f["key"])] |= gold & set(f["runs"])
@@ -77,8 +85,9 @@ def probe_question(inst: dict, run_root: Path) -> dict:
     }
 
 
-def run_probes(data: list[dict], run_root: Path) -> list[dict]:
-    return [probe_question(q, run_root)
+def run_probes(data: list[dict], run_root: Path, *,
+               normalize: bool = False) -> list[dict]:
+    return [probe_question(q, run_root, normalize=normalize)
             for q in data if q["question_type"] in PROBED_TYPES]
 
 
@@ -99,9 +108,12 @@ def main() -> None:
     ap = argparse.ArgumentParser(description=__doc__)
     ap.add_argument("--data", required=True)
     ap.add_argument("--run-root", required=True)
+    ap.add_argument("--normalize", action="store_true",
+                    help="group keys in canonical (Layer A) form")
     args = ap.parse_args()
     data = json.loads(Path(args.data).read_text(encoding="utf-8"))
-    print(render(run_probes(data, Path(args.run_root).expanduser().resolve())))
+    print(render(run_probes(data, Path(args.run_root).expanduser().resolve(),
+                            normalize=args.normalize)))
 
 
 if __name__ == "__main__":
