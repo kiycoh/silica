@@ -198,3 +198,33 @@ def test_substrate_omits_annotations_when_cold(tmp_path, monkeypatch):
     out = build_substrate(_chunk(), manifest_titles=[])
     assert out is not None and "[[Near]]" in out
     assert "cluster=" not in out
+
+
+def test_substrate_includes_episodic_keys_section(tmp_path, monkeypatch):
+    import silica.kernel.episodic as ep_mod
+
+    monkeypatch.setattr(embed_mod, "_index_path", lambda: tmp_path / "emb.json")
+    monkeypatch.setattr(providers, "get_embedder",
+                        lambda *a, **k: _FakeEmbedder([1.0, 0.0]))
+    monkeypatch.setattr(ep_mod, "store_path", lambda: tmp_path / "episodic.json")
+    ep_mod.EpisodicStore().capture(
+        [{"key": "user.car.model", "text": "Panda"}], run_id="r1",
+        seen="2026-01-01")
+
+    out = build_substrate(_chunk(), manifest_titles=[])
+    # Independent leg: no related-notes candidates here, the section still lands.
+    assert out is not None
+    assert "## Episodic keys" in out
+    assert "user.car.model" in out
+
+
+def test_substrate_omits_episodic_section_on_empty_store(tmp_path, monkeypatch):
+    import silica.kernel.episodic as ep_mod
+
+    monkeypatch.setattr(embed_mod, "_index_path", lambda: tmp_path / "emb.json")
+    monkeypatch.setattr(providers, "get_embedder",
+                        lambda *a, **k: _FakeEmbedder([1.0, 0.0]))
+    monkeypatch.setattr(ep_mod, "store_path", lambda: tmp_path / "episodic.json")
+
+    out = build_substrate(_chunk(), manifest_titles=[])
+    assert out is None or "## Episodic keys" not in out

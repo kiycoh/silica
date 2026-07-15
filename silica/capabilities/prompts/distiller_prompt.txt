@@ -73,6 +73,8 @@ When the excerpt is a dialogue, ALSO capture the specific facts the ASSISTANT st
 
 Keep keys STABLE across sessions: reuse the same `entity.attribute` slug for the same real-world attribute (e.g. always `user.car.model`, never a synonym key later) — supersede chains only link on identical keys.
 
+When a `## Episodic keys` section is present in your context, it lists the live keys already in the store: if a fact concerns an attribute listed there, you MUST reuse that exact key rather than coining a variant (reuse `user.car.model` from the list instead of emitting `user.vehicle.model` or `user.cars.model`). Coin a new key only for attributes the list does not cover.
+
 ## Content Quality Requirements
 - All distilled facts MUST be written in {LANGUAGE}. Match the register to the source: scholarly for academic material, plain factual prose for conversational or personal material. Never inflate the register beyond the source.
 - Preserve every formula, equation, code block, and numeric value verbatim from the inbox excerpt.

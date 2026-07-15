@@ -234,11 +234,24 @@ def build_substrate(
             logger.debug("build_substrate: vocabulary failed (non-fatal): %s", _voc_e)
             vocab_lines = []
 
+        # Episodic keys (spec 2026-07-15): live ephemeral keys so the
+        # distiller reuses the established key vocabulary instead of coining
+        # synonym keys. Independent leg: failure only drops this section.
+        episodic_section: str | None = None
+        try:
+            from silica.kernel.episodic import EpisodicStore, key_vocabulary_section
+
+            episodic_section = key_vocabulary_section(EpisodicStore())
+        except Exception as _ep_e:
+            logger.debug("build_substrate: episodic keys failed (non-fatal): %s", _ep_e)
+
         sections: list[str] = []
         if lines:
             sections.append("\n".join(lines))
         if vocab_lines:
             sections.append("\n".join(vocab_lines))
+        if episodic_section:
+            sections.append(episodic_section)
         return "\n\n".join(sections) if sections else None
 
     except Exception as _e:
