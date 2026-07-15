@@ -82,6 +82,53 @@ def cluster_keys(keys: list[str], *, max_df: int | None = None) -> dict[str, str
     return out
 
 
+def _replay_attachment(store) -> None:
+    """Recompute every live fact's group by replaying live facts in
+    first_seen order through the PRODUCT attachment rule. In memory only;
+    the caller persists."""
+    from silica.kernel.episodic import normalize_key
+
+    for f in store.facts:
+        f.group = None
+    heads: dict = {}
+    for f in sorted(store.live_facts(), key=lambda fa: (fa.first_seen, fa.id)):
+        heads[normalize_key(f.key)] = f
+        store.attach_group(f, heads)
+
+
+def regroup_store(path: Path) -> None:
+    """Rewrite a frozen store's group fields in place (bench copies only):
+    the eval A/B migration tool, zero LLM."""
+    from silica.kernel.episodic import EpisodicStore
+
+    store = EpisodicStore(path=path)
+    _replay_attachment(store)
+    store.save()
+
+
+def pairwise_groups(live: list[dict]) -> dict[str, str]:
+    """fact id -> group display name, via the product attachment rule."""
+    from silica.kernel.episodic import EpisodicStore, Fact
+
+    store = EpisodicStore(path=Path("/nonexistent/episodic.json"))
+    store.facts = [Fact.model_validate(f) for f in live]
+    _replay_attachment(store)
+    members: dict[str, list[str]] = defaultdict(list)
+    for f in store.facts:
+        members[f.group or f.id].append(f.id)
+    by_id = {f.id: f for f in store.facts}
+    names: dict[str, str] = {}
+    claimed: dict[str, str] = {}
+    for gid, ids in members.items():
+        name = (by_id[gid].key if len(ids) == 1
+                else f"{by_id[gid].key} (+{len(ids) - 1})")
+        if claimed.setdefault(name, gid) != gid:   # duplicate founder keys
+            name = f"{name} #{gid}"
+        for i in ids:
+            names[i] = name
+    return names
+
+
 def _load_live_facts(vault: Path) -> list[dict]:
     from silica.kernel.paths import index_dir_for
 
@@ -93,13 +140,15 @@ def _load_live_facts(vault: Path) -> list[dict]:
 
 
 def probe_question(inst: dict, run_root: Path, *, normalize: bool = False,
-                   cluster: bool = False, max_df: int | None = None) -> dict:
+                   cluster: bool = False, max_df: int | None = None,
+                   pairwise: bool = False) -> dict:
     """Probe one question's frozen store; returns a flat metrics dict.
 
     normalize=True groups keys in their canonical (Layer A) form — the
     store's effective key identity, since capture matches normalized.
     cluster=True groups by post-hoc token clustering instead (both types):
-    the ceiling a mechanical clustering layer could reach on this store."""
+    the ceiling a mechanical clustering layer could reach on this store.
+    pairwise=True groups by the PRODUCT attachment rule replayed over the live facts (the Layer C acceptance view)."""
     from silica.kernel.episodic import normalize_key
     from tests.eval.longmemeval.runner import question_vault
 
@@ -111,22 +160,25 @@ def probe_question(inst: dict, run_root: Path, *, normalize: bool = False,
     covered = {g for f in live for g in f["runs"] if g in gold}
     gold_facts = [f for f in live if gold & set(f["runs"])]
 
-    if cluster:
+    if pairwise:
+        gmap = pairwise_groups(live)
+        group_of = lambda f: gmap[f["id"]]  # noqa: E731
+    elif cluster:
         components = cluster_keys(sorted({f["key"] for f in live}),
                                   max_df=max_df)
-        group_of = components.__getitem__
+        group_of = lambda f: components[f["key"]]  # noqa: E731
     else:
         canon = normalize_key if normalize else (lambda k: k)
         if qtype == "knowledge-update":
-            group_of = canon
+            group_of = lambda f: canon(f["key"])  # noqa: E731
         else:
-            group_of = lambda k: key_prefix(canon(k))  # noqa: E731
+            group_of = lambda f: key_prefix(canon(f["key"]))  # noqa: E731
     by_group: dict[str, set[str]] = defaultdict(set)
     for f in gold_facts:
-        by_group[group_of(f["key"])] |= gold & set(f["runs"])
+        by_group[group_of(f)] |= gold & set(f["runs"])
     sizes: dict[str, int] = defaultdict(int)
     for f in live:
-        sizes[group_of(f["key"])] += 1
+        sizes[group_of(f)] += 1
     # Ties on coverage go to the SMALLEST group: the honest diagnostic when a
     # tiny precise cluster and a blob cover the same gold sessions.
     best_group, best_cov = max(by_group.items(),
@@ -149,9 +201,10 @@ def probe_question(inst: dict, run_root: Path, *, normalize: bool = False,
 
 
 def run_probes(data: list[dict], run_root: Path, *, normalize: bool = False,
-               cluster: bool = False, max_df: int | None = None) -> list[dict]:
+               cluster: bool = False, max_df: int | None = None,
+               pairwise: bool = False) -> list[dict]:
     return [probe_question(q, run_root, normalize=normalize, cluster=cluster,
-                           max_df=max_df)
+                           max_df=max_df, pairwise=pairwise)
             for q in data if q["question_type"] in PROBED_TYPES]
 
 
@@ -179,11 +232,31 @@ def main() -> None:
                     help="group keys by post-hoc token clustering (ceiling view)")
     ap.add_argument("--max-df", type=int, default=None,
                     help="cluster only on tokens shared by <= K keys")
+    ap.add_argument("--pairwise", action="store_true",
+                    help="group by the product attachment rule (replayed)")
+    ap.add_argument("--regroup", action="store_true",
+                    help="rewrite group fields in place for EVERY question "
+                         "store under --run-root (bench copies only)")
     args = ap.parse_args()
     data = json.loads(Path(args.data).read_text(encoding="utf-8"))
-    print(render(run_probes(data, Path(args.run_root).expanduser().resolve(),
+    run_root = Path(args.run_root).expanduser().resolve()
+    if args.regroup:
+        from silica.kernel.paths import index_dir_for
+
+        from tests.eval.longmemeval.runner import question_vault
+
+        n = 0
+        for inst in data:
+            p = (index_dir_for(str(question_vault(run_root, inst["question_id"])))
+                 / "episodic.json")
+            if p.is_file():
+                regroup_store(p)
+                n += 1
+        print(f"regrouped {n} stores under {run_root}")
+        return
+    print(render(run_probes(data, run_root,
                             normalize=args.normalize, cluster=args.cluster,
-                            max_df=args.max_df)))
+                            max_df=args.max_df, pairwise=args.pairwise)))
 
 
 if __name__ == "__main__":

@@ -238,3 +238,49 @@ def test_best_group_tie_breaks_to_smallest(tmp_path, monkeypatch):
     r = probe_question(inst, run_root)
     # Both keys cover s1; the smaller group must win the report.
     assert r["best_group"] == "user.a.b" and r["best_size"] == 1
+
+
+def test_pairwise_probe_reports_product_attachment_groups(tmp_path, monkeypatch):
+    from tests.eval.longmemeval.runner import question_vault
+
+    run_root = tmp_path / "run"
+    inst = _inst("q13", "knowledge-update", ["answer_s1", "answer_s2"])
+    _write_store(question_vault(run_root, "q13"), [
+        _fact("f_0001", "user.fitness.tournament.date", ["answer_s1"]),
+        _fact("f_0002", "user.tennis_tournament_date", ["answer_s2"]),
+        _fact("f_0003", "user.dog.name", ["other_session"]),
+    ], monkeypatch, tmp_path)
+
+    # Layer A alone cannot link the drifted pair...
+    assert probe_question(inst, run_root, normalize=True)["best_coverage"] == 1
+    # ...the product attachment rule can, and best_size stays honest.
+    r = probe_question(inst, run_root, pairwise=True)
+    assert r["best_coverage"] == 2
+    assert r["best_size"] == 2       # the dog fact does not ride along
+    assert r["groups"] == 1
+
+
+def test_regroup_store_writes_groups_in_place_and_is_idempotent(tmp_path, monkeypatch):
+    import silica.kernel.paths as paths_mod
+
+    from tests.eval.longmemeval.probes import regroup_store
+    from tests.eval.longmemeval.runner import question_vault
+
+    run_root = tmp_path / "run"
+    vault = question_vault(run_root, "q14")
+    _write_store(vault, [
+        _fact("f_0001", "user.fitness.tournament.date", ["answer_s1"]),
+        _fact("f_0002", "user.tennis_tournament_date", ["answer_s2"]),
+    ], monkeypatch, tmp_path)
+
+    p = paths_mod.index_dir_for(str(vault)) / "episodic.json"
+    regroup_store(p)
+    facts = {f["id"]: f for f in
+             json.loads(p.read_text(encoding="utf-8"))["facts"]}
+    assert facts["f_0001"]["group"] == "f_0001"
+    assert facts["f_0002"]["group"] == "f_0001"
+
+    regroup_store(p)   # idempotent: replay from None gives the same result
+    facts2 = {f["id"]: f for f in
+              json.loads(p.read_text(encoding="utf-8"))["facts"]}
+    assert facts2 == facts
