@@ -239,6 +239,15 @@ def handle_delegate(fsm: "InjectorFSM") -> None:
             fsm._progress_note(fsm._chunk_task_id("distill"), "distill", "failed", error=chunk_result["error"])
             raise RuntimeError(f"Distiller error on batch {idx}: {chunk_result['error']}")
 
+        # Episodic lane: route personal/ephemeral facts to the short-term
+        # store. Never fails the ingest (capture_from_distill swallows).
+        from silica.kernel.episodic import capture_from_distill
+        capture_from_distill(
+            chunk_result,
+            run_id=fsm.progress.run_id,
+            seen=fsm.progress.started_at[:10],
+        )
+
         distiller_path = fsm._make_tmp(chunk_result)
         fsm._chunk_ctx["distiller_output_path"] = distiller_path
         # Store chunk hash for knowledge-block write at VALIDATE

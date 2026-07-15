@@ -66,8 +66,15 @@ For every concept in every batch, decide exactly ONE action:
 
 The `action_hint` field is the Router's mechanical guess based on collision tiers. Treat it as a starting bias, NOT a binding constraint. You may overrule it based on the actual excerpt content — e.g. an `enrich`-hinted concept where the vault excerpt already contains all the inbox facts becomes a `skip`.
 
+## Ephemeral Facts (episodic routing)
+Facts about the user or their immediate context that are personal, time-bound, or thematically inert (names, dates, preferences, current status) do not belong in notes. Emit them in a top-level `"ephemerals"` array as `{"key": ..., "text": ...}` where `key` is a canonical `entity.attribute` slug — lowercase, dot-separated, `user.` prefix for facts about the user (e.g. `user.dog.name`) — and `text` is the fact verbatim in the source language. Do not invent facts; omit the field entirely when there is nothing ephemeral.
+
+When the excerpt is a dialogue, ALSO capture the specific facts the ASSISTANT stated that the user may later ask back (recommendations made, schedules/rotas, names, colors, prices, itineraries, generated content details). Key them under the subject entity with an `assistant.` prefix when the assistant is the source (e.g. `assistant.recipe.oven_temp`, `assistant.itinerary.day1.city`). A detail the assistant produced is as recallable as one the user said — losing it is distill-loss.
+
+Keep keys STABLE across sessions: reuse the same `entity.attribute` slug for the same real-world attribute (e.g. always `user.car.model`, never a synonym key later) — supersede chains only link on identical keys.
+
 ## Content Quality Requirements
-- All distilled facts MUST be written in {LANGUAGE}, formal/scholarly register.
+- All distilled facts MUST be written in {LANGUAGE}. Match the register to the source: scholarly for academic material, plain factual prose for conversational or personal material. Never inflate the register beyond the source.
 - Preserve every formula, equation, code block, and numeric value verbatim from the inbox excerpt.
 - Use bold for key terms when natural. Use Obsidian callout syntax (> [!TIP], > [!NOTE], > [!WARNING]) only when it materially aids the reader.
 - **Modular Atomicity**: if a single payload concept actually bundles multiple distinct sub-concepts (e.g. an inbox section titled "Reti Neurali" that defines both "Perceptron" and "Backpropagation" with separate formulas), split it into multiple update entries — one per atomic concept — with op `write` for each sub-concept that lacks its own vault note.
@@ -98,6 +105,7 @@ The `action_hint` field is the Router's mechanical guess based on collision tier
 - Every distilled fact MUST be traceable to inbox_excerpt content. Do not insert outside knowledge, plausible-sounding definitions, or web-recalled examples.
 - If inbox_excerpt is empty or uninformative for a concept, emit a `skip` with `"reason": "empty or uninformative excerpt"`. Do not fabricate content to fill it.
 - **Strictly Skip Noise/Typos**: If a concept name or its excerpt is a typo, OCR error, or semantic noise (e.g. "ALLORR", "ATEI"), you MUST NOT generate a write/patch note explaining the typo or stating that it is excluded. Instead, emit `"op": "skip"` with an appropriate `"reason"`. Do NOT write "meta-notes" or justification notes to disk.
+- **No descriptive bodies**: a note body must CARRY the facts, never DESCRIBE the source ("A conversation between user and assistant about X", "This section covers...", "A placeholder entry to anchor..."). If an excerpt yields no extractable facts beyond ephemerals, emit `"op": "skip"` (still emitting the ephemerals) — a descriptive summary or placeholder note is worse than no note.
 
 ## Coverage Guardrail
 Process EVERY concept in EVERY batch in the payload. Silent omission is a failure mode. Concepts you decide to skip MUST appear in the output with an explicit `"op": "skip"`, the correct `"source_basename"`, and a brief `"reason"` field — that way the Router can audit your coverage downstream.

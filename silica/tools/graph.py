@@ -257,70 +257,19 @@ def silica_backlink(new_titles: list[str], neighbourhood: list[str]) -> dict[str
 def _facade_search(text: str, k: int) -> dict[str, Any]:
     """Fused embeddings + co-occurrence search for a fresh text, then reranked.
 
-    Shared core of silica_semantic_search and silica_similar. Returns
-    ``{"results": [{path, name, score}, ...]}`` or ``{"error": ...}`` when no
-    index is available at all. The two legs abstain independently: an empty
-    embedding index (or an offline embedder) still serves co-occurrence results,
-    and vice versa — mirroring how autolink/collision consume the facade.
+    Shared core of silica_semantic_search and silica_similar, now routed
+    through perception.facade_retrieve — the same retrieval path perceive()
+    and the memory eval use. Returns ``{"results": [{path, name, score}, ...]}``
+    or ``{"error": ...}`` when no index is available at all. The two legs
+    abstain independently: an empty embedding index (or an offline embedder)
+    still serves co-occurrence results, and vice versa — mirroring how
+    autolink/collision consume the facade.
     """
-    from silica.agent.providers import get_embedder, get_reranker
-    from silica.config import CONFIG
-    from silica.kernel.cooccurrence import get_cooccur_store
-    from silica.kernel.embed import get_store
-    from silica.kernel.memory_lane import memory_stores, memory_vault
-    from silica.kernel.relatedness import related_notes_for_query
-    from silica.kernel.rerank import note_document, rerank_related
+    from silica.kernel.perception import facade_retrieve
 
-    embed_store = get_store()
-    try:
-        cooccur_store = get_cooccur_store(lang=CONFIG.cooccurrence_lang)
-        if len(cooccur_store) == 0:
-            cooccur_store = None
-    except Exception:
-        cooccur_store = None
-    mem_embed, mem_cooccur = memory_stores()  # ADR-0019 second recall lane
-
-    query_vec = None
-    if len(embed_store) > 0 or mem_embed is not None:
-        try:
-            query_vec = get_embedder(CONFIG).embed([text])[0]
-        except Exception:
-            query_vec = None  # embed leg abstains; co-occurrence may still carry
-
-    if query_vec is None and cooccur_store is None and mem_cooccur is None:
+    results, _query_vec = facade_retrieve(text, k=k)
+    if results is None:
         return {"error": "No index available. Run silica_embed_refresh or silica_cooccurrence_refresh first."}
-
-    reranker = get_reranker(CONFIG)
-    pool = max(k, 20) if reranker else k
-    results = related_notes_for_query(
-        query_vec=query_vec,
-        query_text=text,
-        embed_store=embed_store,
-        cooccur_store=cooccur_store,
-        memory_embed_store=mem_embed,
-        memory_cooccur_store=mem_cooccur,
-        k=pool,
-    )
-    if reranker:
-        mv = memory_vault()
-
-        def _doc(it):
-            # Memory-lane paths do not resolve through the active-vault driver;
-            # read them from the memory vault so rerank never buries the lane.
-            if getattr(it, "origin", "vault") != "memory":
-                return note_document(it.path)
-            if mv is None:
-                return ""
-            p = mv / (it.path if it.path.endswith(".md") else it.path + ".md")
-            try:
-                body = p.read_text(encoding="utf-8", errors="replace")
-            except OSError:
-                return ""
-            return f"{it.name}\n{body[:800]}".strip()
-
-        results = rerank_related(reranker, text, results, k=k, document_of=_doc)
-    else:
-        results = results[:k]
     return {
         "results": [
             {
@@ -354,6 +303,33 @@ def silica_semantic_search(query: str, k: int = 5) -> dict[str, Any]:
     silica_read_note before acting on them.
     """
     return {"query": query, **_facade_search(query, k=k)}
+
+
+class RecallArgs(BaseModel):
+    query: str = Field(description="The question or topic to recall memory for")
+    k: int = Field(default=15, description="Maximum number of notes contributing to the context")
+
+
+@tool(RecallArgs, cls="composed")
+def silica_recall(query: str, k: int = 15) -> dict[str, Any]:
+    """Assemble an answer-ready memory context for a question.
+
+    The perception the memory eval validates, as one call: fused retrieval
+    (embeddings + co-occurrence, cross-encoder reranked), each note contributing
+    its query-densest window under a rank/evidence/date header, with recalled
+    personal facts (episodic lane) first. Use this when ANSWERING a question
+    from vault memory INSTEAD of stitching search results and note reads
+    together yourself; for a bare ranked list use silica_semantic_search.
+    Returns {context, notes, facts}: answer from `context`; `notes` lists the
+    contributing paths (verify details with silica_read_note when needed).
+    """
+    import datetime
+
+    from silica.kernel.perception import perceive
+
+    p = perceive(query, now=datetime.date.today().isoformat(), k=k)
+    return {"query": query, "context": p.render(),
+            "notes": [b.path for b in p.blocks], "facts": len(p.fact_hits)}
 
 
 class SimilarArgs(BaseModel):

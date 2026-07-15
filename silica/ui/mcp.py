@@ -29,6 +29,7 @@ logger = logging.getLogger(__name__)
 # agent needs to use the vault as memory. Everything else (pipelines, batches,
 # taxonomy, graph exports) stays behind --all.
 CORE_TOOLS = (
+    "silica_recall",
     "silica_semantic_search",
     "silica_similar",
     "silica_related",

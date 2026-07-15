@@ -175,8 +175,15 @@ class BulkResult(BaseModel):
         return getattr(self, item, default)
 
 
+class EphemeralFact(BaseModel):
+    """Personal, time-bound fact routed to the episodic store, not to notes."""
+    key: str
+    text: str
+
+
 class DistillerOutput(BaseModel):
     main_thematic_axes: list[str] = Field(default_factory=list)
     updates: list[Op]
+    ephemerals: list[EphemeralFact] = Field(default_factory=list)
 
 

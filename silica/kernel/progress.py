@@ -462,6 +462,23 @@ class ProgressLedger:
         except Exception:
             pass
 
+        # Episodic lane: lazy TTL sweep (digest time is the only deleter) +
+        # nucleation suggestions. episodic.py is clock-free by rule; the
+        # product path supplies today's date here.
+        try:
+            import datetime as _dt
+
+            from silica.kernel.episodic import EpisodicStore
+            store = EpisodicStore()
+            store.sweep(_dt.date.today().isoformat())
+            for c in store.nucleation_candidates():
+                parts.append(
+                    f"episodic candidate: {c.key} ({c.run_count} runs since "
+                    f"{c.since}) -> consider promoting to a note"
+                )
+        except Exception:
+            pass
+
         return "\n".join(parts)
 
     # ------------------------------------------------------------------

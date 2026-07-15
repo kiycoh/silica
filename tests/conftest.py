@@ -55,6 +55,19 @@ def _isolate_cooccurrence_index(tmp_path, monkeypatch: pytest.MonkeyPatch) -> No
 
 
 @pytest.fixture(autouse=True)
+def _isolate_episodic_store(tmp_path, monkeypatch: pytest.MonkeyPatch) -> None:
+    """Redirect the default episodic store to a per-test tmp path.
+
+    progress.digest() sweeps the episodic store and the distill state captures
+    into it; without this, any test driving those paths would read/write the
+    developer's real ~/.silica/index/<digest>/episodic.json. Tests that need a
+    store pass an explicit path; this only redirects the default.
+    """
+    import silica.kernel.episodic as ep_mod
+    monkeypatch.setattr(ep_mod, "store_path", lambda: tmp_path / "episodic_default.json")
+
+
+@pytest.fixture(autouse=True)
 def _isolate_cluster_ctx_cache(tmp_path, monkeypatch: pytest.MonkeyPatch) -> None:
     """Redirect the vault-cluster ctx cache (Scaling E) to a per-test tmp path.
 

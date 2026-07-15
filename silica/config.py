@@ -119,6 +119,16 @@ class SilicaConfig:
         default_factory=lambda: os.getenv("SILICA_MEMORY_VAULT", "")
     )
 
+    # Episodic memory lane (kernel/episodic.py): wall-clock TTL in days from a
+    # fact chain's last_seen (0 = never expire), and the distinct-run count at
+    # which a key becomes a nucleation candidate in the digest.
+    episodic_ttl_days: int = field(
+        default_factory=lambda: int(os.getenv("SILICA_EPISODIC_TTL_DAYS", "90"))
+    )
+    episodic_nucleation_runs: int = field(
+        default_factory=lambda: int(os.getenv("SILICA_EPISODIC_NUCLEATION_RUNS", "3"))
+    )
+
     # Driver backend: "fs" (default, filesystem-native, headless), "cli" (Obsidian
     # desktop via CDP — adds version-history rollback and live metadata-cache reads),
     # or "ws" (the Obsidian bridge plugin over a loopback WebSocket, PROTOCOL.md).
