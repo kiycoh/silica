@@ -335,6 +335,18 @@ def _run_embedder_free_dedup_leg(fsm: "InjectorFSM", idx: int, chunk: dict) -> N
 
 
 def handle_collision(fsm: "InjectorFSM") -> None:
+    """COLLISION state entry: run the pass unless a prefetch already did."""
+    idx = fsm._current_chunk_idx
+    if fsm.context.pop(f"chunk_{idx}_collision_done", False):
+        fsm._progress_note(fsm._chunk_task_id("collision", idx), "collision", "done",
+                           output_ref="prefetched")
+        fsm._transition_success()
+        return
+    collision_pass(fsm, idx)
+    fsm._transition_success()
+
+
+def collision_pass(fsm: "InjectorFSM", idx: int) -> None:
     """Dedup/collision routing — Phase 5.
 
     Candidates come from the relatedness facade (RRF fusion of embeddings +
@@ -353,9 +365,11 @@ def handle_collision(fsm: "InjectorFSM") -> None:
 
     Best-effort: any failure (missing index, embedder down) silently skips
     the check and lets the chunk flow to DELEGATE unchanged.
+
+    Re-entrant: takes an explicit chunk index so the distill prefetcher can run
+    it early for lookahead chunks; performs no state transition.
     """
-    idx = fsm._current_chunk_idx
-    fsm._progress_note(fsm._chunk_task_id("collision"), "collision", "running")
+    fsm._progress_note(fsm._chunk_task_id("collision", idx), "collision", "running")
 
     τ_high = getattr(orch.CONFIG, "sim_threshold_high", 0.85)
     τ_low = getattr(orch.CONFIG, "sim_threshold_low", 0.65)
@@ -369,16 +383,14 @@ def handle_collision(fsm: "InjectorFSM") -> None:
             logger.info("COLLISION: embedding index empty — falling back to MinHash dedup leg")
             fsm._get_chunks_from_context_if_empty()
             _run_embedder_free_dedup_leg(fsm, idx, fsm._chunks[idx])
-            fsm._progress_note(fsm._chunk_task_id("collision"), "collision", "done")
-            fsm._transition_success()
+            fsm._progress_note(fsm._chunk_task_id("collision", idx), "collision", "done")
             return
         embedder = get_embedder(orch.CONFIG)
     except Exception as _e:
         logger.warning("COLLISION: embedder unavailable (%s) — falling back to MinHash dedup leg", _e)
         fsm._get_chunks_from_context_if_empty()
         _run_embedder_free_dedup_leg(fsm, idx, fsm._chunks[idx])
-        fsm._progress_note(fsm._chunk_task_id("collision"), "collision", "done")
-        fsm._transition_success()
+        fsm._progress_note(fsm._chunk_task_id("collision", idx), "collision", "done")
         return
 
     # Co-occurrence leg for the relatedness facade — embedder-free, best-effort:
@@ -656,7 +668,6 @@ def handle_collision(fsm: "InjectorFSM") -> None:
     }
 
     fsm._progress_note(
-        fsm._chunk_task_id("collision"), "collision", "done",
+        fsm._chunk_task_id("collision", idx), "collision", "done",
         output_ref=f"{len(pre_routed_ops)} patch-routed, {len(deferred_concepts)} deferred",
     )
-    fsm._transition_success()

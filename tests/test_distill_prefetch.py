@@ -47,3 +47,19 @@ def test_shutdown_cancels_pending():
 def test_config_knob_default():
     from silica.config import CONFIG
     assert getattr(CONFIG, "distill_concurrency", None) == 1
+
+
+def test_handle_collision_honors_prefetch_marker():
+    from types import SimpleNamespace
+    from unittest.mock import MagicMock, patch
+
+    from silica.router.states import collision as coll
+
+    fsm = MagicMock()
+    fsm._current_chunk_idx = 2
+    fsm.context = {"chunk_2_collision_done": True}
+    with patch.object(coll, "collision_pass") as cp:
+        coll.handle_collision(fsm)
+    cp.assert_not_called()
+    fsm._transition_success.assert_called_once()
+    assert "chunk_2_collision_done" not in fsm.context  # marker consumed

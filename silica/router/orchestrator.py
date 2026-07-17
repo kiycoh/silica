@@ -774,9 +774,10 @@ class InjectorFSM(BaseFSM[InjectorState]):
                 pass
         return os.path.splitext(os.path.basename(inbox_file))[0].lower()
 
-    def _chunk_task_id(self, cap: str) -> str:
-        """Return the task ID for the current chunk using the f{fi}_c{ci}_{cap} scheme."""
-        fi, ci = self._chunk_flat_to_fi_ci.get(self._current_chunk_idx, (0, self._current_chunk_idx))
+    def _chunk_task_id(self, cap: str, idx: int | None = None) -> str:
+        """Task ID for a chunk (default: current) using the f{fi}_c{ci}_{cap} scheme."""
+        flat = self._current_chunk_idx if idx is None else idx
+        fi, ci = self._chunk_flat_to_fi_ci.get(flat, (0, flat))
         return f"f{fi}_c{ci}_{cap}"
 
     def _contain_chunk_failure(self) -> None:
