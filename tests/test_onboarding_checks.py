@@ -1,7 +1,6 @@
 """Tests for silica.onboarding.checks — pure doctor diagnostics."""
 from __future__ import annotations
 
-from pathlib import Path
 
 import pytest
 
@@ -111,14 +110,6 @@ class TestCheckVault:
         assert "SILICA_VAULT" in r.hint
         assert "silica init" in r.hint
 
-    def test_unset_no_repo_cli_backend_warns(self, monkeypatch):
-        """cli + no vault_path and no repo → warn (cli can operate via vault_name)."""
-        import silica.onboarding.checks as checks
-        monkeypatch.setattr(checks.gitstate, "find_repo_root", lambda p: None)
-        r = checks.check_vault(_cfg(vault_path="", backend="cli"))
-        assert r.status == "warn"
-        assert "silica init" in r.hint
-
     def test_unset_with_repo_docs_silica_ok(self, monkeypatch, tmp_path):
         import silica.onboarding.checks as checks
         (tmp_path / "docs" / "silica").mkdir(parents=True)
@@ -143,56 +134,6 @@ class TestCheckVault:
             assert "writable" in r.detail
         finally:
             vault.chmod(0o700)
-
-
-class TestCheckObsidianBackend:
-    def test_fs_backend_ok_with_vault_path(self):
-        """fs + explicit vault_path → ok, filesystem-native."""
-        import silica.onboarding.checks as checks
-        r = checks.check_obsidian_backend(_cfg(backend="fs", vault_path="/some/vault"))
-        assert r.status == "ok"
-        assert "filesystem-native" in r.detail
-        assert "headless" in r.detail
-
-    def test_fs_backend_ok_no_vault(self):
-        """fs + no vault_path → still ok (vault config is check_vault's concern)."""
-        import silica.onboarding.checks as checks
-        r = checks.check_obsidian_backend(_cfg(backend="fs", vault_path=""))
-        assert r.status == "ok"
-        assert "filesystem-native" in r.detail
-
-    def test_fs_backend_ok_unconditional(self):
-        """fs backend always returns ok regardless of vault/repo state."""
-        import silica.onboarding.checks as checks
-        r = checks.check_obsidian_backend(_cfg(backend="fs"))
-        assert r.status == "ok"
-        assert "headless" in r.detail
-
-    def test_cli_backend_binary_missing_fails(self, monkeypatch):
-        import silica.onboarding.checks as checks
-        monkeypatch.setattr(checks.shutil, "which", lambda name: None)
-        r = checks.check_obsidian_backend(_cfg(backend="cli"))
-        assert r.status == "fail"
-        assert "SILICA_BACKEND=fs" in r.hint
-
-    def test_cli_backend_timeout_fails(self, monkeypatch):
-        import silica.onboarding.checks as checks
-        monkeypatch.setattr(checks.shutil, "which", lambda name: "/usr/bin/obsidian")
-
-        def fake_run(*args, **kwargs):
-            raise checks.subprocess.TimeoutExpired(cmd="obsidian", timeout=8)
-
-        monkeypatch.setattr(checks.subprocess, "run", fake_run)
-        r = checks.check_obsidian_backend(_cfg(backend="cli"))
-        assert r.status == "fail"
-        assert "desktop" in r.hint
-
-    def test_cli_backend_responds_ok(self, monkeypatch):
-        import silica.onboarding.checks as checks
-        monkeypatch.setattr(checks.shutil, "which", lambda name: "/usr/bin/obsidian")
-        monkeypatch.setattr(checks.subprocess, "run", lambda *a, **k: None)
-        r = checks.check_obsidian_backend(_cfg(backend="cli"))
-        assert r.status == "ok"
 
 
 class TestCheckEmbeddings:
@@ -439,7 +380,7 @@ class TestSampleVaultTextSpread:
 
 
 class TestAggregation:
-    def test_run_checks_returns_all_eight(self, monkeypatch, tmp_path):
+    def test_run_checks_returns_all_seven(self, monkeypatch, tmp_path):
         import silica.onboarding.checks as checks
 
         def boom(url, timeout):
@@ -450,7 +391,7 @@ class TestAggregation:
         results = checks.run_checks(_cfg(vault_path=str(tmp_path)))
         assert [r.name for r in results] == [
             "chat model", "chat endpoint", "vault", "vault manifest",
-            "language", "obsidian backend", "embeddings", "quarantine",
+            "language", "embeddings", "quarantine",
         ]
 
     def test_check_quarantine_surfaces_corrupt_files(self, tmp_path):

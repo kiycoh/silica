@@ -9,9 +9,8 @@ event-loop thread and `_rpc` marshals across via `run_coroutine_threadsafe` +
 `future.result(timeout)`. Each write is one RPC; the plugin holds the
 postcondition and its reply is the settle, so writes need no polling.
 
-Nothing from `cli_backend`'s CDP machinery is ported (no `_js_str`, no `_eval`,
-no subprocess, no settle waiters) — the plugin holds the postconditions and the
-reply *is* the settle (PROTOCOL.md §2.4).
+No CDP machinery here (no subprocess, no settle waiters) — the plugin holds
+the postconditions and the reply *is* the settle (PROTOCOL.md §2.4).
 """
 from __future__ import annotations
 
@@ -221,13 +220,12 @@ class ObsidianWSBackend(GraphIndexMixin):
         return NoteContent(
             ref=NoteRef(name=name, path=data.get("path", path)),
             content=data.get("content", ""),
-            size=data.get("size", 0),
         )
 
     def list_files(self, folder: str = "") -> list[NoteRef]:
         rows = self._rpc("list_files", folder=folder)
         # Obsidian indexes every .md including Silica's own vault-root output
-        # (log.md, GRAPH_REPORT.md). Exclude it here — the single seam fs/cli
+        # (log.md, GRAPH_REPORT.md). Exclude it here — the single seam fs/ws
         # already gate on — so it reaches no metric that reads list_files: the
         # graph node set (_ensure_graph), embed + cooccurrence builds, mentions.
         return [
@@ -283,8 +281,8 @@ class ObsidianWSBackend(GraphIndexMixin):
     def _ensure_graph(self) -> None:
         """Populate the in-memory index from `resolved_links` + `mention_index`.
 
-        Mirrors cli_backend._load_graph_from_obsidian: one bulk edge map and one
-        bulk mention map replace N per-note round-trips. `list_files` seeds the
+        One bulk edge map and one bulk mention map replace N per-note
+        round-trips. `list_files` seeds the
         node set so orphans (no links either way) are still present.
         """
         if self._is_graph_built:
@@ -437,7 +435,7 @@ class ObsidianWSBackend(GraphIndexMixin):
         return list(added)
 
     # ------------------------------------------------------------------
-    # In-memory index patching after writes (mirrors cli_backend)
+    # In-memory index patching after writes (mirrors fs_backend)
     # ------------------------------------------------------------------
 
     def _patch_graph_add(self, path: str, ref: NoteRef, content: str) -> None:
@@ -457,8 +455,8 @@ class ObsidianWSBackend(GraphIndexMixin):
             by_name.append(ref)
         self._add_link_edges(path, content)
         # Mention index: rescan this body against all known titles. Existing
-        # notes that mention the *new* title are not rescanned (same trade-off
-        # as cli_backend — the bulk build captured session-start state).
+        # notes that mention the *new* title are not rescanned (deliberate
+        # trade-off — the bulk build captured session-start state).
         for paths_set in self._mention_index.values():
             paths_set.discard(path)
         trie = build_title_trie(self._notes_by_name)
@@ -523,9 +521,6 @@ class ObsidianWSBackend(GraphIndexMixin):
 
     def restore(self, txn: Txn) -> None:
         """Rollback: overwrite snapshotted bodies back, delete created notes."""
-        if txn.versions:
-            logger.warning("WS backend has no note history; ignoring versions, "
-                           "restoring from captured content instead.")
         for inv in txn.inverses:
             kind = getattr(inv, "kind", None)
             prior = getattr(inv, "prior_content", None)

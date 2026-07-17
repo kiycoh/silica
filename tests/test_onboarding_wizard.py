@@ -60,7 +60,6 @@ class TestRunWizard:
         answers = [
             str(vault),    # vault path (no repo detected)
             "",            # force language? → Enter, follow source
-            "",            # backend → default fs
             "",            # provider → default lmstudio
             "test-model",  # model id
             "skip",        # embeddings → skip
@@ -73,7 +72,6 @@ class TestRunWizard:
         assert "# keep me" in content
         assert "FOO=bar" in content
         assert f"SILICA_VAULT={vault}" in content
-        assert "SILICA_BACKEND=fs" in content
         assert "SILICA_PROVIDER=lmstudio" in content
         assert "SILICA_MODEL=test-model" in content
         assert "OPENROUTER_API_KEY" not in content
@@ -87,7 +85,7 @@ class TestRunWizard:
 
         monkeypatch.setattr(wizard.gitstate, "find_repo_root", lambda p: None)
 
-        answers = [str(vault), "", "", "", "test-model", "skip", "n"]
+        answers = [str(vault), "", "", "test-model", "skip", "n"]
         rc = wizard.run_wizard(input_fn=self._scripted(answers), env_path=env_path)
 
         assert rc == 1
@@ -106,7 +104,6 @@ class TestRunWizard:
         answers = [
             "",            # repo mode? → default y
             "",            # force language? → Enter, follow source
-            "",            # backend → fs
             "",            # provider → lmstudio
             "test-model",  # model
             "skip",        # embeddings
@@ -129,7 +126,6 @@ class TestRunWizard:
         answers = [
             "",            # repo mode? → default y
             "",            # force language? → Enter, follow source
-            "",            # backend → fs
             "",            # provider → lmstudio
             "test-model",  # model
             "skip",        # embeddings
@@ -156,7 +152,6 @@ class TestRunWizard:
         answers = [
             "",            # repo mode? → default y
             "Italian",     # force language? → explicit answer
-            "",            # backend → fs
             "",            # provider → lmstudio
             "test-model",  # model
             "skip",        # embeddings
@@ -179,7 +174,7 @@ class TestRunWizard:
         monkeypatch.setattr(wizard, "run_checks", lambda cfg: [])
         monkeypatch.setattr(wizard.os, "environ", dict(os.environ))
 
-        answers = ["", "Italian", "", "", "test-model", "skip", ""]
+        answers = ["", "Italian", "", "test-model", "skip", ""]
         wizard.run_wizard(input_fn=self._scripted(answers), env_path=env_path)
 
         manifest = load_manifest(str(tmp_path / "docs" / "silica"))
@@ -195,7 +190,7 @@ class TestRunWizard:
         monkeypatch.setattr(wizard, "run_checks", lambda cfg: [])
         monkeypatch.setattr(wizard.os, "environ", dict(os.environ))
 
-        answers = ["", "", "", "", "test-model", "skip", ""]
+        answers = ["", "", "", "test-model", "skip", ""]
         wizard.run_wizard(input_fn=self._scripted(answers), env_path=env_path)
 
         manifest = load_manifest(str(tmp_path / "docs" / "silica"))
@@ -212,7 +207,7 @@ class TestRunWizard:
         monkeypatch.setattr(wizard, "run_checks", lambda cfg: [])
         monkeypatch.setattr(wizard.os, "environ", dict(os.environ))
 
-        answers = ["", "", "", "test-model", "skip", ""]
+        answers = ["", "", "test-model", "skip", ""]
         rc = wizard.run_wizard(input_fn=self._scripted(answers), env_path=env_path)
 
         assert rc == 0
@@ -250,7 +245,6 @@ class TestRunWizard:
         answers = [
             str(vault),    # vault path (no repo detected)
             "Italian",     # force language? → explicit answer
-            "",            # backend → fs
             "",            # provider → lmstudio
             "test-model",  # model
             "skip",        # embeddings
@@ -288,7 +282,6 @@ class TestRunWizard:
         answers = [
             str(vault),    # vault path (no repo detected)
             "",            # force language? → Enter, follow source
-            "",            # backend → fs
             "",            # provider → lmstudio
             "test-model",  # model
             "skip",        # embeddings
@@ -315,7 +308,6 @@ class TestRunWizard:
         answers = [
             "",            # repo mode? → default y
             "yes",         # force language? → looks like consent, not a language
-            "",            # backend → fs
             "",            # provider → lmstudio
             "test-model",  # model
             "skip",        # embeddings
@@ -345,7 +337,6 @@ class TestRunWizard:
         answers = [
             "",                   # repo mode? → default y
             "English: British",  # force language? → colon would corrupt raw YAML
-            "",                   # backend → fs
             "",                   # provider → lmstudio
             "test-model",         # model
             "skip",               # embeddings
@@ -378,7 +369,6 @@ class TestRunWizard:
         answers = [
             str(vault),    # vault path (no repo detected)
             # NO language answer — vault.yaml already exists, must not be asked
-            "",            # backend → fs
             "",            # provider → lmstudio
             "test-model",  # model
             "skip",        # embeddings

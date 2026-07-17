@@ -28,12 +28,7 @@ import from silica.kernel.graph_report only.
 """
 from __future__ import annotations
 
-from silica.kernel.graph_report.compute import _empty_report, compute_report
-from silica.kernel.graph_report.cooccur_delta import _compute_cooccur_delta
-from silica.kernel.graph_report.embed_signals import (
-    _compute_duplicate_pairs,
-    _compute_missing_links,
-)
+from silica.kernel.graph_report.compute import compute_report
 from silica.kernel.graph_report.models import (
     AutolinkCandidate,
     BridgeStat,

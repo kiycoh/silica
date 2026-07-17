@@ -37,21 +37,8 @@ PROTOCOL_VERSION = 1
 
 # websockets' 1 MiB default max_size would sever the connection on any note
 # body over ~1 MB (rpc read replies, bulk-nucleate creates). 32 MiB matches the
-# no-ceiling behavior of the cli/fs backends. Mirrored in ws_backend.py.
+# no-ceiling behavior of the fs backend. Mirrored in ws_backend.py.
 MAX_FRAME = 2**25
-
-
-def _fallback_backend() -> str:
-    """Local driver while no plugin is attached: headless fs.
-
-    The fallback fires only when no plugin is connected. In that state the sole
-    case where cli would differ from fs is "Obsidian open but plugin not dialed
-    in" — and there cli drives Obsidian over CDP subprocess, the exact fragile
-    path this bridge replaces. The right answer there is "connect the plugin,"
-    not silently auto-select cli. So fs, unconditionally. cli stays reachable
-    via explicit SILICA_BACKEND=cli until the plugin is proven in real Obsidian.
-    """
-    return "fs"
 
 
 def _origin_ok(origin: str) -> bool:
@@ -257,7 +244,7 @@ async def maybe_start_bridge(chat_enabled: bool = True) -> BridgeServer | None:
     if not bridge_supported():
         return None
     if CONFIG.backend == "ws":
-        CONFIG.backend = _fallback_backend()  # ws installs on dial-in, not via config
+        CONFIG.backend = "fs"  # ws installs on dial-in, not via config; headless fs until the plugin attaches
     server = BridgeServer(chat_enabled=chat_enabled)
     await server.start()
     return server
@@ -270,7 +257,7 @@ def start_bridge_thread() -> BridgeServer | None:
     if not bridge_supported():
         return None
     if CONFIG.backend == "ws":
-        CONFIG.backend = _fallback_backend()
+        CONFIG.backend = "fs"
     server = BridgeServer(chat_enabled=False)
     loop = asyncio.new_event_loop()
     threading.Thread(target=loop.run_forever, name="silica-bridge", daemon=True).start()
@@ -305,7 +292,7 @@ def run_connect() -> int:
         print("silica connect needs a vault: set SILICA_VAULT or run inside a repo with .silica/")
         return 1
     if CONFIG.backend == "ws":
-        CONFIG.backend = _fallback_backend()  # ws installs on dial-in, not via config
+        CONFIG.backend = "fs"  # ws installs on dial-in, not via config
     logger.info("bridge: driver fallback while no plugin is attached: %r", CONFIG.backend)
 
     async def _main() -> None:

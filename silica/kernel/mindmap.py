@@ -360,28 +360,6 @@ def mapview_to_canvas(mv: MapView) -> dict:
     return {"nodes": nodes, "edges": edges}
 
 
-def mapview_to_gui(mv: MapView) -> dict:
-    """Serialize a MapView to the GUI payload — the SAME positions as the canvas."""
-    nodes = []
-    for n in mv.nodes:
-        x, y = _xy(n)
-        nodes.append({
-            "id": n.id,
-            "title": n.title,
-            "x": x,
-            "y": y,
-            "community": n.community,
-            "hop": n.hop,
-            "subtitle": n.subtitle,
-            "color": node_color(n.community),
-        })
-    edges = [
-        {"src": e.src, "dst": e.dst, "kind": e.kind, "weight": e.weight}
-        for e in mv.edges
-    ]
-    return {"root": mv.root, "nodes": nodes, "edges": edges}
-
-
 # ---------------------------------------------------------------------------
 # Static SVG render (GUI surface; native, zero deps, positions precomputed)
 # ---------------------------------------------------------------------------

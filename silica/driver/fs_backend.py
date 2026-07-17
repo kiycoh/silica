@@ -396,7 +396,6 @@ class ObsidianFSBackend(GraphIndexMixin):
         return NoteContent(
             ref=NoteRef(name=name, path=rel_path),
             content=content,
-            size=len(content)
         )
 
     def mtime_of(self, ref: NoteRef | str) -> float | None:
@@ -836,20 +835,13 @@ class ObsidianFSBackend(GraphIndexMixin):
         ops works via `created_paths` (delete the created notes).
         """
         txn_id = f"txn_fs_{int(time.time())}"
-        return Txn(id=txn_id, refs=refs, versions={})
+        return Txn(id=txn_id, refs=refs)
 
     def restore(self, txn: Txn) -> None:
         """Rollback a transaction.
 
-        - versions: no-op in FS backend (no history tracking).
         - created_paths: deletes newly-created notes to undo write ops.
         """
-        if txn.versions:
-            logger.warning(
-                "FS backend cannot restore note history (versions). "
-                "Patch rollback is a no-op. Consider using the CLI backend for full rollback support."
-            )
-
         for path in txn.created_paths:
             try:
                 full_path = self.vault_path / path

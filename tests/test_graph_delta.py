@@ -13,6 +13,7 @@ from __future__ import annotations
 import pytest
 
 from silica.kernel.cooccurrence import CooccurStore, build_contribution
+from silica.kernel.graph_report.cooccur_delta import _compute_cooccur_delta
 from silica.kernel.graph_report import (
     AutolinkCandidate,
     IntegrationDeficit,
@@ -21,7 +22,6 @@ from silica.kernel.graph_report import (
     VaultReport,
     compute_report,
     to_markdown,
-    _compute_cooccur_delta,
 )
 
 
@@ -399,7 +399,8 @@ def convergence_store(tmp_path):
 
 def test_autolink_convergence_counts_hubs_and_drives_ranking(convergence_store):
     import networkx as nx
-    from silica.kernel.graph_report import NodeStat, _compute_cooccur_delta
+    from silica.kernel.graph_report import NodeStat
+    from silica.kernel.graph_report.cooccur_delta import _compute_cooccur_delta
 
     ids = ["H1", "H2", "H3", "X", "Y"]
     G = nx.Graph()

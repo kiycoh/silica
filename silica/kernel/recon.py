@@ -17,7 +17,6 @@ MIN_LEN, MAX_LEN = 3, 50
 TITLE_BONUS = 50
 TOP_K_HITS = 3
 
-_FRONTMATTER_RE = re.compile(r"\A---\n.*?\n---\n?", re.DOTALL)
 LEADING_GARBAGE = re.compile(r'^[\W_]+')
 
 # Leading IT/EN articles (and articulated prepositions) that YAKE/markup
@@ -52,10 +51,6 @@ def is_concept(s: str, overlay: DomainOverlay | None = None) -> bool:
     if not re.search(r'[A-Za-zÀ-ÿ]{3,}', s):
         return False
     return not any(p.search(s) for p in overlay.noise_patterns)
-
-
-def _strip_frontmatter(content: str) -> str:
-    return _FRONTMATTER_RE.sub('', content, count=1)
 
 
 # Math stripping migrated to the kernel/text seam (C1): see text.strip_math.

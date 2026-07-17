@@ -83,8 +83,6 @@ def emit_batch_event(event: RenderEvent) -> None:
             pass
 
 
-_MAX_RESULT_CHARS = 600
-_MAX_RESULT_LINES = 12
 _REASONING_MAX_LINES = 20
 _RESULT_HEAD_LINES = 3
 _RESULT_LINE_CHARS = 120
@@ -104,18 +102,6 @@ def _redact(text: str) -> str | None:
     except Exception as exc:
         logger.debug("Redaction failed (omitting detail): %s", exc)
         return None
-
-
-def _cap(text: str, max_chars: int = _MAX_RESULT_CHARS, max_lines: int = _MAX_RESULT_LINES) -> str:
-    lines = text.splitlines()
-    if len(lines) > max_lines:
-        omitted = len(lines) - max_lines
-        tail = "\n".join(lines[-max_lines:])
-        text = f"[… {omitted} lines omitted]\n{tail}"
-    if len(text) > max_chars:
-        omitted_chars = len(text) - max_chars
-        text = f"[… {omitted_chars} chars omitted]\n{text[-max_chars:]}"
-    return text
 
 
 def _head_cap(text: str, max_lines: int = _REASONING_MAX_LINES) -> str:

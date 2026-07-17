@@ -13,15 +13,13 @@ from prompt_toolkit.formatted_text import HTML
 from prompt_toolkit.styles import Style
 
 from silica.config import CONFIG
-from silica.ui.commands import command_names, COMMANDS
+from silica.ui.commands import COMMANDS
 
 
 def _vault_display() -> str:
     if CONFIG.vault_path:
         return Path(CONFIG.vault_path).name
     return CONFIG.vault_name or "—"
-
-SLASH_COMMANDS = list(command_names())
 
 _METER_WIDTH = 10
 

@@ -50,14 +50,6 @@ GROUP_STYLE: dict[str, str] = {
 }
 
 
-def aligned_columns(rows: list[tuple[str, str]], indent: int = 4) -> list[str]:
-    if not rows:
-        return []
-    col0_width = max(len(r[0]) for r in rows)
-    prefix = " " * indent
-    return [f"{prefix}{left:<{col0_width}}   {right}" for left, right in rows]
-
-
 def command_table(
     commands: list,
     *,

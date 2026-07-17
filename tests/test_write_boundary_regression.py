@@ -9,11 +9,7 @@ Two independent defects compounded:
    content; NUL in a subprocess argv raises "embedded null byte", and the
    same fallback persisted the NULs into the vault.
 """
-import pytest
-from unittest.mock import patch
-
 from silica.kernel.ops import Op, OpType
-from silica.driver.cli_backend import ObsidianCLIBackend
 
 
 def test_op_path_gets_md_extension():
@@ -41,22 +37,3 @@ def test_op_content_nul_bytes_stripped():
 def test_op_snippet_nul_bytes_stripped():
     op = Op(op=OpType.patch, path="N.md", snippet="a\x00b", heading="H", source_basename="s.pdf")
     assert op.snippet == "ab"
-
-
-def test_overwrite_missing_note_raises_instead_of_phantom_write():
-    backend = ObsidianCLIBackend(vault_name="v")
-    with patch.object(backend, "_eval", side_effect=RuntimeError("Error: not found")), \
-         patch.object(backend, "_write_large_content") as wlc:
-        with pytest.raises(RuntimeError, match="non-existent"):
-            backend.overwrite("A/B.md", "content")
-        wlc.assert_not_called()
-
-
-def test_append_missing_note_raises_instead_of_phantom_write():
-    backend = ObsidianCLIBackend(vault_name="v")
-    with patch.object(backend, "_eval", side_effect=RuntimeError("Error: not found")), \
-         patch.object(backend, "_resolve_path", return_value="A/B.md"), \
-         patch.object(backend, "_write_large_content") as wlc:
-        with pytest.raises(RuntimeError, match="non-existent"):
-            backend.append("A/B.md", "content")
-        wlc.assert_not_called()

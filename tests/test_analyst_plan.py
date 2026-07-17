@@ -7,13 +7,13 @@ from __future__ import annotations
 
 import pytest
 
+from silica.kernel.graph_report.compute import _empty_report
 from silica.kernel.graph_report import (
     BridgeStat,
     ClusterStat,
     MissingLink,
     NodeStat,
     VaultReport,
-    _empty_report,
 )
 from silica.kernel.analyst_plan import (
     AnalystPlan,

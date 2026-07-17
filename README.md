@@ -257,7 +257,7 @@ That's the whole idea. You don't have to believe anything about the model, only 
 | `SILICA_PROVIDER` | `lmstudio` or `openrouter` |
 | `SILICA_VAULT` | Vault path. Obsidian vault used verbatim; any other path is repo mode → `docs/silica/` |
 | `SILICA_EMBEDDING_MODEL` | Embedding model for semantic tasks (default `qwen3-embedding-4b`) |
-| `SILICA_BACKEND` | `fs` (default, headless) or `cli` (live Obsidian via CDP) |
+| `SILICA_BACKEND` | `fs` (default, headless); the Obsidian plugin bridge installs `ws` live at dial-in |
 | `SILICA_GIT_COMMIT` | Git safety net for writes (`off`, `auto`) |
 | `SILICA_TAVILY_API_KEY` | Enables `/web-search` |
 | `SILICA_WORKER_MODEL` | Sub-agent worker model (for dedup/refinement operations) |

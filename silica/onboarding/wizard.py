@@ -17,7 +17,7 @@ from silica.ui.banner import print_banner
 from silica.ui.console import CONSOLE
 from silica.ui.style import GLYPHS
 
-_STEPS = 5
+_STEPS = 4
 
 _KEY_RE = re.compile(r"^\s*(?:export\s+)?([A-Za-z_][A-Za-z0-9_]*)\s*=")
 
@@ -176,21 +176,8 @@ def _run_wizard_inner(
                     encoding="utf-8",
                 )
 
-    # 2. Backend — fs is the default (filesystem-native, headless, no Obsidian required).
-    # cli is an opt-in enhancement: adds version-history rollback, live metadata-cache
-    # reads, and user link-format preference in autolink (requires Obsidian desktop).
-    _section("gear", "Backend", 2)
-    backend = ""
-    while backend not in ("cli", "fs"):
-        backend = _ask(
-            input_fn,
-            "Backend — fs (default, headless) or cli (Obsidian desktop, adds rollback + live cache)",
-            "fs",
-        )
-    updates["SILICA_BACKEND"] = backend
-
-    # 3. Chat provider — only the two PROVIDER_PRESETS entries exist.
-    _section("model", "Chat provider", 3)
+    # 2. Chat provider — only the two PROVIDER_PRESETS entries exist.
+    _section("model", "Chat provider", 2)
     provider = ""
     while provider not in ("lmstudio", "openrouter"):
         provider = _ask(
@@ -215,8 +202,8 @@ def _run_wizard_inner(
             model = _ask(input_fn, "Model id as loaded in LM Studio (e.g. qwen3-30b)")
     updates["SILICA_MODEL"] = model
 
-    # 4. Embeddings — optional; skipping degrades gracefully.
-    _section("think", "Embeddings", 4)
+    # 3. Embeddings — optional; skipping degrades gracefully.
+    _section("think", "Embeddings", 3)
     defaults = SilicaConfig()
     answer = _ask(
         input_fn,
@@ -239,8 +226,8 @@ def _run_wizard_inner(
             input_fn, "Embedding API key", defaults.embedding_api_key
         )
 
-    # 5. Confirm and write.
-    _section("arrow", "Write configuration", 5)
+    # 4. Confirm and write.
+    _section("arrow", "Write configuration", 4)
     CONSOLE.print(
         f"  {len(updates)} key(s) → [bold]{env_path}[/]: "
         f"[dim]{', '.join(sorted(updates))}[/]"
@@ -253,7 +240,7 @@ def _run_wizard_inner(
     env_path.write_text(merge_env(existing, updates))
     CONSOLE.print(f"  [green]{GLYPHS['ok']} Wrote {env_path}[/]")
 
-    # 6. Doctor checks against the values just chosen.
+    # 5. Doctor checks against the values just chosen.
     CONSOLE.print()
     CONSOLE.print(f"  [bold brand.cyan]{GLYPHS['run']} Checking your setup[/]")
     os.environ.update(updates)

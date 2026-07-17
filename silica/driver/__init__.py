@@ -6,9 +6,8 @@
 The backend is selected at import time based on CONFIG.backend (from config.py),
 which reads the SILICA_BACKEND environment variable:
   - "fs" (default): ObsidianFSBackend — direct filesystem access, headless, no Obsidian required
-  - "cli": ObsidianCLIBackend — wraps the official Obsidian CLI (adds version-history
-    rollback for patch ops, live metadata-cache reads, and user link-format preference
-    in autolink; requires the Obsidian desktop app to be running)
+  - "ws": ObsidianWSBackend — installed live by `silica connect` when the Obsidian
+    plugin dials in (never built from config)
 
 Usage:
     from silica.driver import DRIVER
@@ -37,21 +36,22 @@ def _create_driver() -> ObsidianDriver:
     """Create the appropriate driver backend based on config."""
     from silica.config import CONFIG
 
-    if CONFIG.backend == "cli":
-        from silica.driver.cli_backend import ObsidianCLIBackend
-
-        return ObsidianCLIBackend(vault_name=CONFIG.vault_name)
-    elif CONFIG.backend == "fs":
+    if CONFIG.backend == "fs":
         from silica.driver.fs_backend import ObsidianFSBackend
 
         return ObsidianFSBackend(vault_path=CONFIG.vault_path)
     elif CONFIG.backend == "ws":
         raise ValueError(
             "backend='ws' is installed by `silica connect` when the plugin dials in; "
-            "run `silica connect`, or set SILICA_BACKEND to fs/cli"
+            "run `silica connect`, or leave SILICA_BACKEND=fs"
         )
     else:
-        raise ValueError(f"Unknown backend: {CONFIG.backend!r}")
+        raise ValueError(
+            f"Unknown backend: {CONFIG.backend!r}"
+            + (" (the cli backend was removed — set SILICA_BACKEND=fs; "
+               "`silica connect` provides the live-Obsidian ws backend)"
+               if CONFIG.backend == "cli" else "")
+        )
 
 
 # Lazy initialization — created on first access, protected by lock for thread safety

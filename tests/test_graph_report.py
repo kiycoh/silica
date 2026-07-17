@@ -9,13 +9,13 @@ import dataclasses
 
 import pytest
 
+from silica.kernel.graph_report.compute import _empty_report
 from silica.kernel.graph_report import (
     BridgeStat,
     ClusterStat,
     MissingLink,
     NodeStat,
     VaultReport,
-    _empty_report,
     compute_report,
     to_digest,
     to_facts,
@@ -365,7 +365,8 @@ def test_missing_links_common_neighbors_boosts_ranking(monkeypatch):
         bridges=[], orphans=[], dangling=[], clusters=[],
     )
 
-    links = gr._compute_missing_links(report, G, tau=0.5, k=10)
+    from silica.kernel.graph_report.embed_signals import _compute_missing_links
+    links = _compute_missing_links(report, G, tau=0.5, k=10)
     by_target = {l.target: l for l in links}
 
     assert "A" in by_target and "B" in by_target
@@ -401,7 +402,8 @@ def test_duplicate_pairs_split_confirmed_vs_borderline(monkeypatch):
         generated_at="x", scope="", totals={},
         god_nodes=[], bridges=[], orphans=[], dangling=[], clusters=[],
     )
-    borderline, confirmed = gr._compute_duplicate_pairs(report)
+    from silica.kernel.graph_report.embed_signals import _compute_duplicate_pairs
+    borderline, confirmed = _compute_duplicate_pairs(report)
 
     assert [(d.source, d.target) for d in confirmed] == [("a", "b")]
     assert [(d.source, d.target) for d in borderline] == [("c", "d")]

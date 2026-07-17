@@ -105,7 +105,7 @@ class SilicaConfig:
         default_factory=lambda: os.getenv("SILICA_VAULT", "")
     )
 
-    # Obsidian CLI vault name (for multi-vault setups).
+    # Obsidian vault display name (prompt fallback when no vault path is set).
     vault_name: str = field(
         default_factory=lambda: os.getenv("SILICA_VAULT_NAME", "")
     )
@@ -129,9 +129,9 @@ class SilicaConfig:
         default_factory=lambda: int(os.getenv("SILICA_EPISODIC_NUCLEATION_RUNS", "3"))
     )
 
-    # Driver backend: "fs" (default, filesystem-native, headless), "cli" (Obsidian
-    # desktop via CDP — adds version-history rollback and live metadata-cache reads),
-    # or "ws" (the Obsidian bridge plugin over a loopback WebSocket, PROTOCOL.md).
+    # Driver backend: "fs" (default, filesystem-native, headless) or "ws" (the
+    # Obsidian bridge plugin over a loopback WebSocket, PROTOCOL.md — installed
+    # live by `silica connect`, never set here).
     backend: str = field(
         default_factory=lambda: os.getenv("SILICA_BACKEND", "fs")
     )
@@ -218,10 +218,13 @@ class SilicaConfig:
         default_factory=lambda: os.getenv("SILICA_EMBEDDING_API_KEY", "lm-studio")
     )
 
-    # Cross-encoder reranker (optional, OFF by default). When both base_url and
-    # model are set, the relatedness retrieval sites rerank the fused candidate
-    # pool with a served /rerank endpoint (llama.cpp --rerank, Infinity, Jina,
-    # Cohere). An empty base_url or model leaves the reranker disabled (no-op).
+    # Cross-encoder reranker: the precision pass over the fused candidate pool.
+    # Leave these EMPTY for the normal path — `pip install silica[rerank]` then
+    # runs the cross-encoder in-process (see providers.LocalReranker), because no
+    # local LLM runtime (LM Studio, Ollama) can serve one. Set both to point at a
+    # served /rerank endpoint instead (llama.cpp --reranking, Infinity, Jina,
+    # Cohere); that wins over the in-process path. With neither the extra nor an
+    # endpoint, rerank is disabled (a no-op that preserves the pool's order).
     rerank_base_url: str = field(
         default_factory=lambda: os.getenv("SILICA_RERANK_BASE_URL", "")
     )
@@ -269,14 +272,6 @@ class SilicaConfig:
     # Salience gate (Phase 2.05): concept kept only if cosine(concept, doc_centroid) >= threshold
     sim_threshold_theme: float = field(
         default_factory=lambda: float(os.getenv("SILICA_SIM_THRESHOLD_THEME", "0.35"))
-    )
-
-    # Hard timeout (seconds) for each individual Obsidian CLI subprocess call.
-    # The CDP bridge should respond in < 1 s normally; 8 s gives headroom for
-    # slow machines and large notes without allowing 88-second hangs.
-    # Override via SILICA_OBSIDIAN_CLI_TIMEOUT if you hit false-positive timeouts.
-    obsidian_cli_timeout: float = field(
-        default_factory=lambda: float(os.getenv("SILICA_OBSIDIAN_CLI_TIMEOUT", "8"))
     )
 
     domain: str | None = field(

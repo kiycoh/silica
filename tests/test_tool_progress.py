@@ -2,7 +2,7 @@ from unittest.mock import patch, MagicMock, PropertyMock
 import pytest
 from silica.config import CONFIG
 from silica.cli import _handle_slash_command
-from silica.ui.renderer import make_progress_callback, _redact, _cap
+from silica.ui.renderer import make_progress_callback, _redact
 from silica.ui.console import CONSOLE
 from silica.agent.events import ToolStartEvent, ToolCompleteEvent, ToolErrorEvent
 from silica.agent.loop import run_agent
@@ -57,20 +57,6 @@ def test_redact_patterns():
     
     # Fail-closed test
     assert _redact(None) is None
-
-
-def test_cap_behavior():
-    # Text with many lines
-    long_lines = "\n".join(f"line {i}" for i in range(20))
-    capped_lines = _cap(long_lines, max_lines=5)
-    assert "omitted" in capped_lines
-    assert capped_lines.count("\n") <= 6
-    
-    # Text with many characters
-    long_chars = "a" * 1000
-    capped_chars = _cap(long_chars, max_chars=100)
-    assert "omitted" in capped_chars
-    assert len(capped_chars) <= 150
 
 
 @patch("silica.agent.loop.call_llm")

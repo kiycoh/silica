@@ -97,25 +97,6 @@ def test_stopwords_for_norwegian_nonempty():
     assert language.stopwords_for("norwegian")
 
 
-def test_stopwords_for_package_missing_falls_back_to_bundled_en_it(monkeypatch):
-    monkeypatch.setattr(language, "_stopwords_cache", {})
-    monkeypatch.setattr(language, "get_stop_words", None)
-    assert language.stopwords_for("english"), "english fallback must be non-empty when package missing"
-    assert language.stopwords_for("italian"), "italian fallback must be non-empty when package missing"
-    assert language.stopwords_for("french") == frozenset(), "no bundled fallback for french"
-
-
-def test_stopwords_for_package_broken_falls_back_to_bundled_en_it(monkeypatch):
-    def _raise(iso):
-        raise language.StopWordError(iso)
-
-    monkeypatch.setattr(language, "_stopwords_cache", {})
-    monkeypatch.setattr(language, "get_stop_words", _raise)
-    assert language.stopwords_for("english"), "english fallback must be non-empty when package raises"
-    assert language.stopwords_for("italian"), "italian fallback must be non-empty when package raises"
-    assert language.stopwords_for("spanish") == frozenset(), "no bundled fallback for spanish"
-
-
 def test_stopwords_for_is_cached(monkeypatch):
     monkeypatch.setattr(language, "_stopwords_cache", {})
     calls = []
@@ -129,16 +110,6 @@ def test_stopwords_for_is_cached(monkeypatch):
     language.stopwords_for("english")
     assert calls == ["en"], "second call must hit the cache, not the package"
 
-
-def test_detect_degrades_to_en_it_when_package_broken(monkeypatch):
-    monkeypatch.setattr(language, "_stopwords_cache", {})
-    monkeypatch.setattr(language, "get_stop_words", None)
-    # French sample should no longer detect as french once the package is
-    # unavailable — candidates degrade to english/italian only.
-    assert language.detect(FR) in ("english", "italian")
-
-
-# --- display_name -----------------------------------------------------------
 
 def test_display_name_italian():
     assert language.display_name("italian") == "Italian"

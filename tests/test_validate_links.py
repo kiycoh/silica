@@ -21,7 +21,7 @@ def _note(name: str, path: str) -> NoteRef:
 
 
 def _existing_read(path: str) -> NoteContent:
-    return NoteContent(ref=NoteRef(name=path, path=path), content="# Note", size=6)
+    return NoteContent(ref=NoteRef(name=path, path=path), content="# Note")
 
 
 # ---------------------------------------------------------------------------

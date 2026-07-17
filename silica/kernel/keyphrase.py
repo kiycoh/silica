@@ -38,7 +38,11 @@ from silica.kernel.text import clean_body
 # (~40 tok/concept for a paper, ~8 for a dense distilled lecture note), so one
 # linear ratio is a compromise; a density-aware cutoff (cosine elbow) would serve
 # short dense notes better — deferred until the linear clamp proves insufficient.
-TOKENS_PER_CONCEPT = 20   # ponytail: linear clamp; tune via the eval
+# ponytail: linear clamp, tuned once on a 3-doc eval (paper + lectures). No
+# current harness exercises this path (golden/LME/MuSiQue never call recon),
+# so "tune via the eval" is not actionable today — recalibrate only if ingest
+# capture quality regresses, with an ingest-extraction eval built for it.
+TOKENS_PER_CONCEPT = 20
 MIN_CONCEPTS = 1          # a note may map to a single concept — no forced padding
 MAX_CONCEPTS = 40
 YAKE_POOL = 100           # candidates YAKE proposes (also the rerank pool)
@@ -62,15 +66,12 @@ class ConceptCandidate:
 def _yake_leg(text: str, overlay: DomainOverlay, lang: str) -> list[ConceptCandidate] | None:
     """YAKE-ranked candidates (best-first), filtered through the overlay.
 
-    Abstains (None) if YAKE is unimportable, its constructor rejects `lang`
-    (e.g. a future yake release raising on an unsupported/unknown language —
-    the pin is unbounded above), or extraction yields nothing. YAKE returns
-    (phrase, cost) ascending (lower cost = more relevant), already deduplicated.
+    Abstains (None) if YAKE's constructor rejects `lang` (e.g. a future yake
+    release raising on an unsupported/unknown language — the pin is unbounded
+    above), or extraction yields nothing. YAKE returns (phrase, cost)
+    ascending (lower cost = more relevant), already deduplicated.
     """
-    try:
-        import yake
-    except ImportError:
-        return None
+    import yake
 
     iso = language.SNOWBALL_TO_ISO.get(lang.lower(), lang.lower()[:2] or "en")
     try:

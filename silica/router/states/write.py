@@ -103,7 +103,6 @@ def handle_snapshot(fsm: "InjectorFSM") -> None:
         fsm._txn = Txn(
             id=res["txn_id"],
             refs=refs,
-            versions=res.get("versions", {}),
             created_paths=res.get("created_paths", []),
             inverses=inv
         )

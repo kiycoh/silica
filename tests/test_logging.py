@@ -3,10 +3,9 @@ import pytest
 from silica.ui.logging import (
     AnsiHumanFriendlyFormatter,
     HumanFriendlyFormatter,
-    FRIENDLY_TEMPLATES,
 )
 
-def test_human_friendly_formatter_mapped_debug():
+def test_human_friendly_formatter_debug():
     formatter = HumanFriendlyFormatter()
     record = logging.LogRecord(
         name="silica.tools",
@@ -19,9 +18,9 @@ def test_human_friendly_formatter_mapped_debug():
     )
     formatted = formatter.format(record)
     assert "⚙" in formatted
-    assert "Tool registered in system: test_tool (implemented by class TestClass)" in formatted
+    assert "Registered tool: test_tool (class=TestClass)" in formatted
 
-def test_human_friendly_formatter_mapped_info():
+def test_human_friendly_formatter_info():
     formatter = HumanFriendlyFormatter()
     record = logging.LogRecord(
         name="silica.router.orchestrator",
@@ -34,9 +33,9 @@ def test_human_friendly_formatter_mapped_info():
     )
     formatted = formatter.format(record)
     assert "ℹ" in formatted
-    assert "Restored file note.md to version 3" in formatted
+    assert "Restored note.md to version 3" in formatted
 
-def test_human_friendly_formatter_mapped_warning():
+def test_human_friendly_formatter_warning():
     formatter = HumanFriendlyFormatter()
     record = logging.LogRecord(
         name="silica.driver.fs_backend",
@@ -50,9 +49,9 @@ def test_human_friendly_formatter_mapped_warning():
     formatted = formatter.format(record)
     assert "⚠" in formatted
     assert "⚠️" not in formatted  # single-width glyph, no emoji variation selector
-    assert "Failed to index note my_note.md: Permission Denied" in formatted
+    assert "Failed to index my_note.md: Permission Denied" in formatted
 
-def test_human_friendly_formatter_mapped_error():
+def test_human_friendly_formatter_error():
     formatter = HumanFriendlyFormatter()
     record = logging.LogRecord(
         name="silica.router.orchestrator",
@@ -65,7 +64,7 @@ def test_human_friendly_formatter_mapped_error():
     )
     formatted = formatter.format(record)
     assert "✗" in formatted
-    assert "Annulling changes (rollback) failed: Connection timed out" in formatted
+    assert "Rollback failed: Connection timed out" in formatted
 
 def test_human_friendly_formatter_unmapped_fallback():
     formatter = HumanFriendlyFormatter()
@@ -97,24 +96,6 @@ def test_human_friendly_formatter_non_silica_fallback():
     assert "⚙" in formatted
     assert "Starting new HTTPS connection (1): api.openai.com" in formatted
 
-def test_human_friendly_formatter_no_history_matches_real_call_site():
-    # The only call site (cli_backend.restore_version) logs with TWO
-    # placeholders: "No history available for %s: %s" — the template key
-    # must match it or the mapping is dead code.
-    formatter = HumanFriendlyFormatter()
-    record = logging.LogRecord(
-        name="silica.driver.cli_backend",
-        level=logging.WARNING,
-        pathname="cli_backend.py",
-        lineno=1076,
-        msg="No history available for %s: %s",
-        args=("note.md", "boom"),
-        exc_info=None,
-    )
-    formatted = formatter.format(record)
-    assert "No version history available for note.md (reason: boom)" in formatted
-
-
 def test_human_friendly_formatter_bad_args_graceful_fallback():
     formatter = HumanFriendlyFormatter()
     # Template expects 2 args but we only pass 1 (which causes format to fail)
@@ -140,7 +121,7 @@ def _dedup_record():
         level=logging.INFO,
         pathname="dedup.py",
         lineno=1,
-        msg="Restored %s to version %d",  # mapped template, to prove reword survives
+        msg="Restored %s to version %d",
         args=("note.md", 2),
         exc_info=None,
     )
@@ -153,7 +134,7 @@ def test_ansi_formatter_consumes_markup_and_rewords():
     to stderr, which prints the literal rich tags.)
     """
     out = AnsiHumanFriendlyFormatter().format(_dedup_record())
-    assert "Restored file note.md to version 2" in out
+    assert "Restored note.md to version 2" in out
     assert "[muted]" not in out and "[/muted]" not in out and "[/]" not in out
 
 
@@ -177,7 +158,7 @@ def test_ansi_formatter_emits_ansi_on_a_terminal(monkeypatch):
     monkeypatch.setattr("silica.ui.logging.CONSOLE", _PipedConsole())
     plain = AnsiHumanFriendlyFormatter().format(_dedup_record())
     assert "\x1b[" not in plain
-    assert "Restored file note.md to version 2" in plain
+    assert "Restored note.md to version 2" in plain
 
 
 def test_ansi_formatter_applies_repr_highlighting(monkeypatch):

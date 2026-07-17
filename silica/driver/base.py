@@ -5,9 +5,9 @@
 
 From SILICA.md §3 L0:
   Adapter typed by DOMAIN, not by transport. Everything else talks to the
-  Driver, never to disk or CLI directly. Two interchangeable backends:
-  - cli: wraps the official Obsidian CLI (requires desktop app >= 1.12.7)
-  - fs:  direct filesystem + index (derived from Hermes scripts)
+  Driver, never to disk directly. Two interchangeable backends:
+  - fs: direct filesystem + index (derived from Hermes scripts)
+  - ws: the Obsidian bridge plugin, installed live by `silica connect`
 
 This module defines the Protocol (interface), domain types, and the
 global DRIVER instance selected at runtime.
@@ -28,7 +28,6 @@ from typing import Any, Protocol, runtime_checkable
 # title matches when it occurs as a substring STARTING at a word boundary — so
 # morphology/suffix recall is kept (title "Network" still matches body word
 # "networks") while mid-word false positives ("ros" inside "across") are dropped.
-# cli_backend mirrors this exact trie walk in JS for its bulk build.
 
 _TITLE = "\x00"  # trie terminal key (marks a complete title; cannot occur in text)
 
@@ -78,10 +77,6 @@ def mentions_in(content_lower: str, trie: dict) -> set[str]:
 # Domain types & Exceptions
 # ---------------------------------------------------------------------------
 
-class SettleTimeout(RuntimeError):
-    """Raised when a write operation fails to settle within the timeout."""
-
-
 @dataclass(frozen=True)
 class NoteRef:
     """Reference to a note in the vault."""
@@ -94,7 +89,6 @@ class NoteContent:
     """Full content of a note."""
     ref: NoteRef
     content: str
-    size: int = 0
 
 
 @dataclass
@@ -103,7 +97,6 @@ class Hit:
     ref: NoteRef
     line: int = 0
     snippet: str = ""
-    score: float = 0.0
 
 
 @dataclass
@@ -112,7 +105,6 @@ class Heading:
     level: int          # 1-6
     text: str
     position: int = 0   # char offset
-    children: list[Heading] = field(default_factory=list)
 
 
 @dataclass(frozen=True)
@@ -120,7 +112,6 @@ class Link:
     """A link between notes."""
     source: NoteRef
     target: str         # wikilink target (may be unresolved)
-    display: str = ""   # display text if aliased
 
 
 @dataclass
@@ -136,16 +127,13 @@ class GraphSnapshot:
 class Txn:
     """Transaction handle for snapshot/rollback.
 
-    Three rollback strategies (C3 / ADR-009):
+    Rollback strategies (C3 / ADR-009):
       - inverses:       authoritative list of InverseOp — consumed by silica_restore and
                         the ROLLBACK state. Single source of truth.
-      - versions:       derived from inverses (restore_version entries); kept for
-                        DRIVER.restore() compatibility until S3.3 unifies on inverses.
       - created_paths:  derived from inverses (delete_created entries); same reason.
     """
     id: str
     refs: list[NoteRef] = field(default_factory=list)
-    versions: dict[str, int] = field(default_factory=dict)   # path -> version number
     created_paths: list[str] = field(default_factory=list)   # paths created by write ops
     inverses: list = field(default_factory=list)              # list[InverseOp] — real field, not dynamic attr
 
@@ -171,7 +159,7 @@ class Txn:
 # ---------------------------------------------------------------------------
 
 class GraphIndexMixin:
-    """Graph-index helpers shared by the fs and cli backends.
+    """Graph-index helpers shared by the fs and ws backends.
 
     Subclasses build the in-memory index in ``_ensure_graph()`` and expose
     the ``_notes``/``_mention_index``/``_unresolved_links``/``_graph``

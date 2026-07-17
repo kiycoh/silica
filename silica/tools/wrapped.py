@@ -147,17 +147,13 @@ def build_txn(ops_data: list[Op] | list[dict]) -> Txn:
                 prior_content=prior_content
             ))
 
-    # Snapshot versions as a best-effort hint (used by backends that support
-    # history:restore; the primary rollback path is prior_content above).
+    # Txn id comes from the driver; rollback is content-based (prior_content).
     base_txn = DRIVER.snapshot_versions(patch_refs)
 
     for ref in patch_refs:
-        key = ref.path or ref.name
-        version = base_txn.versions.get(key)
         inverses.append(InverseOp(
             kind=InverseOpKind.restore_version,
             path=ref.path,
-            version=version,
             prior_content=prior_contents.get(ref.path or ref.name),
         ))
 
@@ -168,7 +164,6 @@ def build_txn(ops_data: list[Op] | list[dict]) -> Txn:
     txn = Txn(
         id=base_txn.id,
         refs=patch_refs,
-        versions=base_txn.versions,
         created_paths=created_paths,
         inverses=inverses,
     )
@@ -207,7 +202,6 @@ def silica_snapshot(ops_json_path: str) -> dict[str, Any]:
         "success": True,
         "txn_id": txn.id,
         "refs": [r.name for r in txn.refs],
-        "versions": txn.versions,
         "created_paths": txn.created_paths,
         "inverses": txn.inverses_serialized,
         # _txn_obj intentionally absent — orchestrator calls build_txn() directly
@@ -254,23 +248,11 @@ def silica_restore(txn_id: str, inverses: list[dict]) -> dict[str, Any]:
 
             elif inv.kind == InverseOpKind.restore_version:
                 if inv.prior_content is not None:
-                    # Primary path: overwrite with captured content (reliable across
-                    # backends; avoids Obsidian history position ambiguity).
+                    # Overwrite with captured content (reliable across backends).
                     DRIVER.overwrite(path, inv.prior_content)
                     applied.append(f"restored_content:{path}")
-                elif inv.version is not None:
-                    # Fallback: history:restore (only if prior_content unavailable)
-                    name = path.rsplit("/", 1)[-1].removesuffix(".md")
-                    ref = NoteRef(name=name, path=path)
-                    DRIVER.restore(Txn(
-                        id=txn_id,
-                        refs=[ref],
-                        versions={path: inv.version},
-                        created_paths=[],
-                    ))
-                    applied.append(f"restored_version:{path}@{inv.version}")
                 else:
-                    logger.warning("restore_version: no prior_content or version for %s — skipped", path)
+                    logger.warning("restore_version: no prior_content for %s — skipped", path)
 
             elif inv.kind == InverseOpKind.recreate_deleted:
                 if inv.prior_content is not None:

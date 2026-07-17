@@ -167,7 +167,7 @@ class _CorruptingDriverWithVersions(_CorruptingDriver):
 
     def snapshot_versions(self, refs):
         from silica.driver.base import Txn
-        return Txn(id="test-txn", versions={})
+        return Txn(id="test-txn")
 
 
 class _DeadChannelDriver:

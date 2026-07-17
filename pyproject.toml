@@ -20,7 +20,7 @@ dependencies = [
   "pyyaml>=6.0",
   "python-dotenv>=1.0",
   "rich",
-  "networkx",
+  "networkx>=3",
   "markdown-it-py",
   "orjson",
   "openai",

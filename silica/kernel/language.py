@@ -15,11 +15,7 @@ from __future__ import annotations
 
 import re
 
-try:
-    from stop_words import StopWordError, get_stop_words
-except ImportError:  # pragma: no cover - stop_words is a declared dependency
-    get_stop_words = None  # type: ignore[assignment]
-    StopWordError = Exception  # type: ignore[assignment,misc]
+from stop_words import StopWordError, get_stop_words
 
 
 # Snowball-style language names ("italian") -> ISO codes ("it"). This module
@@ -35,32 +31,6 @@ SNOWBALL_TO_ISO: dict[str, str] = {
     "russian": "ru", "spanish": "es", "swedish": "sv",
 }
 
-# Bundled hand-rolled fallback stopwords, used only when the stop_words
-# package is unavailable or raises StopWordError. Verbatim copy of the data
-# at silica/kernel/cooccurrence.py's `_STOPWORDS`.
-_FALLBACK_STOPWORDS: dict[str, frozenset[str]] = {
-    "english": frozenset({
-        "the", "a", "an", "and", "or", "but", "if", "of", "to", "in", "on",
-        "at", "by", "for", "with", "as", "is", "are", "was", "were", "be",
-        "been", "being", "it", "its", "this", "that", "these", "those", "he",
-        "she", "they", "we", "you", "his", "her", "their", "our", "your",
-        "from", "into", "than", "then", "so", "not", "no", "do", "does", "did",
-        "has", "have", "had", "can", "could", "would", "should", "will", "shall",
-        "may", "might", "must", "about", "which", "who", "whom", "what", "when",
-        "where", "how", "why", "all", "any", "some", "such", "more", "most",
-    }),
-    "italian": frozenset({
-        "di", "da", "in", "con", "su", "per", "tra", "fra", "a", "e", "o", "ma",
-        "se", "anche", "come", "il", "lo", "la", "i", "gli", "le", "un", "uno",
-        "una", "del", "dello", "della", "dei", "degli", "delle", "al", "allo",
-        "alla", "ai", "agli", "alle", "dal", "dalla", "nel", "nella", "sul",
-        "sulla", "che", "chi", "cui", "non", "ne", "ci", "vi", "si", "ho", "hai",
-        "ha", "abbiamo", "hanno", "sono", "sei", "siamo", "siete", "era", "essere",
-        "questo", "questa", "questi", "queste", "quello", "quella", "suo", "sua",
-        "loro", "nostro", "vostro", "mio", "tuo",
-    }),
-}
-
 _TOKEN_RE = re.compile(r"[a-zA-ZÀ-ÿ]+")
 
 # Loaded stopword sets, cached per Snowball language name.
@@ -71,10 +41,8 @@ def stopwords_for(lang: str) -> frozenset[str]:
     """Return the stopword set for `lang`, lazily loaded and cached.
 
     Loads from the `stop_words` package (get_stop_words(iso)) for any
-    Snowball language in SNOWBALL_TO_ISO. Falls back to the bundled
-    hand-rolled en/it sets if the package is missing (ImportError at module
-    load, surfaced here as `get_stop_words is None`) or raises
-    StopWordError. Unknown languages -> empty frozenset (filters nothing).
+    Snowball language in SNOWBALL_TO_ISO. Unknown languages, or a
+    StopWordError from the package -> empty frozenset (filters nothing).
     Never raises.
     """
     if lang in _stopwords_cache:
@@ -83,13 +51,11 @@ def stopwords_for(lang: str) -> frozenset[str]:
     iso = SNOWBALL_TO_ISO.get(lang)
     if iso is None:
         result = frozenset()
-    elif get_stop_words is None:
-        result = _FALLBACK_STOPWORDS.get(lang, frozenset())
     else:
         try:
             result = frozenset(get_stop_words(iso))
         except StopWordError:
-            result = _FALLBACK_STOPWORDS.get(lang, frozenset())
+            result = frozenset()
 
     _stopwords_cache[lang] = result
     return result

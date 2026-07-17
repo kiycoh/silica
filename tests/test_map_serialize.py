@@ -6,12 +6,10 @@ import json
 import networkx as nx
 
 from silica.kernel.mindmap import (
-    BOX_W,
     MapMaterials,
     _resolve_in,
     build_mapview,
     mapview_to_canvas,
-    mapview_to_gui,
     render_map_svg,
 )
 
@@ -59,17 +57,6 @@ def test_latent_edges_muted_with_tilde_label():
         else:
             assert edge["label"] == ""
             assert edge["color"] != _MUTED
-
-
-def test_gui_payload_same_positions_as_canvas():
-    mv = build_mapview("root.md", _materials([("lat.md", "Lat", 0.9)]))
-    canvas = {n["id"]: n for n in mapview_to_canvas(mv)["nodes"]}
-    gui = {n["id"]: n for n in mapview_to_gui(mv)["nodes"]}
-    assert canvas.keys() == gui.keys()
-    half = round(BOX_W / 2)
-    for nid, cn in canvas.items():
-        # canvas stores top-left; gui stores centre — same map, offset by half-box.
-        assert gui[nid]["x"] == cn["x"] + half
 
 
 def test_cap_respected():

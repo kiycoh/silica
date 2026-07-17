@@ -190,7 +190,6 @@ def test_read_note_round_trips_content_over_the_socket(ws_backend, synthetic_vau
     """A `read` RPC returns the note's verbatim content, correlated by id."""
     nc = ws_backend.read_note(NoteRef(name="Concepts", path="Hub/Concepts.md"))
     assert "central hub" in nc.content
-    assert nc.size == len(nc.content)
 
 
 def test_read_note_by_bare_path_appends_md(ws_backend):

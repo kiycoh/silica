@@ -10,8 +10,6 @@ presence and HTTP reachability only.
 from __future__ import annotations
 
 import os
-import shutil
-import subprocess
 from dataclasses import dataclass
 from pathlib import Path
 from typing import Literal
@@ -93,50 +91,11 @@ def check_vault(config: SilicaConfig) -> CheckResult:
         vault_dir = Path(root) if is_obsidian_vault(root) else repo_mode_vault(root)
         if vault_dir.is_dir():
             return CheckResult("vault", "ok", f"repo mode → {vault_dir}")
-    if config.backend == "fs":
-        return CheckResult(
-            "vault", "fail",
-            "SILICA_VAULT not set and no docs/silica/ in this repo",
-            "set SILICA_VAULT=/path/to/vault in .env, or run `silica init`",
-        )
     return CheckResult(
-        "vault", "warn",
+        "vault", "fail",
         "SILICA_VAULT not set and no docs/silica/ in this repo",
-        "run `silica init`",
+        "set SILICA_VAULT=/path/to/vault in .env, or run `silica init`",
     )
-
-
-def check_obsidian_backend(config: SilicaConfig) -> CheckResult:
-    if config.backend == "fs":
-        # fs is the default: filesystem-native, no Obsidian required.
-        # Vault configuration is check_vault's responsibility — report ok here.
-        return CheckResult(
-            "obsidian backend", "ok",
-            "filesystem-native (headless — Obsidian not required)",
-        )
-    # backend == "cli": Obsidian desktop is an opt-in enhancement.
-    if shutil.which("obsidian") is None:
-        return CheckResult(
-            "obsidian backend", "fail",
-            "`obsidian` binary not on PATH",
-            "install the Obsidian CLI, or set SILICA_BACKEND=fs for headless use",
-        )
-    # Responsiveness probe: the CLI is a CDP bridge — when the desktop app is
-    # closed it hangs instead of erroring, so only a timeout (or a missing
-    # binary) counts as failure; any completed process means the bridge is up.
-    try:
-        subprocess.run(
-            ["obsidian", "version"],
-            capture_output=True, text=True,
-            timeout=config.obsidian_cli_timeout,
-        )
-    except subprocess.TimeoutExpired:
-        return CheckResult(
-            "obsidian backend", "fail",
-            f"`obsidian` did not respond within {config.obsidian_cli_timeout:.0f}s",
-            "open the Obsidian desktop app, or set SILICA_BACKEND=fs",
-        )
-    return CheckResult("obsidian backend", "ok", "`obsidian` CLI responds")
 
 
 def check_embeddings(config: SilicaConfig) -> CheckResult:
@@ -353,7 +312,6 @@ def run_checks(config: SilicaConfig) -> list[CheckResult]:
         check_vault(config),
         check_manifest(config),
         check_language(config),
-        check_obsidian_backend(config),
         check_embeddings(config),
         check_quarantine(config),
     ]

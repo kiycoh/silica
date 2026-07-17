@@ -13,7 +13,6 @@ class Command:
     usage: str
     summary: str
     examples: tuple[str, ...] = ()
-    home_pin: bool = False
 
 
 COMMANDS: tuple[Command, ...] = (
@@ -28,7 +27,6 @@ COMMANDS: tuple[Command, ...] = (
             "/report --embeddings",
             "/report --top-k=15 --embeddings",
         ),
-        home_pin=True,
     ),
     Command(
         name="/nucleate",
@@ -40,7 +38,6 @@ COMMANDS: tuple[Command, ...] = (
             "/nucleate silica/cli.py",
             "/nucleate paper.pdf --target=Concepts/AI",
         ),
-        home_pin=True,
     ),
     Command(
         name="/convert",
@@ -73,7 +70,6 @@ COMMANDS: tuple[Command, ...] = (
             "/organize --file=taxonomy.yaml --apply",
             "/organize --scope=Inbox",
         ),
-        home_pin=True,
     ),
     # Reader — agent-directed, strictly read-only (output in chat, never writes)
     Command(
@@ -160,7 +156,6 @@ COMMANDS: tuple[Command, ...] = (
         group="direct",
         usage="<query> [--k=N]",
         summary="semantic search",
-        home_pin=True,
     ),
     Command(
         name="/undo",
@@ -197,14 +192,12 @@ COMMANDS: tuple[Command, ...] = (
         group="direct",
         usage="[folder]",
         summary="enrich and normalize notes (sub-agent)",
-        home_pin=True,
     ),
     Command(
         name="/enrich",
         group="direct",
         usage="[folder]",
         summary="enrich note semantics (sub-agent)",
-        home_pin=True,
     ),
     Command(
         name="/stale",

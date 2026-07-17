@@ -298,15 +298,6 @@ def test_plugin_drop_falls_back_to_local_backend(bridge_env):
 # Startup fallback + CLI wiring
 # ---------------------------------------------------------------------------
 
-def test_ws_config_resolves_to_local_fallback():
-    import silica.ui.connect as connect_mod
-
-    # fs unconditionally: cli-as-fallback would silently auto-select the fragile
-    # CDP backend for the one niche (Obsidian open, plugin not dialed in) the
-    # bridge exists to replace. cli stays reachable via explicit SILICA_BACKEND.
-    assert connect_mod._fallback_backend() == "fs"
-
-
 def test_cli_dispatches_silica_connect(monkeypatch):
     import silica.cli as cli
     import silica.ui.connect as connect_mod

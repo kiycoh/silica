@@ -45,10 +45,6 @@ def _community_color(i: int) -> str:
     r, g, b = colorsys.hls_to_rgb(hue / 360.0, 0.56, 0.72)
     return "#%02x%02x%02x" % (round(r * 255), round(g * 255), round(b * 255))
 
-
-# Precomputed prefix for the legend default + tests; live code calls _community_color.
-COMMUNITY_COLORS = [_community_color(i) for i in range(12)]
-
 _EDGE_COLOR_EXTRACTED = "#8f8f8f"   # phosphor gray — resolved links
 _EDGE_COLOR_AMBIGUOUS = "#ff2a2a"   # hazard red — unresolved (warning semantics)
 _NODE_DEFAULT_COLOR = {"background": "#5c5c5c", "border": "#8f8f8f",
@@ -200,16 +196,11 @@ def detect_communities(nodes: list[dict], edges: list[dict]) -> list[Community]:
     """Louvain community detection on EXTRACTED edges, in-place.
 
     Assigns node["group"] (int) and node["color"]. Ghost nodes keep group == -1.
-    Degrades gracefully if networkx < 3.0.
 
     Returns a list of Community objects with topic labels where available.
     """
-    try:
-        import networkx as nx
-        from networkx.algorithms.community import louvain_communities
-    except (ImportError, AttributeError):
-        logger.warning("graph_export: louvain_communities unavailable (networkx >= 3.0 required). Skipped.")
-        return []
+    import networkx as nx
+    from networkx.algorithms.community import louvain_communities
 
     real_ids = {n["id"] for n in nodes if n.get("type") != "ghost"}
     G = nx.Graph()
@@ -469,12 +460,9 @@ def canvas_metrics(nodes: list[dict], edges: list[dict], k: int = 400) -> tuple[
     offline export doesn't drag in the full report machinery; the betweenness
     formula matches compute_report's so the two agree.
     ponytail: betweenness is O(V·E), sampled at k pivots to stay bounded on big
-    vaults (k==n on small ones is exact). Empty/0 if networkx is unavailable.
+    vaults (k==n on small ones is exact).
     """
-    try:
-        import networkx as nx
-    except ImportError:
-        return {}, 0
+    import networkx as nx
 
     real = {n["id"] for n in nodes if n.get("type") != "ghost"}
     G = nx.Graph()

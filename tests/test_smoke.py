@@ -28,7 +28,7 @@ def test_config_loads():
     """Config singleton should load without errors."""
     from silica.config import CONFIG
     # model may legitimately be empty (fail-fast default — see test_config_failfast)
-    assert CONFIG.backend in ("cli", "fs")
+    assert CONFIG.backend == "fs"
 
 
 def test_driver_base_types():
@@ -38,8 +38,8 @@ def test_driver_base_types():
     )
     ref = NoteRef(name="Test", path="test.md")
     assert ref.name == "Test"
-    content = NoteContent(ref=ref, content="hello", size=5)
-    assert content.size == 5
+    content = NoteContent(ref=ref, content="hello")
+    assert content.content == "hello"
 
 
 def test_verbose_config_and_logging():
@@ -176,27 +176,6 @@ def test_inbox_blacklisting_and_external_reads(tmp_path):
         CONFIG.vault_path = orig_vault
 
 
-def test_cli_backend_error_handling():
-    """Verify that ObsidianCLIBackend raises RuntimeError when the CLI returns an error message on stdout."""
-    from silica.driver.cli_backend import ObsidianCLIBackend
-    from unittest.mock import patch, MagicMock
-    import pytest
-
-    cli = ObsidianCLIBackend(vault_name="TestVault")
-
-    # Mock subprocess.run to return the error message on stdout with exit code 0
-    mock_response = MagicMock()
-    mock_response.stdout = 'Error: File "Deep Learning/Backpropagation.md" not found.'
-    mock_response.stderr = ''
-    mock_response.returncode = 0
-
-    with patch("subprocess.run", return_value=mock_response) as mock_run:
-        with pytest.raises(RuntimeError) as exc_info:
-            cli.read_note("Deep Learning/Backpropagation.md")
-        assert "not found" in str(exc_info.value)
-        mock_run.assert_called_once()
-
-
 def test_silica_restore_idempotent():
     """Verify that silica_restore ignores file-not-found errors during delete_created rollback operations."""
     from silica.tools.wrapped import silica_restore
@@ -252,93 +231,9 @@ def test_list_inbox_files_fs(tmp_path):
         CONFIG.vault_path = orig_vault
 
 
-def test_cli_backend_ref_arg_resolution():
-    """Verify that cli backend _ref_arg generates path= when string has slashes or .md suffix."""
-    from silica.driver.cli_backend import ObsidianCLIBackend
-    from silica.driver.base import NoteRef
-    
-    backend = ObsidianCLIBackend()
-    assert backend._ref_arg("Inbox/lecture_15.md") == "path=Inbox/lecture_15.md"
-    assert backend._ref_arg("Deep Learning/lecture.md") == "path=Deep Learning/lecture.md"
-    assert backend._ref_arg("lecture.md") == "path=lecture.md"
-    assert backend._ref_arg("lecture") == "file=lecture"
-    assert backend._ref_arg(NoteRef(name="lecture", path="Folder/lecture.md")) == "path=Folder/lecture.md"
-    assert backend._ref_arg(NoteRef(name="lecture")) == "file=lecture"
-
-
-def test_cli_backend_sentinel_handling():
-    """Verify that cli backend _run_cli raises RuntimeError on No matches found."""
-    from silica.driver.cli_backend import ObsidianCLIBackend
-    from unittest.mock import patch, MagicMock
-    import pytest
-    
-    cli = ObsidianCLIBackend()
-    
-    # 1. Test _run_cli raises error on "No matches found."
-    mock_resp = MagicMock()
-    mock_resp.stdout = "No matches found."
-    mock_resp.stderr = ""
-    mock_resp.returncode = 0
-    
-    with patch("subprocess.run", return_value=mock_resp):
-        with pytest.raises(RuntimeError) as exc:
-            cli._run_cli("read", "file=SomeNote")
-        assert "No matches found." in str(exc.value)
-
-    # 2. Test _run_json handles "No matches found." gracefully
-    with patch("subprocess.run", return_value=mock_resp):
-        res = cli._run_json("search:context", "query=something")
-        assert res == []
-
-    # 3. "No frontmatter found." (properties on a bare note) is an expected
-    #    empty result, not a JSON parse failure — no warning must be logged
-    mock_nofm = MagicMock()
-    mock_nofm.stdout = "No frontmatter found."
-    mock_nofm.stderr = ""
-    mock_nofm.returncode = 0
-    import logging
-    with patch("subprocess.run", return_value=mock_nofm):
-        with patch.object(logging.getLogger("silica.driver.cli_backend"), "warning") as warn:
-            assert cli._run_json("properties", "file=SomeNote") == []
-            assert cli.props_of("SomeNote") == {}
-            warn.assert_not_called()
-
-
 def test_new_tools_registration():
     """Verify that silica_exists and silica_inbox_ls are registered in the registry."""
     from silica.tools import TOOLS
     import silica.tools.atomic  # noqa: F401
     assert "silica_exists" in TOOLS
     assert "silica_inbox_ls" in TOOLS
-
-
-def test_cli_backend_logging_with_shlex(caplog):
-    """Verify that ObsidianCLIBackend._run_cli logs the command with shlex.join (proper quoting)."""
-    import logging
-    from silica.driver.cli_backend import ObsidianCLIBackend
-    from unittest.mock import patch, MagicMock
-
-    cli = ObsidianCLIBackend(vault_name="test vault")
-    
-    mock_resp = MagicMock()
-    mock_resp.stdout = "some output"
-    mock_resp.stderr = ""
-    mock_resp.returncode = 0
-    
-    logger = logging.getLogger("silica.driver.cli_backend")
-    
-    with patch("subprocess.run", return_value=mock_resp):
-        with caplog.at_level(logging.DEBUG, logger="silica.driver.cli_backend"):
-            cli._run_cli("properties", "path=Reti Internet/User Datagram Protocol (UDP).md")
-            
-            log_records = [rec.message for rec in caplog.records if "CLI exec:" in rec.message]
-            assert log_records
-            assert "obsidian" in log_records[0]
-            assert "'vault=test vault'" in log_records[0]
-            assert "'path=Reti Internet/User Datagram Protocol (UDP).md'" in log_records[0]
-
-
-
-
-
-
