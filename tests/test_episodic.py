@@ -433,169 +433,131 @@ def test_key_tokens_stemmed_entity_prefix_dropped():
     assert key_tokens("user.a_b.c") == set()
 
 
-def test_legacy_store_without_group_field_loads_as_ungrouped(tmp_path):
-    p = tmp_path / "episodic.json"
-    p.write_text(json.dumps({"schema_version": 1, "next_id": 2, "facts": [{
-        "id": "f_0001", "key": "user.dog.name", "text": "Tom",
-        "first_seen": "2026-07-01", "last_seen": "2026-07-01",
-        "runs": ["r1"], "supersedes": None, "status": "live"}]}),
-        encoding="utf-8")
-    (f,) = EpisodicStore(path=p).live_facts()
-    assert f.group is None
+# ---------------------------------------------------------------------------
+# Key schema enforcement (ADR-0021): declared grammar, fold never reject
+# ---------------------------------------------------------------------------
 
 
-def test_regroup_links_drifted_ku_pair_any_order(tmp_path):
-    for order in (0, 1):
-        d = tmp_path / str(order)
-        d.mkdir()
-        store = _store(d)
-        keys = ["user.fitness.tournament.date", "user.tennis_tournament_date"]
-        if order:
-            keys.reverse()
-        for i, k in enumerate(keys):
-            store.capture([{"key": k, "text": f"t{i}"}],
-                          run_id=f"r{i}", seen="2026-06-01")
-        a, b = store.live_facts()
-        # Order-independent: the pair groups either way, id = oldest member.
-        assert a.group == b.group == min(a.id, b.id)
+def _schema(**kw):
+    from silica.kernel.vault_manifest import EpisodicKeySchema
+
+    return EpisodicKeySchema(**kw)
 
 
-def test_regroup_dense_namespace_groups_at_df_three(tmp_path):
-    # Three sibling keys share topic tokens at df exactly 3: they group.
-    # (v1 incremental attachment starved here — the gate's 830ce83f miss.)
+def test_enforce_compliant_key_passes_through():
+    from silica.kernel.episodic import enforce_key_schema
+
+    assert enforce_key_schema("user.dog.name", _schema()) == "user.dog.name"
+
+
+def test_enforce_unknown_prefix_folds_under_default():
+    from silica.kernel.episodic import enforce_key_schema
+
+    assert enforce_key_schema("dog.name", _schema()) == "user.dog.name"
+
+
+def test_enforce_depth_folds_tail_segments():
+    from silica.kernel.episodic import enforce_key_schema
+
+    assert (enforce_key_schema("assistant.recipe.oven.temp", _schema())
+            == "assistant.recipe.oven_temp")
+
+
+def test_enforce_prefix_match_is_canonical_stored_form_untouched():
+    from silica.kernel.episodic import enforce_key_schema
+
+    # "assistants" stems to the same canonical form as "assistant": it IS a
+    # known prefix, and the stored spelling is never rewritten.
+    assert enforce_key_schema("assistants.diet", _schema()) == "assistants.diet"
+
+
+def test_enforce_prepend_then_depth_fold_compose():
+    from silica.kernel.episodic import enforce_key_schema
+
+    # Unknown prefix adds a segment, so the tail folds to honor max_depth.
+    assert (enforce_key_schema("weather.city.today", _schema())
+            == "user.weather.city_today")
+
+
+def test_enforce_is_idempotent():
+    from silica.kernel.episodic import enforce_key_schema
+
+    schema = _schema()
+    for raw in ("dog.name", "assistant.recipe.oven.temp", "weather.city.today",
+                "user.dog.name"):
+        once = enforce_key_schema(raw, schema)
+        assert enforce_key_schema(once, schema) == once
+
+
+def test_enforce_drops_empty_segments():
+    from silica.kernel.episodic import enforce_key_schema
+
+    assert enforce_key_schema("user..dog.name", _schema()) == "user.dog.name"
+
+
+def test_enforce_honors_custom_schema_values():
+    from silica.kernel.episodic import enforce_key_schema
+
+    schema = _schema(prefixes=("team",), default_prefix="team", max_depth=2)
+    assert enforce_key_schema("velocity.sprint", schema) == "team.velocity_sprint"
+    assert enforce_key_schema("team.velocity", schema) == "team.velocity"
+
+
+def test_capture_with_schema_stores_enforced_key(tmp_path):
     store = _store(tmp_path)
-    sibs = ["assistant.trip.chicago.loop.pros_cons",
-            "assistant.trip.chicago.lakeview.pros_cons",
-            "assistant.trip.chicago.logan_square.pros_cons"]
-    for i, k in enumerate(sibs):
-        store.capture([{"key": k, "text": f"s{i}"}],
-                      run_id=f"r{i}", seen="2026-06-01")
-    assert all(f.group for f in store.live_facts())
-    assert len({f.group for f in store.live_facts()}) == 1
-    # A fourth sibling pushes every shared token past df 3: the whole topic
-    # ungroups — the measured K-starves tradeoff (probe ceiling 15/17).
-    store.capture([{"key": "assistant.trip.chicago.hyde_park.pros_cons",
-                    "text": "s3"}], run_id="r3", seen="2026-06-02")
-    assert all(f.group is None for f in store.live_facts())
+    store.capture([{"key": "dog.name", "text": "Il mio cane si chiama Tom"}],
+                  run_id="run_1", seen="2026-07-16", schema=_schema())
+    facts = store.live_facts()
+    assert len(facts) == 1
+    assert facts[0].key == "user.dog.name"
 
 
-def test_regroup_generic_token_does_not_glue(tmp_path):
+def test_capture_without_schema_stores_raw_key(tmp_path):
     store = _store(tmp_path)
-    for i, k in enumerate(["user.marathon.training_tips",
-                           "user.marathon.race_date",
-                           "user.cooking.tips", "user.garden.tips",
-                           "user.travel.tips"]):
-        store.capture([{"key": k, "text": f"x{i}"}],
-                      run_id=f"r{i}", seen="2026-06-01")
-    by_key = {f.key: f for f in store.live_facts()}
-    g = by_key["user.marathon.training_tips"].group
-    assert g and by_key["user.marathon.race_date"].group == g  # marathon df 2
-    # "tips" sits at df 4 > _RARE_DF: it forms no edges.
-    assert by_key["user.cooking.tips"].group is None
-    assert by_key["user.garden.tips"].group is None
-    assert by_key["user.travel.tips"].group is None
+    store.capture([{"key": "assistant.recipe.oven.temp", "text": "180 gradi"}],
+                  run_id="run_1", seen="2026-07-16")
+    assert store.live_facts()[0].key == "assistant.recipe.oven.temp"
 
 
-def test_regroup_drops_blob_components(tmp_path, monkeypatch):
+def test_capture_from_distill_loads_schema_from_memory_vault(tmp_path, monkeypatch):
     from silica.kernel import episodic
 
-    assert episodic._MAX_GROUP == 12   # pin the shipped backstop
-    monkeypatch.setattr(episodic, "_MAX_GROUP", 3)
-    store = _store(tmp_path)
-    # Chained rare tokens build ONE component of 4 facts: over the cap, dropped.
-    for i in range(4):
-        store.capture([{"key": f"user.t{i + 1}_t{i + 2}.item", "text": f"x{i}"}],
-                      run_id=f"r{i}", seen="2026-06-01")
-    assert all(f.group is None for f in store.live_facts())
+    vault = tmp_path / "memvault"
+    vault.mkdir()
+    (vault / "vault.yaml").write_text(
+        "conventions:\n  episodic_keys: {}\n", encoding="utf-8")
+    monkeypatch.setattr(episodic, "episodic_home", lambda: vault)
+    monkeypatch.setattr(episodic, "store_path", lambda: tmp_path / "episodic.json")
+
+    result = {"ephemerals": [{"key": "dog.name", "text": "Si chiama Tom"}]}
+    episodic.capture_from_distill(result, run_id="run_1", seen="2026-07-16")
+    (f,) = EpisodicStore(path=tmp_path / "episodic.json").live_facts()
+    assert f.key == "user.dog.name"
 
 
-def test_regroup_keeps_pair_across_supersede(tmp_path):
-    store = _store(tmp_path)
-    store.capture([{"key": "user.fitness.tournament.date", "text": "June 10"}],
-                  run_id="r1", seen="2026-06-01")
-    store.capture([{"key": "user.tennis_tournament_date", "text": "July 2"}],
-                  run_id="r2", seen="2026-06-10")
-    store.capture([{"key": "user.tennis_tournament_date", "text": "July 9"}],
-                  run_id="r3", seen="2026-06-20")
-    live = store.live_facts()
-    assert len(live) == 2
-    assert all(f.group for f in live)
-    assert len({f.group for f in live}) == 1
-
-
-def test_sweep_regroups_survivors(tmp_path):
-    store = _store(tmp_path)
-    store.capture([{"key": "user.marathon.date", "text": "Oct 5"}],
-                  run_id="r1", seen="2026-01-01")
-    store.capture([{"key": "user.marathon.shoes", "text": "Nikes"}],
-                  run_id="r2", seen="2026-07-01")
-    assert all(f.group for f in store.live_facts())
-    assert store.sweep(now="2026-07-14", ttl_days=90) == 1
-    (survivor,) = store.live_facts()
-    assert survivor.group is None
-    # The regrouped state is persisted by sweep.
-    assert EpisodicStore(path=store.path).live_facts()[0].group is None
-
-
-def test_regroup_failure_never_fails_capture(tmp_path, monkeypatch):
+def test_capture_from_distill_without_schema_block_keeps_raw_key(tmp_path, monkeypatch):
     from silica.kernel import episodic
 
-    monkeypatch.setattr(episodic, "rare_token_components",
-                        lambda keys, **kw: (_ for _ in ()).throw(RuntimeError("boom")))
+    vault = tmp_path / "memvault"
+    vault.mkdir()  # no vault.yaml at all
+    monkeypatch.setattr(episodic, "episodic_home", lambda: vault)
+    monkeypatch.setattr(episodic, "store_path", lambda: tmp_path / "episodic.json")
+
+    result = {"ephemerals": [{"key": "dog.name", "text": "Si chiama Tom"}]}
+    episodic.capture_from_distill(result, run_id="run_1", seen="2026-07-16")
+    (f,) = EpisodicStore(path=tmp_path / "episodic.json").live_facts()
+    assert f.key == "dog.name"
+
+
+def test_capture_schema_converges_raw_variant_onto_existing_chain(tmp_path):
     store = _store(tmp_path)
-    store.capture([{"key": "user.a.b", "text": "x"}],
-                  run_id="r1", seen="2026-07-01")
-    assert len(store.live_facts()) == 1
-    assert store.live_facts()[0].group is None
+    store.capture([{"key": "user.dog.name", "text": "Il mio cane si chiama Tom"}],
+                  run_id="run_1", seen="2026-07-01", schema=_schema())
+    # Same fact arrives with a prefixless key: enforcement folds it onto the
+    # same chain instead of starting a parallel one.
+    store.capture([{"key": "dog.name", "text": "Il mio cane si chiama Tom"}],
+                  run_id="run_2", seen="2026-07-16", schema=_schema())
+    facts = store.live_facts()
+    assert len(facts) == 1
+    assert facts[0].runs == ["run_1", "run_2"]
 
-
-def test_render_lists_group_mates_date_descending_capped(tmp_path, monkeypatch):
-    from silica.kernel import episodic
-
-    assert episodic._RENDER_MATES == 5   # pin the shipped cap
-    store = _store(tmp_path)
-    store.capture([{"key": "user.marathon.date", "text": "Race on Oct 5"}],
-                  run_id="r1", seen="2026-06-01")
-    store.capture([{"key": "user.marathon.training_plan", "text": "Plan: 5k daily"}],
-                  run_id="r2", seen="2026-06-10")
-    store.capture([{"key": "user.marathon.shoes", "text": "Bought racing shoes"}],
-                  run_id="r3", seen="2026-06-20")
-
-    hits = store.recall("marathon date", query_vec=None, k=1, now="2026-07-01")
-    assert hits[0].fact.key == "user.marathon.date"
-    lines = episodic.render(hits, store=store).splitlines()
-    assert lines[0] == "- [since 2026-06-01] Race on Oct 5"
-    # Mates are date-DESCENDING with since-dates (the KU render mechanism).
-    assert lines[1] == "  (related: Bought racing shoes, since 2026-06-20)"
-    assert lines[2] == "  (related: Plan: 5k daily, since 2026-06-10)"
-
-    monkeypatch.setattr(episodic, "_RENDER_MATES", 1)
-    assert len(episodic.render(hits, store=store).splitlines()) == 2
-
-
-def test_render_never_duplicates_facts_already_rendered(tmp_path):
-    from silica.kernel import episodic
-
-    store = _store(tmp_path)
-    store.capture([{"key": "user.marathon.date", "text": "Race on Oct 5"}],
-                  run_id="r1", seen="2026-06-01")
-    store.capture([{"key": "user.marathon.training_plan", "text": "Plan: 5k daily"}],
-                  run_id="r2", seen="2026-06-10")
-    hits = store.recall("marathon", query_vec=None, k=5, now="2026-07-01")
-    assert len(hits) == 2
-    text = episodic.render(hits, store=store)
-    assert "related" not in text           # both mates are already hits
-    assert text.count("Race on Oct 5") == 1
-
-
-def test_render_ignores_group_with_single_live_member(tmp_path):
-    from silica.kernel import episodic
-
-    store = _store(tmp_path)
-    store.capture([{"key": "user.marathon.date", "text": "Race on Oct 5"}],
-                  run_id="r1", seen="2026-06-01")
-    (f,) = store.live_facts()
-    f.group = "f_9999"   # dangling/corrupt group id on a stale store
-    hits = store.recall("marathon", query_vec=None, k=5, now="2026-07-01")
-    assert hits
-    assert "related" not in episodic.render(hits, store=store)

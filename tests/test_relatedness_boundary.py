@@ -47,6 +47,7 @@ ALLOWED = {
     "kernel/vault_map.py":          "session-start vault map via CooccurStore (to_networkx/node_label, top_stems), not relatedness ranking",
     "kernel/classify.py":           "L1 tokenizer/concept matching, not relatedness ranking",
     "kernel/keyphrase.py":          "pairwise cosine (candidate phrase vs document theme) for concept reranking, not note ranking",
+    "kernel/episodic.py":           "pairwise cosine on its own fact vecs (episodic recall scoring), not note relatedness ranking",
     "router/coordinator.py":        "constructs stores to inject into the facade",
     "router/organize_fsm.py":       "L1 co-occurrence classification, not relatedness ranking",
     "router/orchestrator.py":       "co-occurrence index freshness hook (build_index)",

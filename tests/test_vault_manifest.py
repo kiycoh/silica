@@ -48,6 +48,58 @@ def test_manifest_file_overrides_defaults(tmp_path):
 def test_malformed_manifest_degrades_to_defaults(tmp_path):
     (tmp_path / "vault.yaml").write_text("sources: 42\n", encoding="utf-8")
     assert load_manifest(tmp_path).sources == ("prose",)
+
+
+def test_episodic_keys_absent_means_no_schema(tmp_path):
+    (tmp_path / "vault.yaml").write_text("conventions:\n  max_tags: 5\n",
+                                         encoding="utf-8")
+    assert load_manifest(tmp_path).conventions.episodic_keys is None
+
+
+def test_episodic_keys_empty_block_gets_defaults(tmp_path):
+    (tmp_path / "vault.yaml").write_text("conventions:\n  episodic_keys: {}\n",
+                                         encoding="utf-8")
+    ks = load_manifest(tmp_path).conventions.episodic_keys
+    assert ks is not None
+    assert ks.prefixes == ("user", "assistant")
+    assert ks.default_prefix == "user"
+    assert ks.max_depth == 3
+
+
+def test_episodic_keys_custom_values_parsed(tmp_path):
+    (tmp_path / "vault.yaml").write_text(
+        "conventions:\n"
+        "  episodic_keys:\n"
+        "    prefixes: [user, assistant, team]\n"
+        "    default_prefix: team\n"
+        "    max_depth: 2\n",
+        encoding="utf-8",
+    )
+    ks = load_manifest(tmp_path).conventions.episodic_keys
+    assert ks.prefixes == ("user", "assistant", "team")
+    assert ks.default_prefix == "team"
+    assert ks.max_depth == 2
+
+
+def test_episodic_keys_malformed_block_means_no_schema(tmp_path):
+    (tmp_path / "vault.yaml").write_text(
+        "conventions:\n  episodic_keys: [user]\n", encoding="utf-8")
+    assert load_manifest(tmp_path).conventions.episodic_keys is None
+
+
+def test_episodic_keys_bad_fields_fall_back_to_defaults(tmp_path):
+    (tmp_path / "vault.yaml").write_text(
+        "conventions:\n"
+        "  episodic_keys:\n"
+        "    prefixes: 42\n"
+        "    default_prefix: [x]\n"
+        "    max_depth: -1\n",
+        encoding="utf-8",
+    )
+    ks = load_manifest(tmp_path).conventions.episodic_keys
+    assert ks.prefixes == ("user", "assistant")
+    assert ks.default_prefix == "user"
+    assert ks.max_depth == 3
     (tmp_path / "vault.yaml").write_text(":\n  - not yaml mapping [", encoding="utf-8")
     assert load_manifest(tmp_path).sources == ("prose",)
 

@@ -55,6 +55,23 @@ class VaultConventions:
     # layout — a vault with no config behaves bit-identically to before.
     default_template: str | None = None
     templates_dir: str = "templates"
+    # ADR-0021: None ⇒ no episodic key enforcement (bit-identical to today).
+    # Only meaningful on the MEMORY vault's manifest; other vaults ignore it.
+    episodic_keys: "EpisodicKeySchema | None" = None
+
+
+@dataclass(frozen=True)
+class EpisodicKeySchema:
+    """Declared grammar of episodic keys (ADR-0021).
+
+    Owned by the MEMORY vault's manifest (the episodic store's home), never
+    by the vault active at capture: one store, one schema. Enforcement is
+    structural and write-time (see `episodic.enforce_key_schema`).
+    """
+
+    prefixes: tuple[str, ...] = ("user", "assistant")
+    default_prefix: str = "user"
+    max_depth: int = 3
 
 
 DEFAULT_CONVENTIONS = VaultConventions()
@@ -143,6 +160,30 @@ def _parse_conventions(raw: dict) -> VaultConventions:
     if not templates_dir:
         templates_dir = "templates"
 
+    episodic_keys = None
+    ek_raw = conv_raw.get("episodic_keys")
+    if isinstance(ek_raw, dict):
+        defaults = EpisodicKeySchema()
+        prefixes = ek_raw.get("prefixes")
+        if not (isinstance(prefixes, list) and prefixes
+                and all(isinstance(p, str) and p.strip() for p in prefixes)):
+            prefixes = list(defaults.prefixes)
+        default_prefix = ek_raw.get("default_prefix")
+        if not (isinstance(default_prefix, str) and default_prefix.strip()):
+            default_prefix = defaults.default_prefix
+        max_depth = ek_raw.get("max_depth")
+        if not (isinstance(max_depth, int) and not isinstance(max_depth, bool)
+                and max_depth > 0):
+            max_depth = defaults.max_depth
+        episodic_keys = EpisodicKeySchema(
+            prefixes=tuple(p.strip() for p in prefixes),
+            default_prefix=default_prefix.strip(),
+            max_depth=max_depth,
+        )
+    elif ek_raw is not None:
+        logger.warning("vault.yaml: `episodic_keys` must be a mapping — "
+                       "no key schema (enforcement off)")
+
     return VaultConventions(
         language=language,
         reply_language=reply_language,
@@ -151,6 +192,7 @@ def _parse_conventions(raw: dict) -> VaultConventions:
         wiki_dir=wiki_dir,
         default_template=default_template,
         templates_dir=templates_dir,
+        episodic_keys=episodic_keys,
     )
 
 

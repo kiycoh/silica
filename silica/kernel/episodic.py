@@ -25,6 +25,8 @@ from pathlib import Path
 
 from pydantic import BaseModel, Field, TypeAdapter
 
+from silica.kernel.embed import _cosine  # noqa: F401 — shared helper, re-exported for probes
+
 logger = logging.getLogger(__name__)
 
 SCHEMA_VERSION = 1
@@ -38,9 +40,6 @@ class Fact(BaseModel):
     last_seen: str
     runs: list[str] = Field(default_factory=list)
     supersedes: str | None = None
-    # Layer C topic group: id of the group's founding fact. Additive, no
-    # schema bump; legacy facts are None and join lazily on a future match.
-    group: str | None = None
     status: str = "live"
     # ponytail: inline float list, not npz packing — the store is TTL-bounded
     # to hundreds of facts; the 10k scaling fix targeted note stores.
@@ -63,15 +62,6 @@ def _tokens(text: str) -> set[str]:
     return {t for t in "".join(
         ch if ch.isalnum() else " " for ch in text.casefold()
     ).split() if len(t) > 1}
-
-
-def _cosine(a: list[float], b: list[float]) -> float:
-    if len(a) != len(b):
-        return 0.0
-    dot = sum(x * y for x, y in zip(a, b))
-    na = sum(x * x for x in a) ** 0.5
-    nb = sum(y * y for y in b) ** 0.5
-    return dot / (na * nb) if na and nb else 0.0
 
 
 _FACTS_ADAPTER = TypeAdapter(list[Fact])
@@ -119,9 +109,28 @@ def normalize_key(key: str) -> str:
 _ENTITY_PREFIXES = {"user", "assist"}  # canonical forms of user. / assistant.
 
 
+def enforce_key_schema(key: str, schema) -> str:
+    """Structural write-time enforcement of the declared key grammar
+    (ADR-0021): unknown first segment folds under `schema.default_prefix`,
+    segments beyond `schema.max_depth` fold into the last one. Never rejects.
+
+    Distinct from `normalize_key` (lookup-only matching identity): stored
+    keys are shaped here but never stemmed — the spelling survives.
+    """
+    segs = [s for s in key.split(".") if s]
+    if not segs:
+        return key
+    canonical = {normalize_key(p) for p in schema.prefixes}
+    if normalize_key(segs[0]) not in canonical:
+        segs.insert(0, schema.default_prefix)
+    if len(segs) > schema.max_depth:
+        segs = segs[:schema.max_depth - 1] + ["_".join(segs[schema.max_depth - 1:])]
+    return ".".join(segs)
+
+
 def key_tokens(key: str) -> set[str]:
-    """Stemmed tokens of a key, entity prefix dropped: the grouping alphabet
-    shared by Layer C attachment and the eval key-drift probes."""
+    """Stemmed tokens of a key, entity prefix dropped: the shared alphabet
+    of the eval key-drift/clustering probes."""
     segs = normalize_key(key).split(".")
     if len(segs) > 1 and segs[0] in _ENTITY_PREFIXES:
         segs = segs[1:]
@@ -160,16 +169,6 @@ def rare_token_components(keys: list[str], *,
             else:
                 owner[t] = k
     return {k: find(k) for k in keys}
-
-
-# ponytail: _RARE_DF=3, probe-validated on the frozen corpus; revisit only
-# with a new probe sweep.
-_RARE_DF = 3
-# ponytail: _MAX_GROUP=12 blob backstop; probe says healthy groups are 2-10.
-_MAX_GROUP = 12
-
-# Render-side bound on group-mate lines per hit: bounded, read-only.
-_RENDER_MATES = 5
 
 
 def key_vocabulary(store: "EpisodicStore", *, cap: int = 60) -> list[str]:
@@ -235,13 +234,18 @@ class EpisodicStore:
     # ------------------------------------------------------------------
 
     def capture(self, facts: list[dict], *, run_id: str, seen: str,
-                embedder=None) -> None:
+                embedder=None, schema=None) -> None:
         """Merge distiller ephemerals into the store. Mechanical, no LLM.
 
         Same key + same normalized text reinforces (last_seen, runs); same key
         + different text supersedes the live head; a new key starts a chain.
         New/changed facts are embedded when `embedder` is served; embedding
         failure is silent (recall falls back to lexical).
+
+        `schema` (ADR-0021): an `EpisodicKeySchema` shapes stored keys via
+        `enforce_key_schema` before merge; None means no enforcement —
+        bit-identical to before the schema existed (frozen-store replays and
+        A/B baselines depend on this default).
         """
         # Heads keyed by canonical form: keys written before Layer A still
         # match variant arrivals. On a legacy collision (two live heads with
@@ -249,11 +253,16 @@ class EpisodicStore:
         # retires the other.
         heads = {normalize_key(f.key): f for f in self.facts if f.status == "live"}
         created: list[Fact] = []
+        folded = 0
         for raw in facts:
             key = (raw.get("key") or "").strip()
             text = (raw.get("text") or "").strip()
             if not key or not text:
                 continue
+            if schema is not None:
+                shaped = enforce_key_schema(key, schema)
+                folded += shaped != key
+                key = shaped
             nkey = normalize_key(key)
             head = heads.get(nkey)
             if head is not None and _normalize(head.text) == _normalize(text):
@@ -278,29 +287,9 @@ class EpisodicStore:
                     fact.vec = list(vec)
             except Exception as e:
                 logger.debug("episodic capture: embedding skipped (%s)", e)
-        try:
-            self.regroup()
-        except Exception as e:  # grouping must never fail the ingest
-            logger.debug("episodic regroup skipped (%s)", e)
+        if folded:
+            logger.debug("episodic capture: %d key(s) schema-folded", folded)
         self.save()
-
-    def regroup(self) -> None:
-        """Layer C rev 2: recompute topic groups over the whole live store.
-
-        Components over rare key tokens with FULL-store df (<= _RARE_DF), a
-        pure function of the live key set — deterministic, order-independent,
-        render-only. Components of 1 fact or more than _MAX_GROUP facts get
-        no group (blob backstop). Group id = oldest member fact's id."""
-        live = self.live_facts()
-        comp = rare_token_components([f.key for f in live], max_df=_RARE_DF)
-        members: dict[str, list[Fact]] = {}
-        for f in live:
-            members.setdefault(comp[f.key], []).append(f)
-        for group in members.values():
-            gid = (min(f.id for f in group)
-                   if 2 <= len(group) <= _MAX_GROUP else None)
-            for f in group:
-                f.group = gid
 
     # ------------------------------------------------------------------
     # TTL sweep
@@ -328,10 +317,6 @@ class EpisodicStore:
             expired_ids.update(self._chain_ids(head))
         if expired_ids:
             self.facts = [f for f in self.facts if f.id not in expired_ids]
-            try:
-                self.regroup()
-            except Exception as e:  # sweep must stay unkillable too
-                logger.debug("episodic regroup skipped (%s)", e)
             self.save()
         return removed
 
@@ -429,21 +414,25 @@ def capture_from_distill(result: dict, *, run_id: str, seen: str) -> None:
             embedder = get_embedder(CONFIG)
         except Exception:
             pass
+        # ADR-0021: the key schema is owned by the MEMORY vault (the store's
+        # home), never by the vault active at capture. Absent block ⇒ None ⇒
+        # no enforcement.
+        schema = None
+        try:
+            from silica.kernel.vault_manifest import load_manifest
+
+            schema = load_manifest(episodic_home()).conventions.episodic_keys
+        except Exception:
+            pass
         EpisodicStore().capture(ephemerals, run_id=run_id, seen=seen,
-                                embedder=embedder)
+                                embedder=embedder, schema=schema)
     except Exception as e:
         logger.warning("episodic capture failed (ingest continues): %s", e)
 
 
 def render(hits: list[FactHit], *, store: EpisodicStore) -> str:
-    """Render recalled facts with supersede history and group-mates, dates
-    included: knowledge-update needs the chain, aggregative questions need
-    the group, and both need date framing to prefer the fresh value."""
-    by_group: dict[str, list[Fact]] = {}
-    for f in store.live_facts():
-        if f.group:
-            by_group.setdefault(f.group, []).append(f)
-    shown = {f.id for hit in hits for f in store.chain(hit.fact)}
+    """Render recalled facts with their supersede history, dates included —
+    knowledge-update and temporal-reasoning questions need the chain."""
     lines: list[str] = []
     for hit in hits:
         links = store.chain(hit.fact)
@@ -452,14 +441,6 @@ def render(hits: list[FactHit], *, store: EpisodicStore) -> str:
             lines.append(
                 f"  (previously: {older.text}, {older.first_seen} to {newer.first_seen})"
             )
-        members = by_group.get(hit.fact.group or "", [])
-        if len(members) < 2:   # dangling group id on a stale store: no group
-            continue
-        mates = sorted((m for m in members if m.id not in shown),
-                       key=lambda m: m.last_seen, reverse=True)[:_RENDER_MATES]
-        for m in mates:
-            shown.add(m.id)
-            lines.append(f"  (related: {m.text}, since {m.first_seen})")
     return "\n".join(lines)
 
 
