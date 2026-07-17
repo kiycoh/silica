@@ -192,6 +192,53 @@ def test_check_manifest_unknown_source_warns(tmp_path):
     assert res.status == "warn" and "zotero" in res.detail
 
 
+class TestCheckRerank:
+    """The rerank pass was invisible: off by default, undocumented, unchecked.
+    Doctor must make its state a fact the user can see, never a silent no-op."""
+
+    def _rr_cfg(self, **kw):
+        return _cfg(rerank_base_url="", rerank_model="", **kw)
+
+    def test_extra_installed_reports_ok(self, monkeypatch):
+        import silica.onboarding.checks as checks
+
+        monkeypatch.setattr(checks, "has_local_rerank", lambda: True)
+        r = checks.check_rerank(self._rr_cfg())
+        assert r.status == "ok" and "in-process" in r.detail
+
+    def test_nothing_installed_warns_with_install_hint(self, monkeypatch):
+        import silica.onboarding.checks as checks
+
+        monkeypatch.setattr(checks, "has_local_rerank", lambda: False)
+        r = checks.check_rerank(self._rr_cfg())
+        assert r.status == "warn"
+        assert "silica[rerank]" in r.hint
+
+    def test_configured_endpoint_reachable_is_ok(self, monkeypatch):
+        import silica.onboarding.checks as checks
+
+        class FakeResp:
+            status_code = 200
+
+            def raise_for_status(self):
+                pass
+
+        monkeypatch.setattr(checks.httpx, "post", lambda *a, **k: FakeResp())
+        r = checks.check_rerank(_cfg(rerank_base_url="http://x/v1", rerank_model="m"))
+        assert r.status == "ok" and "http://x/v1" in r.detail
+
+    def test_configured_endpoint_down_warns(self, monkeypatch):
+        """Never 'fail': a down reranker degrades to the fused pool's order."""
+        import silica.onboarding.checks as checks
+
+        def boom(*a, **k):
+            raise checks.httpx.ConnectError("refused")
+
+        monkeypatch.setattr(checks.httpx, "post", boom)
+        r = checks.check_rerank(_cfg(rerank_base_url="http://x/v1", rerank_model="m"))
+        assert r.status == "warn" and "unreachable" in r.detail
+
+
 class TestCheckLanguage:
     def _seed_italian_notes(self, tmp_path):
         (tmp_path / "n1.md").write_text(
@@ -379,8 +426,18 @@ class TestSampleVaultTextSpread:
         assert detect_vault_language(str(tmp_path)) == "italian"
 
 
+def test_render_report_does_not_eat_bracketed_text(capsys):
+    """rich reads a bare [word] as a style tag: unescaped, `silica[rerank]` renders
+    as `silica` and the hint tells the user to run the wrong command."""
+    from silica.onboarding.checks import CheckResult, render_report
+
+    render_report([CheckResult("rerank", "warn", "disabled", "pip install silica[rerank]")])
+    out = capsys.readouterr().out
+    assert "silica[rerank]" in out.replace("\n", "")
+
+
 class TestAggregation:
-    def test_run_checks_returns_all_seven(self, monkeypatch, tmp_path):
+    def test_run_checks_returns_all_eight(self, monkeypatch, tmp_path):
         import silica.onboarding.checks as checks
 
         def boom(url, timeout):
@@ -391,7 +448,7 @@ class TestAggregation:
         results = checks.run_checks(_cfg(vault_path=str(tmp_path)))
         assert [r.name for r in results] == [
             "chat model", "chat endpoint", "vault", "vault manifest",
-            "language", "embeddings", "quarantine",
+            "language", "embeddings", "rerank", "quarantine",
         ]
 
     def test_check_quarantine_surfaces_corrupt_files(self, tmp_path):

@@ -3,6 +3,7 @@
 
 from __future__ import annotations
 
+import importlib.util
 import logging
 import os
 from functools import lru_cache
@@ -396,17 +397,81 @@ class Reranker:
             return None
 
 
-def get_reranker(config: Any) -> Reranker | None:
-    """Return a Reranker when a /rerank endpoint is configured, else None (disabled)."""
+# Multilingual by design: a vault is whatever language its owner writes in
+# (conventions.language), and bge-reranker-base is English/Chinese only.
+LOCAL_RERANK_MODEL = "BAAI/bge-reranker-v2-m3"
+
+
+@lru_cache(maxsize=1)
+def has_local_rerank() -> bool:
+    """Whether the optional [rerank] extra is installed. find_spec, not import:
+    get_reranker runs per query and importing torch costs seconds."""
+    return importlib.util.find_spec("sentence_transformers") is not None
+
+
+@lru_cache(maxsize=1)
+def _load_cross_encoder(model: str) -> Any:
+    """Load the cross-encoder, cached for the process lifetime.
+
+    Cached because get_reranker() is called per query: a fresh CrossEncoder per
+    recall would reload ~2GB of weights every time. First call downloads to the
+    HF cache (like the [pdf] extra's models).
+    """
+    from sentence_transformers import CrossEncoder
+    return CrossEncoder(model)
+
+
+class LocalReranker:
+    """Cross-encoder reranker in-process, via the optional [rerank] extra.
+
+    Exists because the reranker is the one leg of the stack with nowhere to run:
+    LM Studio and Ollama serve generative and embedding models, and a cross-encoder
+    is neither — it scores a [query, document] PAIR jointly rather than embedding
+    texts independently, so those runtimes either refuse it or (LM Studio) coerce it
+    into an embedding model whose output is meaningless for ranking. Without this
+    class the only path is a llama-server the user starts and maintains by hand,
+    which is why rerank silently never ran for anyone but the eval harness.
+
+    Duck-types Reranker: same .scores() contract, same abstention, so every call
+    site and the reorder in kernel/rerank stay untouched.
+    """
+
+    def __init__(self, model: str = LOCAL_RERANK_MODEL):
+        self.model = model
+
+    def scores(self, query: str, documents: list[str]) -> list[float] | None:
+        """Relevance score per document in input order, or None to abstain.
+
+        Abstains on any failure (missing weights, no disk, OOM) so a broken local
+        reranker degrades to the fused pool's order, exactly as a down endpoint does.
+        """
+        if not query or not documents:
+            return None
+        try:
+            encoder = _load_cross_encoder(self.model)
+            return [float(s) for s in encoder.predict([[query, d] for d in documents])]
+        except Exception as e:
+            logger.debug("local rerank abstained: %s", e)
+            return None
+
+
+def get_reranker(config: Any) -> Reranker | LocalReranker | None:
+    """Return a reranker: a served /rerank endpoint if configured, else in-process
+    if the [rerank] extra is installed, else None (disabled).
+
+    The endpoint wins when set so the eval harness keeps pinning its own llama-server.
+    """
     base_url = getattr(config, "rerank_base_url", "")
     model = getattr(config, "rerank_model", "")
-    if not base_url or not model:
+    if base_url and model:
+        return Reranker(
+            base_url=base_url,
+            model=model,
+            api_key=getattr(config, "rerank_api_key", ""),
+        )
+    if not has_local_rerank():
         return None
-    return Reranker(
-        base_url=base_url,
-        model=model,
-        api_key=getattr(config, "rerank_api_key", ""),
-    )
+    return LocalReranker(model=model or LOCAL_RERANK_MODEL)
 
 
 def get_provider(config: Any, role: str = "router") -> OpenAICompatibleProvider:

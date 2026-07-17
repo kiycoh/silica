@@ -16,7 +16,7 @@ from typing import Literal
 
 import httpx
 
-from silica.agent.providers import PROVIDER_PRESETS
+from silica.agent.providers import LOCAL_RERANK_MODEL, PROVIDER_PRESETS, has_local_rerank
 from silica.config import SilicaConfig
 from silica.kernel import gitstate
 
@@ -119,6 +119,40 @@ def check_embeddings(config: SilicaConfig) -> CheckResult:
     return CheckResult(
         "embeddings", "ok",
         f"{config.embedding_model} @ {config.embedding_base_url}",
+    )
+
+
+def check_rerank(config: SilicaConfig) -> CheckResult:
+    """Report the rerank pass's actual state.
+
+    Never "fail": recall degrades to the fused pool's order by design. It warns
+    rather than staying silent because the failure mode is invisible — rerank
+    just never runs, and the results look plausible.
+    """
+    if config.rerank_base_url and config.rerank_model:
+        url = f"{config.rerank_base_url.rstrip('/')}/rerank"
+        try:
+            resp = httpx.post(
+                url,
+                json={"model": config.rerank_model, "query": "ping", "documents": ["ping"]},
+                timeout=_HTTP_TIMEOUT,
+            )
+            resp.raise_for_status()
+        except Exception:
+            return CheckResult(
+                "rerank", "warn",
+                f"{config.rerank_base_url} unreachable",
+                "start the reranker, or unset SILICA_RERANK_* and `pip install silica[rerank]`",
+            )
+        return CheckResult(
+            "rerank", "ok", f"{config.rerank_model} @ {config.rerank_base_url}",
+        )
+    if has_local_rerank():
+        return CheckResult("rerank", "ok", f"in-process ({LOCAL_RERANK_MODEL})")
+    return CheckResult(
+        "rerank", "warn",
+        "disabled (no cross-encoder available)",
+        "`pip install silica[rerank]` sharpens recall; LM Studio and Ollama cannot serve one",
     )
 
 
@@ -313,6 +347,7 @@ def run_checks(config: SilicaConfig) -> list[CheckResult]:
         check_manifest(config),
         check_language(config),
         check_embeddings(config),
+        check_rerank(config),
         check_quarantine(config),
     ]
 
@@ -325,6 +360,7 @@ _STATUS_GLYPH = {"ok": ("✓", "green"), "warn": ("⚠", "yellow"), "fail": ("�
 
 
 def render_report(results: list[CheckResult]) -> None:
+    from rich.markup import escape
     from rich.table import Table
 
     from silica.ui.console import CONSOLE
@@ -332,8 +368,10 @@ def render_report(results: list[CheckResult]) -> None:
     table = Table(show_header=False, box=None, padding=(0, 1))
     for r in results:
         glyph, style = _STATUS_GLYPH[r.status]
-        hint = f"[dim]→ {r.hint}[/]" if r.hint else ""
-        table.add_row(f"[{style}]{glyph}[/]", f"[bold]{r.name}[/]", r.detail, hint)
+        # escape: detail/hint carry data (paths, model ids, `silica[rerank]`), and
+        # rich reads a bare [word] as a style tag and swallows it.
+        hint = f"[dim]→ {escape(r.hint)}[/]" if r.hint else ""
+        table.add_row(f"[{style}]{glyph}[/]", f"[bold]{r.name}[/]", escape(r.detail), hint)
     CONSOLE.print()
     CONSOLE.print(table)
     CONSOLE.print()

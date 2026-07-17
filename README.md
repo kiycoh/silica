@@ -70,8 +70,12 @@ uv pip install -e '.[gui]'      # web GUI: silica --gui
 uv pip install -e '.[mcp]'      # MCP server: silica mcp (Silica as agent memory)
 uv pip install -e '.[connect]'  # Obsidian plugin bridge: silica connect
 uv pip install -e '.[pdf]'      # PDF nucleation
+uv pip install -e '.[rerank]'   # in-process cross-encoder rerank
 uv pip install -e '.[dev]'      # tests and linters
+uv pip install -e '.[all]'      # every feature above except dev
 ```
+
+`[all]` inherits `[pdf]` and `[rerank]`, so it pulls torch and downloads several GB of model weights the first time those run.
 
 ### Setup and Execution
 

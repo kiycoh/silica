@@ -7,7 +7,7 @@ from __future__ import annotations
 import httpx
 
 from silica.kernel.rerank import _best_window, rerank_related
-from silica.agent.providers import Reranker, get_reranker
+from silica.agent.providers import LocalReranker, Reranker, get_reranker
 
 
 class _Fake:
@@ -192,11 +192,20 @@ def test_client_abstains_on_transport_error(monkeypatch):
     assert rr.scores("q", ["d0"]) is None   # abstain, never raise
 
 
-def test_get_reranker_disabled_without_config():
-    class _Cfg:
-        rerank_base_url = ""
-        rerank_model = ""
-    assert get_reranker(_Cfg()) is None
+class _NoCfg:
+    rerank_base_url = ""
+    rerank_model = ""
+    rerank_api_key = ""
+
+
+def _extra(monkeypatch, present: bool):
+    from silica.agent import providers as p
+    monkeypatch.setattr(p, "has_local_rerank", lambda: present)
+
+
+def test_get_reranker_disabled_without_config_or_extra(monkeypatch):
+    _extra(monkeypatch, False)
+    assert get_reranker(_NoCfg()) is None
 
 
 def test_get_reranker_enabled_with_config():
@@ -206,3 +215,48 @@ def test_get_reranker_enabled_with_config():
         rerank_api_key = "k"
     rr = get_reranker(_Cfg())
     assert isinstance(rr, Reranker) and rr.url == "http://x/v1/rerank"
+
+
+def test_get_reranker_falls_back_to_local_when_extra_installed(monkeypatch):
+    """Neither LM Studio nor Ollama serves cross-encoders: with the [rerank]
+    extra present and no endpoint configured, rerank works with no user setup."""
+    _extra(monkeypatch, True)
+    rr = get_reranker(_NoCfg())
+    assert isinstance(rr, LocalReranker)
+
+
+def test_served_endpoint_wins_over_local(monkeypatch):
+    """A configured endpoint keeps priority (the eval harness pins llama-server)."""
+    _extra(monkeypatch, True)
+
+    class _Cfg:
+        rerank_base_url = "http://x/v1"
+        rerank_model = "bge-reranker"
+        rerank_api_key = "k"
+    assert isinstance(get_reranker(_Cfg()), Reranker)
+
+
+def test_local_reranker_scores_in_input_order(monkeypatch):
+    from silica.agent import providers as p
+
+    class _Encoder:
+        def predict(self, pairs):
+            assert pairs == [["q", "d0"], ["q", "d1"]]  # [query, doc] cross-encoder pairs
+            return [0.25, 0.75]
+    monkeypatch.setattr(p, "_load_cross_encoder", lambda model: _Encoder())
+    assert LocalReranker(model="m").scores("q", ["d0", "d1"]) == [0.25, 0.75]
+
+
+def test_local_reranker_abstains_on_error(monkeypatch):
+    """Same contract as the served client: abstain, never raise, never drop."""
+    from silica.agent import providers as p
+
+    def boom(model):
+        raise RuntimeError("no weights")
+    monkeypatch.setattr(p, "_load_cross_encoder", boom)
+    assert LocalReranker(model="m").scores("q", ["d0"]) is None
+
+
+def test_local_reranker_empty_input():
+    assert LocalReranker(model="m").scores("", ["d"]) is None
+    assert LocalReranker(model="m").scores("q", []) is None

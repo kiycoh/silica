@@ -44,6 +44,12 @@ connect = [
 ]
 # Opt-in stdio MCP server (`silica mcp`) — Silica as vault memory for MCP clients:
 mcp = ["mcp>=1.0"]
+# Opt-in in-process cross-encoder rerank (the precision pass over fused recall).
+# Neither LM Studio nor Ollama can serve a cross-encoder, so the alternative is a
+# llama-server the user runs by hand; this extra removes that. Pulls torch, and
+# downloads ~2GB of weights on first rerank, so it stays opt-in like [pdf].
+# SILICA_RERANK_BASE_URL still overrides it with a served endpoint.
+rerank = ["sentence-transformers>=3.0"]
 # mineru is the default PDF→Markdown provider but pulls torch/transformers (and
 # downloads models on first run), so it is opt-in via this extra (`pip install
 # silica[pdf]`) to keep the base install lean. The [pipeline] extra matches the
@@ -52,6 +58,10 @@ mcp = ["mcp>=1.0"]
 pdf = [
     "mineru[pipeline]>=3.4.4",
 ]
+# Everything except [dev]. Self-referential extra: pip resolves it back to this
+# same project. Note it inherits [pdf] and [rerank], so it pulls torch and
+# downloads several GB of weights on first use.
+all = ["silica[gui,connect,mcp,rerank,pdf]"]
 
 [project.scripts]
 silica = "silica.cli:main"
