@@ -244,3 +244,41 @@ def to_vault_relative(path: str, *, ensure_md: bool = True) -> str:
     if ensure_md and not rel.endswith(".md"):
         rel += ".md"
     return rel
+
+
+def is_inbox_path(path: str) -> bool:
+    """True when a vault-relative path sits anywhere under the configured
+    inbox root (case-insensitive). The inbox is staging, never a write or
+    merge target — callers use this to filter candidates and reject ops.
+    """
+    inbox = getattr(CONFIG, "inbox_dir", None)
+    root = inbox.strip("/") if isinstance(inbox, str) and inbox.strip("/") else "Inbox"
+    return path.replace("\\", "/").lstrip("/").casefold().startswith(root.casefold() + "/")
+
+
+def resolve_target_dir(target_dir: str) -> str:
+    """Fold a user-typed vault folder onto the existing tree, case-insensitively.
+
+    'Informatica/Intelligenza Artificiale' typed against a vault holding
+    'Informatica/Intelligenza artificiale' silently forks the tree on a
+    case-sensitive filesystem: new-note writes ENOENT through the Obsidian
+    bridge and patch paths mismatch their expected collisions. Each segment
+    adopts the casing of an existing folder when one matches case-insensitively;
+    unmatched segments keep the typed casing (a genuinely new folder).
+    Absolute paths and unconfigured vaults pass through untouched.
+    """
+    vault_str = getattr(CONFIG, "vault_path", None) or ""
+    if not target_dir or not vault_str or Path(target_dir).is_absolute():
+        return target_dir
+    base = Path(vault_str)
+    resolved: list[str] = []
+    for seg in Path(target_dir.strip("/")).parts:
+        cur = base.joinpath(*resolved)
+        if not (cur / seg).is_dir() and cur.is_dir():
+            seg = next(
+                (e.name for e in cur.iterdir()
+                 if e.is_dir() and e.name.casefold() == seg.casefold()),
+                seg,
+            )
+        resolved.append(seg)
+    return "/".join(resolved)

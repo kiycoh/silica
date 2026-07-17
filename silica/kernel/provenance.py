@@ -176,6 +176,48 @@ def drifted_notes(
     return out
 
 
+def _norm_note_ref(p: str) -> str:
+    """Fold a note reference to a comparable key: vault-relative POSIX, no
+    `.md`, casefolded. Provenance stores RunManifestEntry.path (already
+    vault-relative, no `.md`); a caller may pass an absolute or `.md`-suffixed
+    path, so relativize when possible and degrade to a plain strip otherwise."""
+    ref = p or ""
+    try:
+        from silica.kernel.paths import to_vault_relative
+
+        ref = to_vault_relative(ref, ensure_md=False)
+    except Exception:
+        ref = ref.replace("\\", "/").strip("/")
+    return ref.removesuffix(".md").casefold()
+
+
+def note_authored_by(
+    note_path: str,
+    source: str,
+    *,
+    vault_path: str | None = None,
+    filename: str = DEFAULT_PROVENANCE_FILENAME,
+) -> bool:
+    """True when `source` (a source basename) already authored `note_path`.
+
+    Reads the provenance ledger: on any prior run, did this exact source file
+    write or patch this note? The patch executor uses it to make a re-ingest
+    idempotent — a source must not re-append its own concepts into the notes it
+    already wrote (each re-append is a redundant "Note aggiuntive (da <source>)"
+    block). A genuinely new concept has no prior authored note, so it still
+    flows to a fresh write; a DIFFERENT source enriching the same note still
+    patches. Matches any recorded version of the source (an A->B->A edit still
+    counts). Absent/unreadable ledger degrades to False.
+    """
+    target = _norm_note_ref(note_path)
+    if not target:
+        return False
+    for r in read_records(source, vault_path=vault_path, filename=filename):
+        if any(_norm_note_ref(n) == target for n in (r.get("notes") or [])):
+            return True
+    return False
+
+
 def check_renucleate(
     source: str,
     incoming_sha256: str,

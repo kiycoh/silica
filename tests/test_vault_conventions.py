@@ -155,6 +155,37 @@ def test_render_prompt_session_date_defaults_to_unknown(monkeypatch):
     assert "unknown" in rendered
 
 
+def test_render_prompt_capture_rules_absent_leaves_no_placeholder(monkeypatch):
+    """F1b: no vault manifest ⇒ {CAPTURE_RULES} vanishes (no section, no
+    dangling placeholder token) — bit-identical to before the field existed."""
+    monkeypatch.setattr(CONFIG, "vault_path", "")
+    from silica.kernel.prep_delegation import render_prompt
+
+    rendered = render_prompt(target="Concepts/AI")
+    assert "{CAPTURE_RULES}" not in rendered
+    assert "Vault capture rules" not in rendered
+
+
+def test_render_prompt_capture_rules_injected(tmp_path, monkeypatch):
+    """F1b: a vault-declared capture_rules string is injected as its own section."""
+    (tmp_path / "vault.yaml").write_text(
+        "conventions:\n"
+        "  capture_rules: |\n"
+        "    Record every measurement in metric with imperial in parens.\n",
+        encoding="utf-8",
+    )
+    monkeypatch.setattr(CONFIG, "vault_path", str(tmp_path))
+    from silica.kernel import vault_manifest
+    from silica.kernel.prep_delegation import render_prompt
+
+    vault_manifest.reset_manifest_cache()
+    rendered = render_prompt(target="Concepts/AI")
+    vault_manifest.reset_manifest_cache()
+    assert "{CAPTURE_RULES}" not in rendered
+    assert "## Vault capture rules" in rendered
+    assert "Record every measurement in metric" in rendered
+
+
 def test_distiller_prompt_has_date_resolution_rule(monkeypatch):
     """The Ephemeral Facts section instructs relative->absolute date
     resolution with the never-guess fallback."""
@@ -317,6 +348,31 @@ def test_ofm_lint_accepts_max_tags_from_manifest(tmp_path, monkeypatch):
 
     flags = ofm_lint(_note_with_n_tags(5))["flags"]
     assert not any("too many tags" in f for f in flags)
+
+
+def test_ofm_lint_literal_newline_ignores_math_commands(monkeypatch):
+    """`\\ne`/`\\neq`/`\\nabla` inside math spans contain the two-char `\\n`
+    sequence — they are legitimate LaTeX, not an escaping artifact. A note
+    carrying them must lint clean or every patch to it fails forever (real
+    incident: 2026-07-17, Distribuzioni condizionate.md, `$\\Sigma_k \\ne \\Sigma$`)."""
+    monkeypatch.setattr(CONFIG, "vault_path", "")
+    from silica.kernel.ofm import ofm_lint
+
+    note = _NOTE_TMPL.format(tags="  - tag0") + (
+        "\nLDA assume $\\Sigma_k = \\Sigma$, QDA consente $\\Sigma_k \\ne \\Sigma$"
+        " e il gradiente $$\\nabla f \\neq 0$$.\n"
+    )
+    violations = ofm_lint(note)["violations"]
+    assert not any("literal" in v for v in violations)
+
+
+def test_ofm_lint_literal_newline_still_detected_in_prose(monkeypatch):
+    monkeypatch.setattr(CONFIG, "vault_path", "")
+    from silica.kernel.ofm import ofm_lint
+
+    note = _NOTE_TMPL.format(tags="  - tag0") + "\nriga uno\\nriga due\n"
+    violations = ofm_lint(note)["violations"]
+    assert any("literal" in v for v in violations)
 
 
 def test_ofm_lint_rejects_unknown_callout_by_default(monkeypatch):

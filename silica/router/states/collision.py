@@ -24,6 +24,25 @@ if TYPE_CHECKING:
 logger = logging.getLogger(__name__)
 
 
+# Logical-negation particles (it+en). title_key drops these as stopwords, so a
+# folded-key match silently collapses a concept onto its negation
+# ("supervisionato" ⇄ "non supervisionato", "primitive" ⇄ "non-primitive").
+# A high-cosine pair differing only by one of these must reach the ternary
+# judge, never mechanically auto-patch. Lexical antonyms (forward/backward,
+# top/bottom) are an open set — left to the judge, not enumerated here.
+_NEGATION = frozenset({"non", "not", "no", "senza", "without", "né", "neither", "nor"})
+
+
+def _differ_by_negation(a: str, b: str) -> bool:
+    """True when the two names differ by a logical-negation token — the folded
+    keys match but one side negates the other."""
+    import re
+
+    ta = set(re.findall(r"\w+", a.casefold()))
+    tb = set(re.findall(r"\w+", b.casefold()))
+    return bool((ta ^ tb) & _NEGATION)
+
+
 def _names_agree(concept: str, note_name: str) -> bool:
     """Conservative lexical gate for the mechanical high-score auto-patch.
 
@@ -38,7 +57,9 @@ def _names_agree(concept: str, note_name: str) -> bool:
     Agreement holds when the names share the same title identity (title_key —
     casefold, suffix/punctuation fold, plural-fold; C3) or the concept equals
     the note's acronym — its parenthetical token (e.g. "(GPT)") or the head
-    token before the first parenthesis.
+    token before the first parenthesis. A folded-key match is REJECTED when the
+    surfaces differ by a logical negation (title_key strips "non" as a stopword,
+    so it would otherwise fuse a concept with its opposite).
     """
     import re
     from silica.kernel.title import title_key
@@ -47,7 +68,7 @@ def _names_agree(concept: str, note_name: str) -> bool:
         return False
     key = title_key(concept)
     if key and key == title_key(note_name):
-        return True
+        return not _differ_by_negation(concept, note_name)
     norm = lambda s: re.sub(r"[^a-z0-9]", "", s.lower())
     acronyms = set(re.findall(r"\(([^)]*)\)", note_name))   # parenthetical contents
     acronyms.add(note_name.split("(", 1)[0])                # head before any paren
@@ -469,12 +490,18 @@ def handle_collision(fsm: "InjectorFSM") -> None:
                     query_text=f"{concept_text}\n{excerpt_text}".strip(),
                     embed_store=store,
                     cooccur_store=cooccur_store,
-                    k=1,
+                    k=5,  # a few extra so the inbox filter below still leaves a candidate
                 )
             except Exception as _search_err:
                 logger.debug("COLLISION: relatedness lookup failed for '%s': %s", concept_text, _search_err)
                 kept.append(concept)
                 continue
+
+            # Inbox notes index like any vault note but are staging, not merge
+            # targets — validate rejects every Inbox path, so surfacing one as
+            # the collision candidate guarantees a rejected op + steer churn.
+            from silica.kernel.paths import is_inbox_path
+            related = [r for r in related if not is_inbox_path(r.path)]
 
             if not related:
                 kept.append(concept)

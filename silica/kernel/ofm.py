@@ -15,7 +15,11 @@ def wikilink(name):
     return f"[[{name}]]"
 
 def has_wikilink(content, name):
-    return f"[[{name}]]" in content
+    # Obsidian resolves links case-insensitively and with alias/heading
+    # suffixes: [[machine learning]], [[Machine Learning|ML]] and
+    # [[Machine learning#Storia]] all satisfy hub "Machine learning".
+    c, n = content.casefold(), name.casefold()
+    return any(f"[[{n}{suffix}" in c for suffix in ("]]", "|", "#"))
 
 from silica.kernel.ast import parse_headings, _balanced, WIKILINK_TARGET_RE
 
@@ -137,10 +141,15 @@ def ofm_lint(content, stem=None):
     # --- OFM structural integrity ---
     V += _balanced(body)
 
-    # Detect literal '\n' character sequence in non-code body
+    # Detect literal '\n' character sequence in non-code body. Math spans are
+    # blanked first: `$\Sigma_k \ne \Sigma$` contains the two-char sequence
+    # `\n` (`\ne`, `\neq`, `\nabla`) and every patch to such a note would fail
+    # lint forever (real incident: 2026-07-17 nucleate run, Distribuzioni
+    # condizionate.md).
     from .ast import get_non_code_text, extract_callouts
+    from .text import MATH_SPANS
     naked = get_non_code_text(body)
-    if "\\n" in naked:
+    if "\\n" in MATH_SPANS.sub(" ", naked):
         V.append("literal '\\n' character sequence detected in body")
 
     callout_types = _effective_callout_types()

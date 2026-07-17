@@ -130,9 +130,27 @@ def _execute_patch(op: Op, path: str) -> dict:
         # Preserve the historical message so callers/tests can match on it.
         raise ValueError(f"Cannot patch; {e}") from e
 
-    # Idempotent re-injection: if this exact provenance block already exists,
-    # skip the append (deterministic, no LLM). Re-running the same source is a no-op.
-    if templates.block_present(nc.content, heading, source_basename):
+    # Idempotent re-injection: skip the append when this note already carries
+    # this source's content (deterministic, no LLM). Two signals:
+    #   1. the exact provenance block is present (a prior PATCH from this source);
+    #   2. the provenance ledger records this source as the note's author (a
+    #      prior WRITE lays down no block, so #1 can't see it) — this is the
+    #      re-ingest case: an edited source re-distills unchanged concepts that
+    #      collision-match their own prior notes and would each gain a redundant
+    #      "Note aggiuntive (da <source>)" block.
+    # Either way the hub-link repair must still land, or the post-write lint
+    # fails this op on every retry (2026-07-17 nucleate run: notes patched by
+    # an interrupted run could never be re-patched).
+    # ponytail: reads provenance.json per patch op; cache per run if a large
+    # re-ingest ever drags.
+    from silica.kernel.provenance import note_authored_by
+    already_present = templates.block_present(nc.content, heading, source_basename) or (
+        bool(source_basename) and note_authored_by(path, source_basename)
+    )
+    if already_present:
+        repaired = templates.ensure_hub_link(nc.content, op.hub)
+        if repaired != nc.content:
+            DRIVER.overwrite(path, repaired)
         return {"path": path, "op": "patch", "success": True, "skipped": "duplicate"}
 
     new_content = templates.patch_snippet(

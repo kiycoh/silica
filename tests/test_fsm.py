@@ -833,6 +833,47 @@ def test_collision_cooccur_only_candidate_is_never_routed():
     assert concepts_left[0]["name"] == "Graph Theory"
 
 
+def test_collision_inbox_candidate_is_filtered():
+    """An Inbox note surfacing as top collision candidate must never become a
+    patch target — validate rejects every Inbox path, so routing one guarantees
+    a rejected op (real incident: 2026-07-17 nucleate run, Lezione 1↔2 and the
+    SVM book cross-patching). The concept flows to normal distillation."""
+    from silica.kernel.relatedness import RelatedNote
+
+    fsm = _make_fsm_at_collision([{"name": "Support Vector Machines", "excerpt": "SVM intro."}])
+
+    mock_store = MagicMock()
+    mock_store.__len__ = lambda _: 5  # non-empty index
+
+    mock_embedder = MagicMock()
+    mock_embedder.embed.return_value = [[0.1, 0.2, 0.3]]
+
+    inbox_hit = [RelatedNote(
+        path="Inbox/svm-book/01-intro.md", name="Support Vector Machines",
+        score=0.92, evidence=["embed:0.92"], embed_score=0.92, cooccur_weight=None,
+    )]
+
+    with patch("silica.router.orchestrator.CONFIG") as mock_cfg, \
+         patch("silica.router.orchestrator.DRIVER") as mock_driver, \
+         patch("silica.kernel.embed.EmbedStore", return_value=mock_store), \
+         patch("silica.agent.providers.get_embedder", return_value=mock_embedder), \
+         patch("silica.kernel.relatedness.related_notes_for_query", return_value=inbox_hit):
+        mock_cfg.sim_threshold_high = 0.85
+        mock_cfg.sim_threshold_low = 0.65
+        mock_driver.read_note.return_value = MagicMock()  # graph would confirm the node
+
+        fsm.step()
+
+    assert fsm.state == InjectorState.DELEGATE
+    assert fsm.context.get("chunk_0_collision_ops", []) == []
+    concepts_left = [
+        c
+        for b in fsm._chunks[0].get("batches", [])
+        for c in b.get("concepts", [])
+    ]
+    assert [c["name"] for c in concepts_left] == ["Support Vector Machines"]
+
+
 def test_collision_empty_index_skips_transparently():
     """Empty embedding index → COLLISION is a no-op, chunk flows unchanged."""
     concepts = [{"name": "Test Concept"}, {"name": "Another Concept"}]

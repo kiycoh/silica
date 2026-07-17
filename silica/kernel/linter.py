@@ -89,8 +89,10 @@ def validate_note(path, hub, op_type=None):
             )
             warnings += check_plan_status(data)
 
-        # hub wikilink: required for spoke write/patch; NOT for hub-index/reformat/merge overwrites
-        if op_type != "overwrite" and hub and not ofm.has_wikilink(content, hub):
+        # hub wikilink: required for spoke write/patch; NOT for hub-index/reformat/merge
+        # overwrites, and NOT for the hub note itself (a self-link is meaningless).
+        is_hub_note = hub and Path(path).stem.casefold() == hub.casefold()
+        if op_type != "overwrite" and hub and not is_hub_note and not ofm.has_wikilink(content, hub):
             errors.append(f"Missing wikilink to [[{hub}]]")
 
         # atomicity: skip for patch (append) only

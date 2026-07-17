@@ -278,6 +278,12 @@ def validate_operations(
         source_basename = op.source_basename
         path = op.path
 
+        # Skip ops are no-ops (dedup/axis demotion keeps the original path on
+        # them) — rejecting one inflates the rejection rate past its
+        # actionable-only denominator, so short-circuit before any check.
+        if op_type == OpType.skip:
+            continue
+
         if has_payloads:
             if not heading:
                 rejected_ops.append(Rejection(op=op, reason="Missing 'heading' field"))
@@ -289,20 +295,37 @@ def validate_operations(
                 rejected_ops.append(Rejection(op=op, reason=f"Unknown source_basename '{source_basename}'"))
                 continue
             if heading not in valid_concepts[source_basename]:
-                rejected_ops.append(Rejection(op=op, reason=f"Heading '{heading}' not present in payload concepts"))
-                continue
+                # The distiller re-cases names and swaps typographic for
+                # straight apostrophes — remap a normalized unique match to
+                # the canonical payload name instead of rejecting.
+                def _heading_key(s: str) -> str:
+                    return " ".join(s.replace("’", "'").casefold().split())
+
+                near = [
+                    n for n in valid_concepts[source_basename]
+                    if _heading_key(n) == _heading_key(heading)
+                ]
+                if len(near) != 1:
+                    rejected_ops.append(Rejection(op=op, reason=f"Heading '{heading}' not present in payload concepts"))
+                    continue
+                logger.info("validate: heading '%s' normalized to payload concept '%s'", heading, near[0])
+                op.heading = heading = near[0]
 
         if path:
             path_abs = os.path.abspath(path)
-            forbidden = any(_is_within_dir(path_abs, folder) for folder in inbox_folders)
+            # Guard the whole configured inbox tree, not just the folders of the
+            # current run — a patch aimed at a *different* Inbox subfolder used
+            # to slip through validate and die (or land) at WRITE.
+            from silica.kernel.paths import is_inbox_path
+            forbidden = (
+                is_inbox_path(path)
+                or any(_is_within_dir(path_abs, folder) for folder in inbox_folders)
+            )
             if "/0 Inbox/" in path or "/0 inbox/" in path.lower() or forbidden:
                 rejected_ops.append(Rejection(op=op, reason=f"Target path '{path}' contains forbidden inbox segment"))
                 continue
 
-        if op_type == OpType.skip:
-            continue
-            
-        elif op_type == OpType.patch:
+        if op_type == OpType.patch:
             if not path:
                 rejected_ops.append(Rejection(op=op, reason="Missing 'path' field for patch operation"))
                 continue

@@ -270,6 +270,36 @@ def resolve_template(name: str | None = None) -> str:
     return BUILTIN_TEMPLATE
 
 
+def ensure_hub_link(content: str, hub: str | None) -> str:
+    """Guarantee the hub wikilink in a note's frontmatter `related:` list.
+
+    No-op when hub is falsy or any casing/alias form of the link is already
+    present. Callers: patch_snippet (fresh append) and the duplicate-block
+    branch of _execute_patch — the repair must land even when the snippet
+    itself is skipped, or lint fails the op forever."""
+    from silica.kernel.ofm import has_wikilink
+    if not hub or has_wikilink(content, hub):
+        return content
+    if content.startswith("---\n"):
+        end_idx = content.find("\n---\n", 4)
+        if end_idx == -1:
+            return content
+        if "\nrelated:\n" in content[:end_idx]:
+            parts = content.split("\nrelated:\n", 1)
+            return parts[0] + f'\nrelated:\n  - "[[{hub}]]"\n' + parts[1]
+        return content[:end_idx] + f'\nrelated:\n  - "[[{hub}]]"' + content[end_idx:]
+    today = datetime.date.today().isoformat()
+    frontmatter = f"""---
+parent note: "[[{hub}]]"
+related:
+  - "[[{hub}]]"
+last modified: {today}
+AI: true
+---
+"""
+    return frontmatter + content
+
+
 def patch_snippet(heading: str, snippet: str, source_basename: str, hub: str | None = None, existing_content: str | None = None) -> str:
     patch_text = f"""
 
@@ -278,27 +308,7 @@ def patch_snippet(heading: str, snippet: str, source_basename: str, hub: str | N
 {snippet.strip()}
 """
     if existing_content is not None:
-        if hub and f"[[{hub}]]" not in existing_content:
-            if existing_content.startswith("---\n"):
-                end_idx = existing_content.find("\n---\n", 4)
-                if end_idx != -1:
-                    if "\nrelated:\n" in existing_content[:end_idx]:
-                        parts = existing_content.split("\nrelated:\n", 1)
-                        existing_content = parts[0] + f'\nrelated:\n  - "[[{hub}]]"\n' + parts[1]
-                    else:
-                        existing_content = existing_content[:end_idx] + f'\nrelated:\n  - "[[{hub}]]"' + existing_content[end_idx:]
-            else:
-                today = datetime.date.today().isoformat()
-                frontmatter = f"""---
-parent note: "[[{hub}]]"
-related:
-  - "[[{hub}]]"
-last modified: {today}
-AI: true
----
-"""
-                existing_content = frontmatter + existing_content
-
+        existing_content = ensure_hub_link(existing_content, hub)
         return existing_content.rstrip() + "\n" + patch_text
 
     return patch_text

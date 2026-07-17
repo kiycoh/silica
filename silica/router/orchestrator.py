@@ -273,6 +273,8 @@ class InjectorFSM(BaseFSM[InjectorState]):
             raise ValueError("At least one inbox file must be provided")
         self.inbox_files: list[str] = [to_vault_relative(f) for f in files]
         self.inbox_file: str = self.inbox_files[0]  # first file; compat with single-file callers
+        from silica.kernel.paths import resolve_target_dir
+        target_dir = resolve_target_dir(target_dir)
         self.target_dir = target_dir
 
         # Hub sanity check: if not specified, inherit the folder name of target_dir

@@ -81,9 +81,15 @@ def silica_recon(inbox_file: str, limit: int = 0) -> dict[str, Any]:
             continue
             
         # Group hits by ref
+        from silica.kernel.paths import is_inbox_path
         grouped = {}
         for h in hits:
             if h.ref.path and ('/done/' in h.ref.path or h.ref.path.startswith('done/')):
+                continue
+            # Inbox notes are staging, never collision targets: registering one
+            # as vault_collision dooms every downstream op (patch-the-inbox is
+            # forbidden, patch-the-right-note mismatches the expected collision).
+            if h.ref.path and is_inbox_path(h.ref.path):
                 continue
             if _same_note(h.ref, nc.ref):
                 continue

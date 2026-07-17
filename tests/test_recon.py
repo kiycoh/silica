@@ -127,7 +127,34 @@ _RECON_BODY = (
 )
 
 
+class _InboxHitDriver(_BatchSpyDriver):
+    """Every query hits ONLY an Inbox note — a staging file indexed like any
+    vault note. Real incident 2026-07-17: the SVM-book Inbox folder became the
+    expected collision for half of Lezione 1's concepts, dooming every op."""
+    def search_context_batch(self, queries):
+        self.batch_calls += 1
+        from silica.driver.base import Hit, NoteRef
+        ref = NoteRef(name="01-intro", path="Inbox/svm-book/01-intro.md")
+        return {q: [Hit(ref=ref, line=1, snippet=q)] for q in queries}
+
+
 class TestReconBatch:
+    def test_inbox_hits_never_become_collisions(self, monkeypatch):
+        """An Inbox-only hit is not a collision: validate rejects every Inbox
+        target, so registering one poisons the payload's vault_collision and
+        the distiller can never produce an acceptable op. The concept must be
+        classified as new instead."""
+        import silica.tools.pipeline as pipe
+        from silica.config import CONFIG
+        monkeypatch.setattr(CONFIG, "defer_uncorroborated_concepts", False, raising=False)
+        drv = _InboxHitDriver(_RECON_BODY)
+        monkeypatch.setattr(pipe, "DRIVER", drv)
+
+        res = pipe.silica_recon("inbox/note.md")
+
+        assert res["collisions"] == []
+        assert res["new_concepts"]
+
     def test_recon_uses_batch_search_once(self, monkeypatch):
         """Hot path issues ONE batch call (N->1) and never per-concept search."""
         import silica.tools.pipeline as pipe
