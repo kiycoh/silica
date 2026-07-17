@@ -1169,6 +1169,45 @@ details.side-section:hover>summary.side-title {
   background: var(--void);
 }
 
+/* graph view-mode toggle: links | concepts | heat (stays above #graph-loading) */
+#graph-bar {
+  display: flex;
+  gap: 0;
+  padding: 0.6rem 1rem;
+  border-bottom: 1px solid var(--line);
+  position: relative;
+  z-index: 3;
+  background: var(--void);
+}
+
+#graph-bar button {
+  background: var(--slate-2);
+  color: var(--ash);
+  border: 1px solid var(--line-2);
+  border-right: none;
+  padding: 0.45rem 1.1rem;
+  cursor: pointer;
+  font-family: var(--sans);
+  text-transform: uppercase;
+  letter-spacing: 0.08em;
+  font-size: 11px;
+}
+
+#graph-bar button:last-child {
+  border-right: 1px solid var(--line-2);
+}
+
+#graph-bar button:hover {
+  color: var(--frost);
+}
+
+#graph-bar button.active {
+  background: var(--accent);
+  border-color: var(--accent);
+  color: var(--void);
+  font-weight: 700;
+}
+
 /* stay above #map-loading overlay */
 #map-note {
   flex: 1;
@@ -1236,7 +1275,7 @@ body.dragging #drop-hint {
   }
 }
 
-@keyframes iridesce {
+@keyframes caret-iridesce {
   0% {
     color: #00CEEA;
   }
@@ -1259,7 +1298,7 @@ body.dragging #drop-hint {
 .caret {
   margin-left: 1px;
   user-select: none;
-  animation: iridesce 5s ease-in-out infinite;
+  animation: caret-iridesce 5s ease-in-out infinite;
 }
 
 /* empty state — mascot ASCII art (docs/assets/silica_hires.txt) + caption instead of a
@@ -1465,12 +1504,15 @@ details.fm summary:hover {
   font-size: 12px;
 }
 
-/* note drawer mini-map — native <details>, same collapse idiom as .thinking */
-#note-mini-map {
+/* note drawer mini-map + concept heatmap — native <details>, same collapse
+   idiom as .thinking */
+#note-mini-map,
+#note-heatmap {
   border-bottom: 1px solid var(--line);
 }
 
-#note-mini-map summary {
+#note-mini-map summary,
+#note-heatmap summary {
   cursor: pointer;
   list-style: none;
   padding: 0.5rem 1.1rem;
@@ -1481,23 +1523,28 @@ details.fm summary:hover {
   transition: color .1s linear;
 }
 
-#note-mini-map summary::-webkit-details-marker {
+#note-mini-map summary::-webkit-details-marker,
+#note-heatmap summary::-webkit-details-marker {
   display: none;
 }
 
-#note-mini-map:not([open]) summary::before {
+#note-mini-map:not([open]) summary::before,
+#note-heatmap:not([open]) summary::before {
   content: "▸ ";
 }
 
-#note-mini-map[open] summary::before {
+#note-mini-map[open] summary::before,
+#note-heatmap[open] summary::before {
   content: "▾ ";
 }
 
-#note-mini-map summary:hover {
+#note-mini-map summary:hover,
+#note-heatmap summary:hover {
   color: var(--frost);
 }
 
-#note-mini-map-frame {
+#note-mini-map-frame,
+#note-heatmap-frame {
   width: 100%;
   height: 240px;
   border: none;

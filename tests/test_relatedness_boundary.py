@@ -42,6 +42,7 @@ ALLOWED = {
     "kernel/graph_report/embed_signals.py": "pairwise cosine (missing links, dup pairs)",
     "kernel/graph_report/cooccur_delta.py": "co-occurrence delta + cosine-band filter + store injection",
     "kernel/graph_export.py":       "cluster labels via CooccurStore.community_labels, not relatedness ranking",
+    "kernel/heatmap.py":            "concept x concept matrix straight off CooccurStore adjacency (viz surface), not relatedness ranking",
     "kernel/mindmap.py":            "constructs stores to inject into the facade (mindmap latent leg)",
     "kernel/memory_lane.py":        "constructs the memory-lane store pair to inject into the facade (ADR-0019), never ranks",
     "kernel/vault_map.py":          "session-start vault map via CooccurStore (to_networkx/node_label, top_stems), not relatedness ranking",

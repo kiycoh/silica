@@ -114,6 +114,11 @@
     </section>
 
     <section id="view-graph" class="view">
+      <div id="graph-bar">
+        <button type="button" class="active" data-gmode="links" title="wikilink graph">links</button>
+        <button type="button" data-gmode="concepts" title="note–concept bipartite expansion">concepts</button>
+        <button type="button" data-gmode="heat" title="concept co-occurrence matrix">heat</button>
+      </div>
       <div id="graph-loading" class="frame-loading" hidden>
         <div class="spinner"></div>
         <div>[ BUILDING GRAPH&hellip; LARGE VAULTS TAKE A MOMENT ]</div>
@@ -148,6 +153,10 @@
     <details id="note-mini-map">
       <summary>map preview</summary>
       <iframe id="note-mini-map-frame" title="note map preview"></iframe>
+    </details>
+    <details id="note-heatmap">
+      <summary>concept heatmap</summary>
+      <iframe id="note-heatmap-frame" title="note concept heatmap"></iframe>
     </details>
     <div id="note-body"></div>
   </aside>

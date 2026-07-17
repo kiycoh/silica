@@ -695,3 +695,70 @@ def test_chat_done_html_linkifies_a_cited_note(client, tmp_vault, monkeypatch):
     assert done["type"] == "done"
     assert 'class="note-link"' in done["html"]
     assert 'data-path="Foo.md"' in done["html"]
+
+
+def test_graph_route_threads_mode_to_export(client, monkeypatch):
+    """F4: GET /graph?mode=concepts reaches export_graph(mode="concepts");
+    the default stays "links" (bit-identical)."""
+    import silica.ui.web.graph_view as gv
+
+    tc, _server = client
+    seen = {}
+
+    def spy(output_path, folder="", title="Vault Graph", mode="links"):
+        seen["mode"] = mode
+        Path(output_path).write_text("<html>stub</html>", encoding="utf-8")
+        return {"success": True, "path": output_path, "nodes": 0, "edges": 0,
+                "communities": 0, "unresolved": 0, "gaps": 0, "concepts": 0}
+
+    monkeypatch.setattr(gv, "export_graph", spy)
+    assert tc.get("/graph?mode=concepts").status_code == 200
+    assert seen["mode"] == "concepts"
+    tc.get("/graph")
+    assert seen["mode"] == "links"
+
+
+def test_heatmap_route_serves_kernel_page(client, monkeypatch):
+    """GET /heatmap returns the kernel-rendered page; a kernel failure degrades
+    to a readable message like /graph, never a 500."""
+    import silica.kernel.heatmap as hm
+
+    tc, _server = client
+    monkeypatch.setattr(hm, "heatmap_page",
+                        lambda focus=None, top_n=40, min_pct=0, note=None: "<html>hm-stub</html>")
+    r = tc.get("/heatmap")
+    assert r.status_code == 200
+    assert "hm-stub" in r.text
+
+    def boom(focus=None, top_n=40, min_pct=0, note=None):
+        raise RuntimeError("no index")
+
+    monkeypatch.setattr(hm, "heatmap_page", boom)
+    r = tc.get("/heatmap")
+    assert r.status_code == 200
+    assert "heatmap unavailable" in r.text
+
+
+def test_heatmap_route_threads_focus_query(client, monkeypatch):
+    import silica.kernel.heatmap as hm
+
+    tc, _server = client
+    seen = {}
+
+    def spy(focus=None, top_n=40, min_pct=0, note=None):
+        seen["focus"] = focus
+        seen["top_n"] = top_n
+        seen["min_pct"] = min_pct
+        seen["note"] = note
+        return "<html>x</html>"
+
+    monkeypatch.setattr(hm, "heatmap_page", spy)
+    tc.get("/heatmap?q=training&n=25&p=35")
+    assert seen["focus"] == "training"
+    assert seen["top_n"] == 25
+    assert seen["min_pct"] == 35
+    tc.get("/heatmap?note=sub%2Fn4.md")
+    assert seen["note"] == "sub/n4.md"
+    tc.get("/heatmap")
+    assert seen["focus"] is None
+    assert seen["note"] is None

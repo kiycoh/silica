@@ -503,10 +503,28 @@ $(".tabs").addEventListener("click", (e) => {
   $("#view-map").classList.toggle("active", tab === "map");
   if (tab === "graph" && graphStale) {
     $("#graph-loading").hidden = false;
-    $("#graph-frame").src = "/graph?" + Date.now();
+    $("#graph-frame").src = graphURL();
     graphStale = false;
   }
   if (tab === "map") $("#map-note").focus();
+});
+
+// --- graph view mode: links | concepts | heat --------------------------------
+// links/concepts are the same 3d renderer (/graph?mode=…); heat is a separate
+// server-rendered matrix page (/heatmap) loaded into the same iframe.
+let graphMode = "links";
+function graphURL() {
+  return graphMode === "heat"
+    ? "/heatmap?t=" + Date.now()
+    : "/graph?mode=" + graphMode + "&t=" + Date.now();
+}
+$("#graph-bar").addEventListener("click", (e) => {
+  const m = e.target.dataset.gmode;
+  if (!m || m === graphMode) return;
+  graphMode = m;
+  document.querySelectorAll("#graph-bar button").forEach((b) => b.classList.toggle("active", b.dataset.gmode === m));
+  $("#graph-loading").hidden = false;
+  $("#graph-frame").src = graphURL();
 });
 // iframe finishes loading only once the server is done building the graph — drop the loader then
 $("#graph-frame").addEventListener("load", () => {
@@ -637,6 +655,8 @@ async function openNote(path) {
   focusGraphNode(path);
   $("#note-mini-map").open = false; // reset: reload lazily if reopened for the new note
   $("#note-mini-map-frame").src = "";
+  $("#note-heatmap").open = false;
+  $("#note-heatmap-frame").src = "";
   try {
     const r = await fetch("/note?path=" + encodeURIComponent(path));
     const data = await r.json();
@@ -668,6 +688,14 @@ $("#note-last").addEventListener("click", () => {
 $("#note-mini-map").addEventListener("toggle", function () {
   if (this.open && lastNotePath) {
     $("#note-mini-map-frame").src = "/map?note=" + encodeURIComponent(lastNotePath);
+  }
+});
+
+// Concept heatmap: same lazy idiom — this note's concepts plus their
+// strongest out-of-note neighbors, rendered only when expanded.
+$("#note-heatmap").addEventListener("toggle", function () {
+  if (this.open && lastNotePath) {
+    $("#note-heatmap-frame").src = "/heatmap?note=" + encodeURIComponent(lastNotePath);
   }
 });
 

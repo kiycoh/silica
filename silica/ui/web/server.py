@@ -702,17 +702,33 @@ async def nucleate(files: list[UploadFile] = File(...), text: str = Form("")):
 
 
 @app.get("/graph")
-def graph():
+def graph(mode: str = "links"):
     import tempfile
 
     from silica.tools import TOOLS
 
     out = Path(tempfile.gettempdir()) / "silica_web_graph.html"  # regenerated each request
     try:
-        TOOLS["silica_graph_export"].run(output_path=str(out), folder="")
+        TOOLS["silica_graph_export"].run(output_path=str(out), folder="", mode=mode)
         return HTMLResponse(out.read_text(encoding="utf-8"))
     except Exception as exc:
         return HTMLResponse(f"<p style='font-family:monospace'>graph unavailable: {exc}</p>")
+
+
+@app.get("/heatmap")
+def heatmap(q: str = "", n: int = 0, p: int = 0, note: str = ""):
+    """Concept co-occurrence matrix, regenerated per request like /graph.
+    ?q= focuses the matrix on one concept and its strongest co-occurrents;
+    ?note= scopes it to one note's concepts + their out-of-note neighbors
+    (the drawer's collapsible preview); ?n= caps the number of concepts,
+    ?p= floors cell weight as % of the strongest (both clamped kernel-side)."""
+    from silica.kernel import heatmap as hm
+
+    try:
+        return HTMLResponse(hm.heatmap_page(focus=q or None, top_n=n or 40,
+                                            min_pct=p, note=note or None))
+    except Exception as exc:
+        return HTMLResponse(f"<p style='font-family:monospace'>heatmap unavailable: {exc}</p>")
 
 
 @app.get("/map")
