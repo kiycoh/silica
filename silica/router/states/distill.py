@@ -323,6 +323,9 @@ def handle_delegate(fsm: "InjectorFSM") -> None:
             # own day — the doc's frontmatter `date:` when present, else the
             # run's start date.
             session_date=_doc_date(fsm, idx) or fsm.progress.started_at[:10],
+            language=fsm.context.get(
+                f"file_{fsm._chunk_flat_to_fi_ci.get(idx, (fsm._current_file_idx, 0))[0]}_language"
+            ),
         )
         if "error" in chunk_result:
             fsm._progress_note(fsm._chunk_task_id("distill"), "distill", "failed", error=chunk_result["error"])

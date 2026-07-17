@@ -257,6 +257,25 @@ def handle_payload(fsm: "InjectorFSM") -> None:
         fsm._chunk_flat_to_fi_ci[start_flat + ci] = (fi, ci)
     fsm._current_chunk_idx = start_flat
 
+    # Cache-stable prompt: pin the distiller LANGUAGE once per file so the
+    # rendered template prefix is byte-identical across this file's chunks
+    # (per-chunk detection can flap between chunks and bust the prefix cache).
+    try:
+        from silica.kernel import language as lang_mod
+        from silica.kernel.prep_delegation import _payload_sample_text
+        from silica.kernel.vault_manifest import get_active_manifest
+        if not get_active_manifest().conventions.language:
+            sample = ""
+            for _chunk in new_chunks:
+                sample = _payload_sample_text(_chunk)
+                if sample:
+                    break
+            fsm.context[f"file_{fi}_language"] = lang_mod.display_name(
+                lang_mod.detect(sample[:4000])
+            )
+    except Exception as _lang_e:
+        logger.debug("PAYLOAD: language pin skipped (non-fatal): %s", _lang_e, exc_info=True)
+
     # Accumulate facts["sources"] with per-file concept + chunk counts
     n_concepts = sum(
         len(b.get("concepts", []))

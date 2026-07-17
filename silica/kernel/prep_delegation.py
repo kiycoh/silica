@@ -16,6 +16,7 @@ import json
 import logging
 import os
 import threading
+import typing
 from pathlib import Path
 
 logger = logging.getLogger(__name__)
@@ -33,7 +34,7 @@ def _load_prompt() -> str:
 
 
 def render_prompt(target: str, hub: str | None = None, source_text: str = "",
-                  session_date: str = "") -> str:
+                  session_date: str = "", language: str | None = None) -> str:
     """Render the distiller prompt with TARGET/LANGUAGE/MAX_TAGS substitution.
 
     `session_date` (F2a): the date the SOURCE session/document happened — not
@@ -45,14 +46,18 @@ def render_prompt(target: str, hub: str | None = None, source_text: str = "",
     `ofm.ofm_lint`'s max-tags check. A vault without a manifest gets today's
     default (3), so this is bit-identical when unconfigured.
 
-    LANGUAGE follows the source: `conventions.language` unset (None) means
-    "follow the source document's language" — detected from `source_text`
-    (capped to 4000 chars, enough signal without scanning whole PDFs). A
-    declared `conventions.language` is translation intent and always wins,
-    regardless of the source. The {LANGUAGE} placeholder always receives a
-    concrete language name ("Italian", "English", ...), never None.
+    LANGUAGE precedence: explicit `language` arg > declared
+    `conventions.language` > per-call detection from `source_text`. An explicit
+    arg is pinned once per file at PAYLOAD so the rendered template is
+    byte-identical across a file's chunks/steer retries (cache-stable prefix);
+    `conventions.language` unset (None) means "follow the source document's
+    language" — detected from `source_text` (capped to 4000 chars, enough
+    signal without scanning whole PDFs). A declared `conventions.language` is
+    translation intent and always wins over detection. The {LANGUAGE}
+    placeholder always receives a concrete language name ("Italian",
+    "English", ...), never None.
     """
-    from silica.kernel import language
+    from silica.kernel import language as lang_mod
     from silica.kernel.vault_manifest import get_active_manifest
 
     body = _load_prompt()
@@ -60,8 +65,11 @@ def render_prompt(target: str, hub: str | None = None, source_text: str = "",
     if hub:
         body = body.replace("{HUB_NAME}", hub)
     conventions = get_active_manifest().conventions
-    lang_name = conventions.language or language.display_name(
-        language.detect(source_text[:4000])
+    # Cache-stable prefix: an explicit `language` (pinned once per file at
+    # PAYLOAD) wins over per-call detection, so the rendered template is
+    # byte-identical across all chunks and steer retries of a file.
+    lang_name = language or conventions.language or lang_mod.display_name(
+        lang_mod.detect(source_text[:4000])
     )
     body = body.replace("{LANGUAGE}", lang_name)
     body = body.replace("{MAX_TAGS}", str(conventions.max_tags))
@@ -326,6 +334,7 @@ def run_distiller(
     steer_context: str | None = None,
     substrate: str | None = None,
     session_date: str = "",
+    language: str | None = None,
 ) -> dict:
     """Call the Distiller LLM (single-turn) for one payload chunk.
 
@@ -348,7 +357,7 @@ def run_distiller(
 
     prompt_text = render_prompt(target=target, hub=hub,
                                 source_text=_payload_sample_text(payload),
-                                session_date=session_date)
+                                session_date=session_date, language=language)
     # Assemble context through the context assembler (Phase 2 rails).
     # Only ledger_digest + the checkpoint payload reach the model — no other
     # vault content is forwarded here.
@@ -361,12 +370,27 @@ def run_distiller(
 
     # steer_context arrives fully rendered (render_steer_feedback), header included.
     steer_section = f"\n\n{steer_context}\n" if steer_context else ""
-    user_message = (
-        f"{prompt_text}\n\n"
-        f"---\n"
-        f"{ctx}"
-        f"{steer_section}"
-    )
+    ctx_text = f"---\n{ctx}"
+    # Budget arithmetic runs on the same concatenation as the old single-message
+    # prompt, so token sizing is unchanged by the split.
+    budget_text = f"{prompt_text}\n\n{ctx_text}{steer_section}"
+
+    # Cache-stable layout ("Don't Break the Cache", arXiv 2601.06007): the
+    # per-file-stable template is a system block with a cache_control marker;
+    # dynamic content (ctx) is user part 1 with a second marker so steer
+    # retries reuse template+ctx prefill; steer is an appended trailing part.
+    # Non-caching upstreams ignore the markers harmlessly.
+    user_parts: list[dict[str, typing.Any]] = [
+        {"type": "text", "text": ctx_text, "cache_control": {"type": "ephemeral"}}
+    ]
+    if steer_section:
+        user_parts.append({"type": "text", "text": steer_section})
+    messages = [
+        {"role": "system", "content": [
+            {"type": "text", "text": prompt_text, "cache_control": {"type": "ephemeral"}}
+        ]},
+        {"role": "user", "content": user_parts},
+    ]
 
     logger.info("Calling Distiller LLM")
 
@@ -389,14 +413,14 @@ def run_distiller(
         ceiling = ceiling or out_cap
     safety_margin = int(os.getenv("DISTILLER_TOKEN_SAFETY_MARGIN", "2048"))
     max_tokens = compute_distiller_max_tokens(
-        user_message,
+        budget_text,
         context_window=context_window,
         safety_margin=safety_margin,
         ceiling=ceiling,
     )
     logger.info(
         "Distiller output budget: %d tokens (window=%d, prompt≈%d, margin=%d, ceiling=%s)",
-        max_tokens, context_window, estimate_prompt_tokens(user_message), safety_margin,
+        max_tokens, context_window, estimate_prompt_tokens(budget_text), safety_margin,
         ceiling if ceiling > 0 else "none",
     )
 
@@ -404,7 +428,7 @@ def run_distiller(
     try:
         provider = get_provider(CONFIG, role="worker")
         response = _call_with_deadline(lambda: provider.call_llm(
-            messages=[{"role": "user", "content": user_message}],
+            messages=messages,
             tools=None,
             response_schema=DistillerOutput,
             max_tokens=max_tokens,
@@ -415,7 +439,7 @@ def run_distiller(
         from silica.agent.llm import call_llm
         response = _call_with_deadline(lambda: call_llm(
             model=CONFIG.model,
-            messages=[{"role": "user", "content": user_message}],
+            messages=messages,
             tools=None,
             max_tokens=max_tokens,
             response_format=DistillerOutput,

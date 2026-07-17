@@ -302,7 +302,9 @@ def test_run_distiller_wires_payload_excerpts_into_language_detection(
     result = run_distiller(payload=payload, target="Concepts/AI")
     assert "error" not in result
 
-    sent = mock_provider.call_llm.call_args.kwargs["messages"][0]["content"]
+    # Cache-stable split: the rendered template (with {LANGUAGE} resolved) is
+    # the system message's first text part.
+    sent = mock_provider.call_llm.call_args.kwargs["messages"][0]["content"][0]["text"]
     assert "written in Italian" in sent
     assert "{LANGUAGE}" not in sent
 
