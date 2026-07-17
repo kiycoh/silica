@@ -27,6 +27,30 @@ logger = logging.getLogger(__name__)
 # Emitted by the C3 title gate in validate_operations (band 2).
 _NEAR_TITLE_RE = re.compile(r"near_title candidate='([^']*)' path='([^']*)'")
 
+# Frontmatter `date:` of a source document. Two-step (block, then key inside
+# it) so a `date:` line in the body can never match; the YYYY-MM-DD prefix is
+# enough, quoted or datetime values included.
+_FM_BLOCK_RE = re.compile(r"\A---\r?\n(.*?)\r?\n(?:---|\.\.\.)[ \t]*(?:\r?\n|\Z)", re.S)
+_FM_DATE_RE = re.compile(r"^date:\s*['\"]?(\d{4}-\d{2}-\d{2})", re.M)
+
+
+def _doc_date(fsm: "InjectorFSM", idx: int) -> str:
+    """Frontmatter `date:` of the chunk's source document, or "".
+
+    A dated document (journal page, meeting note) anchors the distiller's
+    relative-date resolution to the day it was written; callers fall back to
+    the run's start date. Best-effort: unreadable source returns "".
+    """
+    try:
+        fi = fsm._chunk_flat_to_fi_ci.get(idx, (None, None))[0]
+        src = (fsm._file_chunks.get(fi) or {}).get("source_file") or fsm.inbox_file
+        text = orch.DRIVER.read_note(src).content or ""
+        fm = _FM_BLOCK_RE.match(text)
+        m = _FM_DATE_RE.search(fm.group(1)) if fm else None
+        return m.group(1) if m else ""
+    except Exception:
+        return ""
+
 
 def _enqueue_near_title_dedups(fsm: "InjectorFSM", rejected_raw: list) -> None:
     """Fuzzy-band title rejections become live dedup WorkItems (C3 reuses C2).
@@ -295,6 +319,10 @@ def handle_delegate(fsm: "InjectorFSM") -> None:
             ledger_digest=ledger_digest,
             steer_context=steer_context,
             substrate=substrate,
+            # F2a: relative dates in fact values resolve against the source's
+            # own day — the doc's frontmatter `date:` when present, else the
+            # run's start date.
+            session_date=_doc_date(fsm, idx) or fsm.progress.started_at[:10],
         )
         if "error" in chunk_result:
             fsm._progress_note(fsm._chunk_task_id("distill"), "distill", "failed", error=chunk_result["error"])
@@ -306,6 +334,8 @@ def handle_delegate(fsm: "InjectorFSM") -> None:
         capture_from_distill(
             chunk_result,
             run_id=fsm.progress.run_id,
+            # Deliberately the ingest day, not the doc date: episodic TTL
+            # keys off `seen`, and a backdated doc would expire on arrival.
             seen=fsm.progress.started_at[:10],
         )
 

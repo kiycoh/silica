@@ -84,6 +84,8 @@ Facts about the user or their immediate context that are personal, time-bound, o
 
 When the excerpt is a dialogue, ALSO capture the specific facts the ASSISTANT stated that the user may later ask back (recommendations made, schedules/rotas, names, colors, prices, itineraries, generated content details). Key them under the subject entity with an `assistant.` prefix when the assistant is the source (e.g. `assistant.recipe.oven_temp`, `assistant.itinerary.day1.city`). A detail the assistant produced is as recallable as one the user said — losing it is distill-loss.
 
+Resolve dates: this session happened on **{SESSION_DATE}**. A relative time expression in the source ("last Tuesday", "two months ago", "yesterday") MUST be rendered as an absolute `YYYY-MM-DD` date computed from that session date, with the original wording kept alongside it (e.g. `adopted the dog on 2026-03-04 ("two months ago")`). When the session date is `unknown`, or the expression is too vague to anchor ("a while back"), keep the source wording verbatim and never guess a date.
+
 Keep keys STABLE across sessions: reuse the same `entity.attribute` slug for the same real-world attribute (e.g. always `user.car.model`, never a synonym key later) — supersede chains only link on identical keys.
 
 When a `## Episodic keys` section is present in your context, it lists the live keys already in the store: if a fact concerns an attribute listed there, you MUST reuse that exact key rather than coining a variant (reuse `user.car.model` from the list instead of emitting `user.vehicle.model` or `user.cars.model`). Coin a new key only for attributes the list does not cover.

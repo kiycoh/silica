@@ -122,9 +122,41 @@ def test_fsm_delegate_single_chunk(mock_run_distiller):
         assert call_kwargs["hub"] == "TargetDir"
         # ledger_digest is injected by Phase 2 — just assert it's a string or None
         assert isinstance(call_kwargs.get("ledger_digest"), (str, type(None)))
+        # F2a: live ingest resolves relative dates against the run's start date.
+        assert call_kwargs["session_date"] == fsm.progress.started_at[:10]
         mock_make_tmp.assert_called_once_with({"updates": [{"op": "write", "path": "notes/note1.md", "heading": "Note 1"}]})
         assert fsm.state == InjectorState.SANITIZE
         assert fsm.context["chunk"]["distiller_output_path"] == "temp_chunk_path.json"
+
+
+@patch("silica.kernel.prep_delegation.run_distiller")
+def test_fsm_delegate_dated_doc_anchors_session_date(mock_run_distiller):
+    """A source doc with frontmatter `date:` anchors the distiller's
+    relative-date resolution to the doc's own day, not the ingest day."""
+    from silica.driver.base import NoteContent, NoteRef
+
+    fsm = InjectorFSM("Inbox/journal.md", "TargetDir")
+    fsm._chunks = [{"chunk_id": 0, "concepts": ["a"]}]
+    fsm._file_chunks = {0: {"source_file": "Inbox/journal.md", "chunks": fsm._chunks}}
+    fsm._chunk_flat_to_fi_ci = {0: (0, 0)}
+    fsm._current_chunk_idx = 0
+    fsm.state = InjectorState.DELEGATE
+
+    mock_run_distiller.return_value = {"updates": [{"op": "write", "path": "notes/n.md", "heading": "N"}]}
+    doc = NoteContent(
+        ref=NoteRef(name="journal", path="Inbox/journal.md"),
+        content=(
+            "---\ndate: 2024-03-12\ntags: [journal]\n---\n"
+            "Yesterday we froze the corpus.\n"
+            "date: 9999-01-01 in the body must not match\n"
+        ),
+    )
+    with patch.object(fsm, "_make_tmp", return_value="tmp.json"), \
+         patch("silica.router.orchestrator.DRIVER.read_note", return_value=doc) as mock_read:
+        fsm.step()
+
+    mock_read.assert_called_once_with("Inbox/journal.md")
+    assert mock_run_distiller.call_args.kwargs["session_date"] == "2024-03-12"
 
 
 @patch("silica.router.orchestrator.silica_recon")
@@ -902,8 +934,6 @@ def test_fsm_create_settle_timeout_rollback(
     mock_cleanup, mock_restore, mock_snapshot, mock_driver,
     mock_validate, mock_sanitize, mock_run_distiller, mock_payload, mock_recon
 ):
-    from silica.driver.base import SettleTimeout
-
     mock_recon.return_value = {"success": True}
     mock_payload.return_value = {"payload": {"chunk_id": 0}}
     mock_run_distiller.return_value = {"updates": []}
@@ -929,8 +959,8 @@ def test_fsm_create_settle_timeout_rollback(
     
     fsm = InjectorFSM("Inbox/test_fsm_settle.md", "TargetDir")
     
-    # We patch silica.kernel.bulk.DRIVER.create to raise SettleTimeout
-    with patch("silica.kernel.bulk.DRIVER.create", side_effect=SettleTimeout("Settle timeout mock error")):
+    # We patch silica.kernel.bulk.DRIVER.create to raise a driver write failure
+    with patch("silica.kernel.bulk.DRIVER.create", side_effect=RuntimeError("Settle timeout mock error")):
         with patch("silica.kernel.graph_diff.check_graph_regression", return_value=(True, [])):
             res = fsm.run()
         

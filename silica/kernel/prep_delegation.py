@@ -33,8 +33,13 @@ def _load_prompt() -> str:
     return _PROMPT_PATH.read_text(encoding="utf-8")
 
 
-def render_prompt(target: str, hub: str | None = None, source_text: str = "") -> str:
+def render_prompt(target: str, hub: str | None = None, source_text: str = "",
+                  session_date: str = "") -> str:
     """Render the distiller prompt with TARGET/LANGUAGE/MAX_TAGS substitution.
+
+    `session_date` (F2a): the date the SOURCE session/document happened — not
+    necessarily today (eval passes simulated time; dated documents pass their
+    own date). Empty ⇒ "unknown", and the prompt rule keeps source wording.
 
     MAX_TAGS comes from the active vault's `conventions:` block
     (silica/kernel/vault_manifest.py) — single source shared with
@@ -61,6 +66,7 @@ def render_prompt(target: str, hub: str | None = None, source_text: str = "") ->
     )
     body = body.replace("{LANGUAGE}", lang_name)
     body = body.replace("{MAX_TAGS}", str(conventions.max_tags))
+    body = body.replace("{SESSION_DATE}", session_date.strip() or "unknown")
     if _ANTI_SLOP_PATH.exists():  # ponytail: optional fragment, missing file must not break nucleation
         body += "\n\n" + _ANTI_SLOP_PATH.read_text(encoding="utf-8")
     return body
@@ -316,6 +322,7 @@ def run_distiller(
     ledger_digest: str | None = None,
     steer_context: str | None = None,
     substrate: str | None = None,
+    session_date: str = "",
 ) -> dict:
     """Call the Distiller LLM (single-turn) for one payload chunk.
 
@@ -336,7 +343,9 @@ def run_distiller(
     from silica.kernel.ops import DistillerOutput
     from silica.kernel.sanitize import parse_json
 
-    prompt_text = render_prompt(target=target, hub=hub, source_text=_payload_sample_text(payload))
+    prompt_text = render_prompt(target=target, hub=hub,
+                                source_text=_payload_sample_text(payload),
+                                session_date=session_date)
     payload_json = json.dumps(payload, ensure_ascii=False, indent=2)
     checksum = payload_checksum(payload_json)
 

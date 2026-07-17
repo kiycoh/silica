@@ -133,6 +133,41 @@ def test_render_prompt_no_manifest_no_source_text_degrades_to_english(monkeypatc
     assert "written in English" in rendered
 
 
+def test_render_prompt_session_date_substituted(monkeypatch):
+    """F2a: {SESSION_DATE} carries the source session's date into the
+    ephemeral date-resolution rule."""
+    monkeypatch.setattr(CONFIG, "vault_path", "")
+    from silica.kernel.prep_delegation import render_prompt
+
+    rendered = render_prompt(target="Concepts/AI", session_date="2026-05-01")
+    assert "2026-05-01" in rendered
+    assert "{SESSION_DATE}" not in rendered
+
+
+def test_render_prompt_session_date_defaults_to_unknown(monkeypatch):
+    """No session date ⇒ the placeholder still resolves (to "unknown") and the
+    rule tells the model to keep source wording — never guess."""
+    monkeypatch.setattr(CONFIG, "vault_path", "")
+    from silica.kernel.prep_delegation import render_prompt
+
+    rendered = render_prompt(target="Concepts/AI")
+    assert "{SESSION_DATE}" not in rendered
+    assert "unknown" in rendered
+
+
+def test_distiller_prompt_has_date_resolution_rule(monkeypatch):
+    """The Ephemeral Facts section instructs relative->absolute date
+    resolution with the never-guess fallback."""
+    monkeypatch.setattr(CONFIG, "vault_path", "")
+    from silica.kernel.prep_delegation import render_prompt
+
+    rendered = render_prompt(target="Concepts/AI", session_date="2026-05-01")
+    low = rendered.lower()
+    assert "relative time" in low
+    assert "yyyy-mm-dd" in low
+    assert "keep the source wording" in low
+
+
 def test_render_prompt_follows_source_language_italian(tmp_path, monkeypatch):
     """No `conventions.language` declared ⇒ follow the source: an Italian
     source sample resolves {LANGUAGE} to "Italian" via real detection."""
