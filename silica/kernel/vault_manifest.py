@@ -50,6 +50,11 @@ class VaultConventions:
     reply_language: str | None = None
     max_tags: int = 3
     extra_callouts: tuple[str, ...] = ()
+    # ADR-0021 F1b: free-form authoring rules injected into the distiller prompt
+    # ({CAPTURE_RULES} placeholder). "" ⇒ placeholder renders empty, bit-identical
+    # to before. This is where a vault declares spatial/format capture conventions
+    # (F3), e.g. "Record every measurement in metric with the imperial in parens".
+    capture_rules: str = ""
     wiki_dir: str = ""  # landing dir for /wiki notes; "" ⇒ vault root
     # Frontmatter templates (2026-07-17 spec): None ⇒ built-in template_spoke
     # layout — a vault with no config behaves bit-identically to before.
@@ -123,6 +128,9 @@ def _parse_conventions(raw: dict) -> VaultConventions:
     if not (isinstance(max_tags, int) and not isinstance(max_tags, bool) and max_tags > 0):
         max_tags = DEFAULT_CONVENTIONS.max_tags
 
+    capture_rules = conv_raw.get("capture_rules")
+    capture_rules = capture_rules.strip() if isinstance(capture_rules, str) else ""
+
     extra_callouts = conv_raw.get("extra_callouts")
     if isinstance(extra_callouts, list) and all(isinstance(c, str) for c in extra_callouts):
         extra_callouts = tuple(c.lower() for c in extra_callouts)
@@ -189,6 +197,7 @@ def _parse_conventions(raw: dict) -> VaultConventions:
         reply_language=reply_language,
         max_tags=max_tags,
         extra_callouts=extra_callouts,
+        capture_rules=capture_rules,
         wiki_dir=wiki_dir,
         default_template=default_template,
         templates_dir=templates_dir,

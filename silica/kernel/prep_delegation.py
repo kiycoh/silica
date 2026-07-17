@@ -12,7 +12,6 @@ is passed as a file reference in the task context, not inlined into the prompt.
 """
 from __future__ import annotations
 
-import hashlib
 import json
 import logging
 import os
@@ -67,6 +66,14 @@ def render_prompt(target: str, hub: str | None = None, source_text: str = "",
     body = body.replace("{LANGUAGE}", lang_name)
     body = body.replace("{MAX_TAGS}", str(conventions.max_tags))
     body = body.replace("{SESSION_DATE}", session_date.strip() or "unknown")
+    # F1b: vault-declared capture rules. Empty ⇒ the placeholder line vanishes
+    # entirely (consume its trailing newline), so an unconfigured vault renders
+    # bit-identically to before this existed.
+    rules = (conventions.capture_rules or "").strip()
+    body = body.replace(
+        "{CAPTURE_RULES}\n",
+        f"## Vault capture rules\n{rules}\n\n" if rules else "",
+    )
     if _ANTI_SLOP_PATH.exists():  # ponytail: optional fragment, missing file must not break nucleation
         body += "\n\n" + _ANTI_SLOP_PATH.read_text(encoding="utf-8")
     return body
@@ -91,10 +98,6 @@ def _payload_sample_text(payload: dict, limit: int = 4000) -> str:
                 if total >= limit:
                     return "\n".join(parts)[:limit]
     return "\n".join(parts)
-
-
-def payload_checksum(payload_json: str) -> str:
-    return hashlib.sha256(payload_json.encode("utf-8")).hexdigest()
 
 
 # Per-string cap when echoing a rejected op back to the model: enough to
@@ -346,9 +349,6 @@ def run_distiller(
     prompt_text = render_prompt(target=target, hub=hub,
                                 source_text=_payload_sample_text(payload),
                                 session_date=session_date)
-    payload_json = json.dumps(payload, ensure_ascii=False, indent=2)
-    checksum = payload_checksum(payload_json)
-
     # Assemble context through the context assembler (Phase 2 rails).
     # Only ledger_digest + the checkpoint payload reach the model — no other
     # vault content is forwarded here.
@@ -364,12 +364,11 @@ def run_distiller(
     user_message = (
         f"{prompt_text}\n\n"
         f"---\n"
-        f"Payload SHA-256: {checksum}\n\n"
         f"{ctx}"
         f"{steer_section}"
     )
 
-    logger.info("Calling Distiller LLM (payload checksum %s)", checksum[:12])
+    logger.info("Calling Distiller LLM")
 
     # #2: size the output budget to the real prompt + model context window
     # instead of a fixed ceiling. Window and output cap come from the live
