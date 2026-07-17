@@ -246,6 +246,52 @@ def test_distill_captures_ephemerals_and_answer_recalls_them(tmp_path, monkeypat
     assert doc["config"]["episodic_ttl"] == 0
 
 
+def test_distill_passes_session_date_to_distiller(tmp_path, monkeypatch):
+    # F2a: the SESSION date (simulated time) reaches the distiller prompt so
+    # relative dates in facts resolve against it, not against today.
+    import silica.kernel.prep_delegation as prep
+
+    seen_kwargs = {}
+
+    def spy(payload, target, **kw):
+        seen_kwargs[payload["batches"][0]["inbox_file"]] = kw.get("session_date")
+        return {"updates": [{"snippet": "note"}]}
+
+    monkeypatch.setattr(prep, "run_distiller", spy)
+    _install_stub(monkeypatch)
+    runner.run([_instance()], tmp_path / "run", model="stub", judge_model="stub",
+               k=10, stuff=True, use_embedder=False, distill=True,
+               limit=None, verbose=False)
+    assert seen_kwargs["s1"] == "2026-02-01"  # s1's haystack date
+
+
+def test_key_schema_flag_enforces_keys_through_product_seam(tmp_path, monkeypatch):
+    # ADR-0021 lever: --key-schema drops a manifest into the question vault so
+    # capture_from_distill -> load_manifest(episodic_home()) -> enforce runs
+    # the EXACT product path, no harness-only shortcut.
+    import silica.kernel.prep_delegation as prep
+
+    monkeypatch.setattr(prep, "run_distiller", _ephemeral_distiller({
+        "s1": [{"key": "dog.name", "text": "My dog is named Zephyr"},
+               {"key": "assistant.recipe.oven.temp.exact", "text": "180C"}],
+    }))
+    _install_stub(monkeypatch)
+    doc = runner.run([_instance()], tmp_path / "run", model="stub", judge_model="stub",
+                     k=10, stuff=True, use_embedder=False, distill=True,
+                     key_schema=True, limit=None, verbose=False)
+    vault = runner.question_vault(tmp_path / "run", "q_multi_1")
+    assert (vault / "vault.yaml").is_file()
+    # run() leaves the last question bound, so store_path() IS the product
+    # lookup for this vault's episodic store.
+    from silica.kernel.episodic import store_path
+
+    store = json.loads(store_path().read_text())
+    keys = {f["key"] for f in store["facts"]}
+    assert "user.dog.name" in keys
+    assert "assistant.recipe.oven_temp_exact" in keys
+    assert doc["config"]["key_schema"] is True
+
+
 def test_context_assembly_is_the_product_perception(tmp_path, monkeypatch):
     # Perception promotion (spec 2026-07-15): the harness owns no context
     # assembler. The prompt's Memory section must be byte-identical to

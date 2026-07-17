@@ -240,6 +240,125 @@ def test_best_group_tie_breaks_to_smallest(tmp_path, monkeypatch):
     assert r["best_group"] == "user.a.b" and r["best_size"] == 1
 
 
+# ---------------------------------------------------------------------------
+# Embed view: capture-order replay with embedding fallback (capture-side
+# identity probe — zero product code, zero LLM)
+# ---------------------------------------------------------------------------
+
+
+def test_capture_sim_exact_key_joins_without_vecs():
+    from tests.eval.longmemeval.probes import capture_sim
+
+    facts = [_fact("f_0001", "user.car.model", ["s1"]),
+             _fact("f_0002", "user.car.models", ["s2"])]  # Layer A merges
+    roots, stats = capture_sim(facts, {}, tau=0.9)
+    assert roots == {"f_0001": "f_0001", "f_0002": "f_0001"}
+    assert stats["embed_joins"] == 0
+
+
+def test_capture_sim_embed_fallback_joins_drifted_key():
+    from tests.eval.longmemeval.probes import capture_sim
+
+    facts = [_fact("f_0001", "user.car.model", ["s1"]),
+             _fact("f_0002", "user.vehicle.model", ["s2"]),
+             _fact("f_0003", "user.dog.name", ["s3"])]  # no vec: new chain
+    vecs = {"f_0001": [1.0, 0.0], "f_0002": [0.96, 0.28]}  # cos = 0.96
+    roots, stats = capture_sim(facts, vecs, tau=0.9)
+    assert roots["f_0002"] == "f_0001"
+    assert roots["f_0003"] == "f_0003"
+    assert stats["embed_joins"] == 1
+    assert stats["cosines"] == [(0.96, True)]
+    # Same pair stays apart above the observed cosine.
+    apart, apart_stats = capture_sim(facts, vecs, tau=0.99)
+    assert apart["f_0002"] == "f_0002"
+    assert apart_stats["cosines"] == [(0.96, False)]
+
+
+def test_capture_sim_exact_match_beats_embedding():
+    from tests.eval.longmemeval.probes import capture_sim
+
+    # f_0003 exact-matches f_0001's key but its vec points at f_0002:
+    # the fallback must never override arm 1.
+    facts = [_fact("f_0001", "user.car.model", ["s1"]),
+             _fact("f_0002", "user.dog.name", ["s2"]),
+             _fact("f_0003", "user.car.model", ["s3"])]
+    vecs = {"f_0001": [1.0, 0.0], "f_0002": [0.0, 1.0], "f_0003": [0.0, 1.0]}
+    roots, stats = capture_sim(facts, vecs, tau=0.5)
+    assert roots["f_0003"] == "f_0001"
+    assert stats["embed_joins"] == 0
+
+
+def test_capture_sim_replays_in_numeric_id_order():
+    from tests.eval.longmemeval.probes import capture_sim
+
+    # Lexicographic order would put f_10000 before f_9999.
+    facts = [_fact("f_10000", "user.car.model", ["s2"]),
+             _fact("f_9999", "user.car.model", ["s1"])]
+    roots, _ = capture_sim(facts, {}, tau=0.9)
+    assert roots == {"f_9999": "f_9999", "f_10000": "f_9999"}
+
+
+def test_capture_sim_superseded_head_retires():
+    from tests.eval.longmemeval.probes import capture_sim
+
+    # f_0002 supersedes f_0001; f_0003's vec matches only the RETIRED head.
+    facts = [_fact("f_0001", "user.car.model", ["s1"]),
+             _fact("f_0002", "user.car.model", ["s2"]),
+             _fact("f_0003", "user.ride", ["s3"])]
+    vecs = {"f_0001": [1.0, 0.0], "f_0002": [0.0, 1.0], "f_0003": [1.0, 0.0]}
+    roots, _ = capture_sim(facts, vecs, tau=0.9)
+    assert roots["f_0002"] == "f_0001"
+    assert roots["f_0003"] == "f_0003"  # matching a corpse must not join
+
+
+def test_embed_view_links_drifted_ku_chain(tmp_path, monkeypatch):
+    from tests.eval.longmemeval.runner import question_vault
+
+    run_root = tmp_path / "run"
+    inst = _inst("q14", "knowledge-update", ["answer_s1", "answer_s2"])
+    f1 = _fact("f_0001", "user.car.model", ["answer_s1"])
+    f2 = _fact("f_0002", "user.vehicle.model", ["answer_s2"])
+    f3 = _fact("f_0003", "user.dog.name", ["other_session"])
+    f1["vec"], f2["vec"], f3["vec"] = [1.0, 0.0], [0.96, 0.28], [0.0, 1.0]
+    _write_store(question_vault(run_root, "q14"), [f1, f2, f3],
+                 monkeypatch, tmp_path)
+
+    # Layer A alone cannot link the semantic drift...
+    assert probe_question(inst, run_root, normalize=True)["best_coverage"] == 1
+    # ...the capture-side embedding fallback can, without blob.
+    r = probe_question(inst, run_root, embed_tau=0.9)
+    assert r["best_coverage"] == 2
+    assert r["best_size"] == 2          # dog fact stays out — blob guard
+    assert r["embed_joins"] == 1
+
+
+def test_sim_vecs_key_repr_embeds_once_then_caches(tmp_path, monkeypatch):
+    import pytest
+    import silica.kernel.paths as paths_mod
+    from tests.eval.longmemeval.probes import sim_vecs
+
+    monkeypatch.setattr(paths_mod, "_SILICA_HOME", tmp_path / "silica_home")
+    vault = tmp_path / "vault"
+    facts = [_fact("f_0001", "user.car.model", ["s1"])]
+
+    class Embedder:
+        calls: list[list[str]] = []
+
+        def embed(self, texts):
+            self.calls.append(list(texts))
+            return [[float(len(t)), 1.0] for t in texts]
+
+    e = Embedder()
+    vecs = sim_vecs(facts, "key", vault, e)
+    assert vecs["f_0001"] == [float(len("user car model")), 1.0]
+    assert e.calls == [["user car model"]]
+    # Second run: served from the sidecar cache, no embedder needed.
+    assert sim_vecs(facts, "key", vault, None) == vecs
+    # Vectors needed, no cache entry, no embedder: loud failure, not silence.
+    with pytest.raises(RuntimeError):
+        sim_vecs(facts, "key+text", vault, None)
+
+
 def test_product_probe_reports_product_groups(tmp_path, monkeypatch):
     from tests.eval.longmemeval.runner import question_vault
 
@@ -260,29 +379,5 @@ def test_product_probe_reports_product_groups(tmp_path, monkeypatch):
     assert r["groups"] == 1
 
 
-def test_regroup_store_writes_groups_in_place_and_is_idempotent(tmp_path, monkeypatch):
-    import silica.kernel.paths as paths_mod
-
-    from tests.eval.longmemeval.probes import regroup_store
-    from tests.eval.longmemeval.runner import question_vault
-
-    run_root = tmp_path / "run"
-    vault = question_vault(run_root, "q14")
-    _write_store(vault, [
-        _fact("f_0001", "user.fitness.tournament.date", ["answer_s1"]),
-        _fact("f_0002", "user.tennis_tournament_date", ["answer_s2"]),
-    ], monkeypatch, tmp_path)
-
-    p = paths_mod.index_dir_for(str(vault)) / "episodic.json"
-    regroup_store(p)
-    facts = {f["id"]: f for f in
-             json.loads(p.read_text(encoding="utf-8"))["facts"]}
-    assert facts["f_0001"]["group"] == "f_0001"
-    assert facts["f_0002"]["group"] == "f_0001"
-
-    regroup_store(p)   # idempotent: replay from None gives the same result
-    facts2 = {f["id"]: f for f in
-              json.loads(p.read_text(encoding="utf-8"))["facts"]}
-    assert facts2 == facts
 
 

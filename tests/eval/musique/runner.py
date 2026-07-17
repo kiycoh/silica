@@ -169,6 +169,7 @@ def probe(
     use_embedder: bool = True,
     use_cooccur: bool = True,
     use_rerank: bool = True,
+    expand: bool = False,
     limit: int | None = None,
     verbose: bool = False,
 ) -> dict:
@@ -231,6 +232,7 @@ def probe(
             embed_store=embed_store if qvecs else None,
             cooccur_store=cooccur_store,
             k=k,
+            expand=expand,  # 1-hop cooccur concept-neighbour reach (bridge-passage recall probe)
         )
         if reranker:
             related = rerank_related(reranker, q["question"], related, k=k)
@@ -316,6 +318,7 @@ def main(argv=None) -> int:
     ap.add_argument("--no-embed", action="store_true", help="cooccur leg only (no embedder anywhere)")
     ap.add_argument("--no-cooccur", action="store_true", help="embed leg only (no co-occurrence leg)")
     ap.add_argument("--no-rerank", action="store_true", help="skip the cross-encoder rerank pass")
+    ap.add_argument("--expand", action="store_true", help="cooccur leg: add 1-hop concept neighbours (bridge-passage probe)")
     ap.add_argument("--k", type=int, default=10)
     ap.add_argument("--limit", type=int, help="evaluate only the first N questions")
     ap.add_argument("--out", help=f"report path (default {METRICS_PATH})")
@@ -345,7 +348,7 @@ def main(argv=None) -> int:
     questions = json.loads(Path(args.questions).read_text(encoding="utf-8"))
     doc = probe(questions, corpus, k=args.k, use_embedder=not args.no_embed,
                 use_cooccur=not args.no_cooccur, use_rerank=not args.no_rerank,
-                limit=args.limit, verbose=args.verbose)
+                expand=args.expand, limit=args.limit, verbose=args.verbose)
     out = Path(args.out) if args.out else METRICS_PATH
     out.write_text(json.dumps(doc, indent=2, ensure_ascii=False) + "\n", encoding="utf-8")
     _print_summary(doc)

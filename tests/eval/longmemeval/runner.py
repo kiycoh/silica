@@ -173,7 +173,8 @@ def distill_session(session_id: str, date: str, turns: list[dict]) -> str:
     }
     try:
         result = prep_delegation.run_distiller(
-            payload, target="sessions", substrate=_episodic_keys_substrate())
+            payload, target="sessions", substrate=_episodic_keys_substrate(),
+            session_date=date)
     except Exception as e:  # ponytail: distiller hiccup -> keep the session verbatim
         logger.warning("distiller failed for session %s: %s — keeping verbatim", session_id, e)
         return excerpt
@@ -297,8 +298,11 @@ def answer_question(model: str, question: str, question_date: str, context: str)
         "never guess."
     )
     user = f"Memory:\n{context}\n\nQuestion: {question}"
+    # temperature=0: a byte-identical prompt flipped correct->wrong across
+    # runs at the provider default — single-run A/Bs need greedy decoding.
     resp = call_llm(model, [{"role": "system", "content": system},
-                            {"role": "user", "content": user}], max_tokens=512)
+                            {"role": "user", "content": user}], max_tokens=512,
+                    temperature=0.0)
     return (resp.text or "").strip()
 
 
@@ -319,7 +323,8 @@ def judge(model: str, qtype: str, question: str, gold: str, response: str,
         f"Model Response: {response}\n\n"
         f"{closing} Answer yes or no only."
     )
-    resp = call_llm(model, [{"role": "user", "content": prompt}], max_tokens=8)
+    resp = call_llm(model, [{"role": "user", "content": prompt}], max_tokens=8,
+                    temperature=0.0)
     return "yes" in (resp.text or "").lower()
 
 
@@ -344,12 +349,19 @@ def run_instance(inst: dict, run_root: Path, *, model: str, judge_model: str,
                  episodic_ttl: int = 0, reuse: bool = False,
                  flat_context: bool = False, facts_last: bool = False,
                  windows: int | None = None,
-                 window_chars: int | None = None) -> dict:
+                 window_chars: int | None = None,
+                 key_schema: bool = False) -> dict:
     qid = inst["question_id"]
     qtype = inst["question_type"]
     is_abs = qid.endswith(_ABS)
     vault = question_vault(run_root, qid)
     vault.mkdir(parents=True, exist_ok=True)
+    if key_schema:
+        # ADR-0021 lever: the manifest makes capture_from_distill enforce the
+        # default key schema through the product seam (episodic_home() is this
+        # vault via bind_vault) — no harness-only code path.
+        (vault / "vault.yaml").write_text(
+            "conventions:\n  episodic_keys: {}\n", encoding="utf-8")
     bind_vault(vault)
 
     index = load_question_vault(vault, inst, distill=distill, reuse=reuse)
@@ -447,8 +459,8 @@ def run(data: list[dict], run_root: Path, *, model: str, judge_model: str, k: in
         retrieval_only: bool = False, distill: bool = False,
         episodic_ttl: int = 0, reuse: bool = False, flat_context: bool = False,
         facts_last: bool = False, windows: int | None = None,
-        window_chars: int | None = None, limit: int | None,
-        verbose: bool, out: Path | None = None) -> dict:
+        window_chars: int | None = None, key_schema: bool = False,
+        limit: int | None, verbose: bool, out: Path | None = None) -> dict:
     from silica.config import CONFIG
     from silica.kernel import perception
 
@@ -463,6 +475,8 @@ def run(data: list[dict], run_root: Path, *, model: str, judge_model: str, k: in
                    "retrieval_only": retrieval_only,
                    "distill": distill,
                    "reuse": reuse,
+                   # ADR-0021: episodic key schema enforced at capture.
+                   "key_schema": key_schema,
                    "context": "flat" if flat_context else "windowed",
                    # Effective values, so arm A/B reports stay distinguishable.
                    "windows": windows if windows is not None else perception.DEFAULT_WINDOWS,
@@ -472,6 +486,10 @@ def run(data: list[dict], run_root: Path, *, model: str, judge_model: str, k: in
                    # TTL defaults OFF here: Mem0 and Zep do not evaporate
                    # memories, so the headline comparable run must not either.
                    "episodic_ttl": episodic_ttl,
+                   # Unpinned openrouter routes across backends with different
+                   # quantizations -> nondeterministic even at temperature=0
+                   # (proven: byte-identical prompt flipped abstain<->answer).
+                   "provider_pin": CONFIG.openrouter_provider or None,
                    "embedder": use_embedder and not stuff,
                    "reranker": (getattr(CONFIG, "rerank_model", None) or None)
                                if use_rerank and not stuff else None},
@@ -484,7 +502,8 @@ def run(data: list[dict], run_root: Path, *, model: str, judge_model: str, k: in
                            use_rerank=use_rerank, retrieval_only=retrieval_only,
                            distill=distill, episodic_ttl=episodic_ttl, reuse=reuse,
                            flat_context=flat_context, facts_last=facts_last,
-                           windows=windows, window_chars=window_chars)
+                           windows=windows, window_chars=window_chars,
+                           key_schema=key_schema)
         rows.append(row)
         if verbose:
             mark = (f"sr={row['session_recall']}" if retrieval_only
@@ -537,6 +556,10 @@ def main(argv=None) -> int:
     ap.add_argument("--reuse-vaults", action="store_true",
                     help="adopt existing question vaults as-is (frozen corpus: "
                          "skip re-distillation so A/Bs across runs are causal)")
+    ap.add_argument("--key-schema", action="store_true",
+                    help="drop a default episodic_keys manifest into each fresh "
+                         "question vault so capture enforces the key schema "
+                         "(ADR-0021 A/B lever)")
     ap.add_argument("--flat-context", action="store_true",
                     help="legacy perception: full note bodies, no rank/evidence "
                          "headers, no query-aware windowing")
@@ -573,8 +596,8 @@ def main(argv=None) -> int:
                   distill=args.distill, episodic_ttl=args.episodic_ttl,
                   reuse=args.reuse_vaults, flat_context=args.flat_context,
                   facts_last=args.facts_last, windows=args.windows,
-                  window_chars=args.window_chars, limit=args.limit,
-                  verbose=args.verbose, out=out)
+                  window_chars=args.window_chars, key_schema=args.key_schema,
+                  limit=args.limit, verbose=args.verbose, out=out)
     finally:
         import silica.driver
         silica.driver._driver = None

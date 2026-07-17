@@ -138,6 +138,7 @@ def call_llm(
     tools: list[dict] | None = None,
     max_tokens: int | None = None,
     response_format=None,
+    temperature: float | None = None,
     on_delta: Callable[[str, str], None] | None = None,
     openrouter_provider: str | None = None,
     cancel: threading.Event | None = None,
@@ -176,6 +177,8 @@ def call_llm(
         kwargs["tool_choice"] = "auto"
     if response_format is not None:
         kwargs["response_format"] = response_format
+    if temperature is not None:
+        kwargs["temperature"] = temperature
     if model.startswith("openrouter/") and (CONFIG.show_thinking or CONFIG.verbose):
         kwargs["include_reasoning"] = True
     if model.startswith("openrouter/") and (rt := openrouter_routing(openrouter_provider)):
