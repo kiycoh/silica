@@ -42,9 +42,15 @@ class GraphExportArgs(BaseModel):
         default="Vault Graph",
         description="Title shown in the visualization header",
     )
+    mode: str = Field(
+        default="links",
+        description="'links' = wikilink graph; 'concepts' = adds the "
+                    "note->Concept-set bipartite expansion (hypergraph view)",
+    )
 
 @tool(GraphExportArgs, cls="composed")
-def silica_graph_export(output_path: str = "graph.html", folder: str = "", title: str = "Vault Graph") -> dict[str, Any]:
+def silica_graph_export(output_path: str = "graph.html", folder: str = "",
+                        title: str = "Vault Graph", mode: str = "links") -> dict[str, Any]:
     """Generates a self-contained interactive HTML graph of the vault's wikilink structure.
 
     Runs Louvain community detection to cluster notes by topic; ghost nodes mark
@@ -62,7 +68,7 @@ def silica_graph_export(output_path: str = "graph.html", folder: str = "", title
     except Exception as exc:
         logger.warning("silica_graph_export: cooccurrence refresh skipped (%s)", exc)
 
-    return export_graph(output_path=output_path, folder=folder, title=title)
+    return export_graph(output_path=output_path, folder=folder, title=title, mode=mode)
 
 
 class MindmapArgs(BaseModel):

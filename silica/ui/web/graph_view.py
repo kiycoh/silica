@@ -245,6 +245,10 @@ def render_html(
     .tree-note{{color:var(--ash);cursor:pointer;padding:2px 6px;border-left:2px solid transparent;
                white-space:nowrap;overflow:hidden;text-overflow:ellipsis}}
     .tree-note:hover{{background:var(--slate-2);border-left-color:var(--accent);color:var(--frost)}}
+    .force-row{{display:flex;justify-content:space-between;align-items:center;font-size:12px;
+                color:var(--ash);margin-top:6px}}
+    .force-row .fv{{color:var(--ash-dim);font-size:11px}}
+    .force-slider{{width:100%;accent-color:var(--accent);cursor:pointer;margin-top:2px}}
   </style>
 </head>
 <body>
@@ -306,6 +310,20 @@ def render_html(
           <span class="dot" style="background:#5c5c5c"></span>Show all
         </div>
       </div>
+    </div>
+
+    <div>
+      <div class="section-title" style="display:flex;align-items:center;justify-content:space-between">
+        Forces
+        <span style="color:#8f8f8f;cursor:pointer;font-size:11px;letter-spacing:0;text-transform:none"
+              onclick="resetForces()" title="back to auto-scaled defaults">reset</span>
+      </div>
+      <div class="force-row">Repel<span class="fv" id="fv-repel">1.0&times;</span></div>
+      <input type="range" class="force-slider" id="sl-repel" min="-0.7" max="0.7" step="0.01" value="0" oninput="onForceSlider()">
+      <div class="force-row">Link distance<span class="fv" id="fv-dist">1.0&times;</span></div>
+      <input type="range" class="force-slider" id="sl-dist" min="-0.7" max="0.7" step="0.01" value="0" oninput="onForceSlider()">
+      <div class="force-row">Center<span class="fv" id="fv-center">1.00</span></div>
+      <input type="range" class="force-slider" id="sl-center" min="0" max="1" step="0.05" value="1" oninput="onForceSlider()">
     </div>
 
     <div style="display:flex;gap:6px">
@@ -395,8 +413,22 @@ function nodeColor(n) {{
   // verification shows 3d-force-graph honours per-node alpha.
   if (n._dim) return '#1c1c1c';
   if (n.type === 'ghost') return '#4a4a4a';   // muted gray — dimmed, never black
+  if (n.type === 'concept') return '#8f7fa3'; // concepts view: neutral violet, no community
   return (n.color && n.color.background) || '#566076';
 }}
+
+// --- Density-aware forces ---------------------------------------------------
+// The lib's d3 defaults (charge -60 in 3D, link distance 30) collapse dense
+// graphs into a hairball: equilibrium spacing must grow with avg degree or
+// neighborhoods overlap. sqrt keeps sparse graphs (k<=2) exactly as before
+// (scale=1) and opens dense ones up to 4x. Sliders multiply on top of this
+// baseline, so the auto-scaling stays authoritative as the vault grows.
+const AVG_DEG = RAW_NODES.length ? 2 * RAW_EDGES.length / RAW_NODES.length : 0;
+const FORCE_SCALE = Math.min(4, Math.max(1, Math.sqrt(AVG_DEG / 2)));
+const BASE_CHARGE = -60 * FORCE_SCALE * FORCE_SCALE;
+const BASE_DIST = 30 * FORCE_SCALE;
+// Fixed 100 ticks never let a big graph unfold; scale settle time with size.
+const COOLDOWN_TICKS = 100 + Math.min(200, Math.round(RAW_NODES.length / 10));
 
 const Graph = new ForceGraph3D(document.getElementById("graph"))
   .backgroundColor("#0A0D14")
@@ -417,9 +449,62 @@ const Graph = new ForceGraph3D(document.getElementById("graph"))
   .linkDirectionalParticleColor(() => "{_EDGE_COLOR_GAP}")
   .linkDirectionalParticleWidth(2)
   .nodeResolution(6)
-  .cooldownTicks(100)
+  .cooldownTicks(COOLDOWN_TICKS)
   .nodeVisibility(n => !n._hidden)
   .linkVisibility(l => !l._hidden);
+
+// Slider multipliers persist per view — links and concepts have different
+// densities, so a manual correction for one shouldn't leak into the other.
+// The baseline is never persisted: it is recomputed from the current graph.
+const FORCES_KEY = "silica-graph-forces-" +
+  (RAW_NODES.some(n => n.type === "concept") ? "concepts" : "links");
+let forceMul = {{ repel: 1, dist: 1, center: 1 }};
+try {{
+  Object.assign(forceMul, JSON.parse(localStorage.getItem(FORCES_KEY)) || {{}});
+}} catch (e) {{ /* corrupt or blocked storage -> auto defaults */ }}
+
+function applyForces(reheat) {{
+  // distanceMax bounds both over-dispersion and per-tick cost on big graphs.
+  Graph.d3Force("charge").strength(BASE_CHARGE * forceMul.repel)
+    .distanceMax(600 * FORCE_SCALE);
+  Graph.d3Force("link").distance(BASE_DIST * forceMul.dist);
+  // Center capped at 1: d3 forceCenter shifts positions directly, >1 oscillates.
+  Graph.d3Force("center").strength(Math.min(1, forceMul.center));
+  if (reheat) Graph.d3ReheatSimulation();
+}}
+
+// Log-scale track for the multiplier sliders: x1 sits mid-track and the
+// useful 0.2-1 range gets half the travel instead of a sliver.
+const fromSlider = v => Math.pow(10, +v);
+const toSlider = m => Math.log10(m);
+
+function syncForceUI() {{
+  document.getElementById("sl-repel").value = toSlider(forceMul.repel);
+  document.getElementById("sl-dist").value = toSlider(forceMul.dist);
+  document.getElementById("sl-center").value = forceMul.center;
+  document.getElementById("fv-repel").textContent = forceMul.repel.toFixed(1) + "\\u00d7";
+  document.getElementById("fv-dist").textContent = forceMul.dist.toFixed(1) + "\\u00d7";
+  document.getElementById("fv-center").textContent = (+forceMul.center).toFixed(2);
+}}
+
+function onForceSlider() {{
+  forceMul.repel = fromSlider(document.getElementById("sl-repel").value);
+  forceMul.dist = fromSlider(document.getElementById("sl-dist").value);
+  forceMul.center = +document.getElementById("sl-center").value;
+  try {{ localStorage.setItem(FORCES_KEY, JSON.stringify(forceMul)); }} catch (e) {{}}
+  syncForceUI();
+  applyForces(true);
+}}
+
+function resetForces() {{
+  forceMul = {{ repel: 1, dist: 1, center: 1 }};
+  try {{ localStorage.removeItem(FORCES_KEY); }} catch (e) {{}}
+  syncForceUI();
+  applyForces(true);
+}}
+
+syncForceUI();
+applyForces(false); // sim just started at full alpha, no reheat needed
 
 function applyFilters() {{
   RAW_NODES.forEach(n => {{
@@ -651,12 +736,18 @@ def export_graph(
     output_path: str,
     folder: str = "",
     title: str = "Vault Graph",
+    mode: str = "links",
 ) -> dict:
     """Build and write the graph HTML to output_path.
 
     Reads the vendored JS first (fail fast on a packaging bug) and always inlines
     it, so the emitted file is self-contained/offline. Returns dict with keys:
     success, path, nodes, edges, communities, unresolved.
+
+    mode="concepts" (F4): merges the note->Concept-set bipartite expansion
+    (kernel.graph_export.build_bipartite_data) into the dataset — the on-disk
+    incidence IS a hypergraph (a note is a hyperedge over its concepts).
+    Structural-gap particles stay off in this mode (different question).
     """
     from silica.kernel.graph_export import build_graph_data, detect_communities
 
@@ -666,21 +757,32 @@ def export_graph(
     nodes, edges = build_graph_data(folder=folder)
     communities = detect_communities(nodes, edges)
 
+    n_concepts = 0
+    if mode == "concepts":
+        from silica.kernel.graph_export import bipartite_for_active_vault
+
+        cnodes, cedges = bipartite_for_active_vault(nodes)
+        n_concepts = len(cnodes)
+        nodes = nodes + cnodes
+        edges = edges + cedges
+
     # Betweenness → node size (bottleneck nodes swell) + discourse-shape badge,
     # from one shared nx build. Base size 16 stays for ordinary nodes.
     bet, giant = canvas_metrics(nodes, edges)
     if bet:
         for n in nodes:
-            if n.get("type") != "ghost":
+            if n.get("type") not in ("ghost", "concept"):
                 b = round(bet.get(n["id"], 0.0), 4)
                 n["betweenness"] = b
                 n["size"] = round(16 + 40 * b, 2)
     discourse = discourse_shape(
-        sum(1 for n in nodes if n.get("type") != "ghost"),
+        sum(1 for n in nodes if n.get("type") not in ("ghost", "concept")),
         giant, [c.size for c in communities],
     )
 
-    gaps = _gap_edges(nodes, edges)  # amber particle-links over the top structural holes
+    # Gap particles answer a linking question; the concepts view asks an
+    # incidence one — keep them apart.
+    gaps = [] if mode == "concepts" else _gap_edges(nodes, edges)
     html_out = render_html(
         nodes, edges + gaps, communities, title=title, lib_js=lib_js, discourse=discourse
     )
@@ -689,7 +791,7 @@ def export_graph(
     out.parent.mkdir(parents=True, exist_ok=True)
     out.write_text(html_out, encoding="utf-8")
 
-    n_notes       = sum(1 for n in nodes if n.get("type") != "ghost")
+    n_notes       = sum(1 for n in nodes if n.get("type") not in ("ghost", "concept"))
     n_ghost       = sum(1 for n in nodes if n.get("type") == "ghost")
     n_extracted   = sum(1 for e in edges if e.get("type") == "EXTRACTED")
     n_communities = len(communities)
@@ -706,4 +808,5 @@ def export_graph(
         "communities": n_communities,
         "unresolved":  n_ghost,
         "gaps":        len(gaps),
+        "concepts":    n_concepts,
     }

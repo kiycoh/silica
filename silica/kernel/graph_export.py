@@ -452,6 +452,64 @@ def cluster_hub_of(ctx: dict, path: str) -> str | None:
     return hub.rsplit("/", 1)[-1].removesuffix(".md")
 
 
+def build_bipartite_data(nodes: list[dict], store,
+                         *, min_df: int = 2,
+                         df_cap: int | None = None) -> tuple[list[dict], list[dict]]:
+    """Note -> Concept-set incidence as a bipartite expansion (concepts view).
+
+    The unit is the CORRELATE Concept set (`correlate.topk_set`, the glossary
+    term), so the view explains the same arcs retrieval actually uses — never
+    the full stem contribution (length bias, documented rejected). `min_df`
+    drops degenerate single-note concepts; `df_cap` (default 5% of notes,
+    floor 3) suppresses hub concepts, mirroring the facade's IDF
+    hub-suppression. Ghost nodes and unindexed notes contribute nothing.
+    """
+    import math
+
+    from silica.kernel.correlate import topk_set
+
+    incidence: dict[str, list[str]] = {}
+    n_notes = 0
+    for n in nodes:
+        nid = n.get("id")
+        if not nid or n.get("type") == "ghost":
+            continue
+        n_notes += 1
+        for stem in topk_set(store.note_nodes(nid)):
+            incidence.setdefault(stem, []).append(nid)
+    if df_cap is None:
+        df_cap = max(3, math.ceil(0.05 * n_notes))
+    cnodes: list[dict] = []
+    cedges: list[dict] = []
+    for stem, paths in sorted(incidence.items()):
+        df = len(paths)
+        if df < min_df or df > df_cap:
+            continue
+        cnodes.append({"id": f"concept:{stem}", "label": store.node_label(stem),
+                       "type": "concept", "df": df, "group": -1,
+                       "size": round(6 + 2 * df, 2)})
+        cedges.extend({"from": p, "to": f"concept:{stem}", "type": "CONCEPT"}
+                      for p in paths)
+    return cnodes, cedges
+
+
+def bipartite_for_active_vault(nodes: list[dict]) -> tuple[list[dict], list[dict]]:
+    """Resolve the active vault's co-occurrence store and build the concepts
+    view expansion. Lives here (allowlisted store access) so the UI layer
+    never touches kernel.cooccurrence directly; an empty or absent index
+    degrades to ([], []) — the plain graph, never an error."""
+    from silica.config import CONFIG
+    from silica.kernel import cooccurrence
+
+    try:
+        lang = cooccurrence.frozen_lang(getattr(CONFIG, "vault_path", "") or "")
+        store = cooccurrence.get_cooccur_store(lang or "english")
+        return build_bipartite_data(nodes, store)
+    except Exception as e:
+        logger.warning("concepts view: bipartite build failed (%s)", e)
+        return [], []
+
+
 def canvas_metrics(nodes: list[dict], edges: list[dict], k: int = 400) -> tuple[dict[str, float], int]:
     """One nx build over EXTRACTED edges → (betweenness per node, giant-component
     size), for node sizing and the discourse-shape badge on the exported graph.

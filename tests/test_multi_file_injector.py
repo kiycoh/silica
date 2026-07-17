@@ -486,7 +486,8 @@ class TestT6DirectShortcuts:
         received = {}
         from silica.cli import _handle_direct_shortcut
 
-        def capture_graph(output_path: str = "graph.html", folder: str = "", title: str = ""):
+        def capture_graph(output_path: str = "graph.html", folder: str = "",
+                          title: str = "", mode: str = "links"):
             received["output_path"] = output_path
             received["folder"] = folder
             return {"output_path": output_path}
