@@ -55,7 +55,9 @@ class TestOverwriteConflictWiring:
 
         assert res["success"] is True
         assert not res.get("conflict")
-        assert tmp_vault.read(path) == "v2 agente\n"
+        landed = tmp_vault.read(path)
+        # overwrite is a floored path now: minimal frontmatter block precedes the body
+        assert landed.endswith("\n\nv2 agente\n") and landed.startswith("---\nAI: true\n")
 
     def test_without_base_keeps_legacy_behavior(self, tmp_vault):
         path = tmp_vault.note("Nota.md", "v1 originale\n")
@@ -65,7 +67,9 @@ class TestOverwriteConflictWiring:
 
         assert res["success"] is True
         assert not res.get("conflict")
-        assert tmp_vault.read(path) == "v3 agente\n"
+        landed = tmp_vault.read(path)
+        # overwrite is a floored path now: minimal frontmatter block precedes the body
+        assert landed.endswith("\n\nv3 agente\n") and landed.startswith("---\nAI: true\n")
 
 
 class TestValidateSnapshotsBaseContent:

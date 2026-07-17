@@ -80,17 +80,40 @@ def silica_patch_note(
 
 class WriteNoteArgs(BaseModel):
     path: str = Field(description="Vault-relative path for the new note (e.g. 'Computer Science/Computer Vision.md')")
-    content: str = Field(description="Full markdown content including YAML frontmatter")
+    body: str = Field(description="Markdown body only — NO YAML frontmatter; it is applied mechanically from the vault template")
+    title: str | None = Field(default=None, description="H1 title; defaults to the filename stem")
+    tags: list[str] | None = Field(default=None, description="Frontmatter tags; normalized automatically")
+    related: list[str] | None = Field(default=None, description="Related note names, rendered as frontmatter wikilinks")
+    parent: str | None = Field(default=None, description="Parent note name for the 'parent note' frontmatter key")
+    template: str | None = Field(default=None, description="Named template from the vault's templates dir; 'none' skips the skeleton (AI/last-modified floor still applied)")
+
 
 @tool(WriteNoteArgs, cls="composed", collapse="eager")
-def silica_write_note(path: str, content: str) -> dict[str, Any]:
+def silica_write_note(
+    path: str,
+    body: str,
+    title: str | None = None,
+    tags: list[str] | None = None,
+    related: list[str] | None = None,
+    parent: str | None = None,
+    template: str | None = None,
+) -> dict[str, Any]:
     """Create a new note in the vault — the fast path for single-note creation.
+
+    Frontmatter is mechanical: pass structured fields (title/tags/related/
+    parent), never raw YAML in `body` — a leading YAML block is stripped.
+    The note skeleton comes from the vault template (explicit `template`
+    name > vault default > built-in); `template="none"` writes the body
+    as-is with only the system floor stamped.
 
     Fails if the note already exists: use silica_patch_note to append to an
     existing note, or silica_run_injector for multi-note nucleation with
     quality gates and rollback. The creation is checkpointed and can be
     reverted with /undo.
     """
+    from pathlib import PurePosixPath
+
+    from silica.kernel import templates as tpl
     from silica.kernel.checkpoints import get_checkpoint_store
 
     # The fs backend's create() overwrites silently — enforce the documented
@@ -101,6 +124,23 @@ def silica_write_note(path: str, content: str) -> dict[str, Any]:
         pass  # missing note — the happy path
     else:
         return {"error": f"Note '{path}' already exists: use silica_patch_note to modify it."}
+
+    if template == "none":
+        content = body
+    else:
+        try:
+            source = tpl.resolve_template(template)
+        except tpl.TemplateNotFoundError as e:
+            return {"error": str(e)}
+        fields = tpl.prepare_fields(
+            title=title or PurePosixPath(path).stem,
+            body=body,
+            tags=tags,
+            related=related,
+            parent=parent,
+        )
+        content = tpl.render_note(source, fields)
+    content = tpl.ensure_system_floor(content)
 
     try:
         ref = DRIVER.create(path, content)

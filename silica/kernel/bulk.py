@@ -51,15 +51,12 @@ def _verify_landed(op: Op, path: str, intended: str | None) -> str | None:
     exactly what was handed to the DRIVER.
 
     STOPGAP (deliberate, ceiling below): comparison strips edge whitespace
-    before comparing. Root cause is `cli_backend._run_cli` doing
-    `result.stdout.strip()`, which `read_note` returns verbatim — so on the
-    cli backend a byte-for-byte compare would false-fail every healthy write
-    (composed bodies end with "\n" per template_spoke) and defer every op.
-    Interior content still compares byte-exact, so real corruption (e.g. the
-    2026-06-30 backslash-doubling bug) is still caught. Ceiling: once the cli
-    read channel is made content-faithful at the edges (a content-faithful
-    read via the eval channel, mirroring the 2026-06-30 write-channel fix),
-    this must go back to byte-exact — do not widen the tolerance further.
+    before comparing. The tolerance dates from the deleted cli backend, whose
+    read channel stripped stdout edges; fs reads bytes verbatim and ws returns
+    Obsidian's cachedRead. Interior content still compares byte-exact, so real
+    corruption (e.g. the 2026-06-30 backslash-doubling bug) is still caught.
+    Ceiling: verify ws edge-faithfulness live, then go byte-exact — do not
+    widen the tolerance further.
     """
     try:
         landed = DRIVER.read_note(path).content or ""
@@ -75,12 +72,10 @@ def _verify_deleted(path: str) -> str | None:
 
     Only a genuine "note not found" style RuntimeError counts as confirmation.
     Both backends' read_note raise that shape for a missing note — fs_backend:
-    "File not found: {path}"; cli_backend (obsidian CLI, verified live):
-    'Error: File "{name}" not found.' — both contain "file" and "not found".
-    A dead read channel (CLI timeout, CLI executable missing, Obsidian down)
-    also raises RuntimeError but with a different shape ("Obsidian CLI
-    timeout: ...", "Obsidian CLI executable not found: obsidian" — note: no
-    "file" token) and must NOT be read as "verified deleted".
+    "File not found: {path}"; ws_backend surfaces the plugin's "not found"
+    reply — both contain "file" and "not found". A dead read channel (bridge
+    down, socket error) also raises RuntimeError but with a different shape
+    and must NOT be read as "verified deleted".
     """
     try:
         DRIVER.read_note(path)
@@ -93,7 +88,7 @@ def _verify_deleted(path: str) -> str | None:
 
 
 def _execute_write(op: Op, path: str) -> dict:
-    """Create a new note from the spoke template. Requires heading + hub."""
+    """Create a new note from the resolved template. Requires heading + hub."""
     heading = op.heading
     snippet = op.snippet or ""
     hub = op.hub
@@ -101,15 +96,16 @@ def _execute_write(op: Op, path: str) -> dict:
     if not heading or not hub:
         raise ValueError("Missing 'heading' or 'hub' parameter for write operation")
 
-    content = templates.template_spoke(
-        heading=heading,
-        snippet=snippet,
+    fields = templates.prepare_fields(
+        title=op.title or heading,
+        body=snippet,
         hub=hub,
-        title=op.title,
         tags=op.tags,
         related=op.related,
         parent=op.parent,
     )
+    content = templates.render_note(templates.resolve_template(), fields)
+    content = templates.ensure_system_floor(content)
     DRIVER.create(path, content)
     err = _verify_landed(op, path, content)
     if err:
@@ -170,14 +166,14 @@ def _execute_overwrite(op: Op, path: str) -> dict:
         raise ValueError("Missing 'content' for overwrite operation")
 
     had_conflict = False
+    try:
+        prior: str | None = DRIVER.read_note(path).content
+    except Exception:
+        prior = None
     if op.base_content is not None:
-        try:
-            current: str | None = DRIVER.read_note(path).content
-        except Exception:
-            current = None
-        content, had_conflict = three_way_merge(op.base_content, current, content)
+        content, had_conflict = three_way_merge(op.base_content, prior, content)
 
-    content = templates.ensure_ai_flag(content)
+    content = templates.ensure_system_floor(content, prior=prior)
     DRIVER.overwrite(path, content)
     err = _verify_landed(op, path, content)
     if err:

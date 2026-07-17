@@ -101,18 +101,23 @@ def test_execute_one_patch_appends_section(vault):
 
 
 def test_execute_one_overwrite(vault):
+    # Content that carries its own frontmatter is written as-is (system floor
+    # case 1); bare-body overwrites now preserve prior metadata instead — see
+    # test_overwrite_without_frontmatter_preserves_prior_block.
     op = Op(
         op=OpType.overwrite,
         heading="Existing",
         source_basename="src.md",
         path="Concepts/Existing.md",
-        content="# Existing\n\nFully rewritten.\n",
+        content="---\nAI: true\n---\n\n# Existing\n\nFully rewritten.\n",
     )
     res = execute_one(op)
     assert res["success"] is True
     content = DRIVER.read_note("Concepts/Existing.md").content
-    assert content.strip() == "# Existing\n\nFully rewritten."
+    assert "Fully rewritten." in content
     assert "Body." not in content
+    assert content.startswith("---\nAI: true\n---\n")
+    assert "seed" not in content  # explicit block replaces the prior one wholesale
 
 
 def test_execute_one_delete(vault):
@@ -283,3 +288,60 @@ def test_silica_patch_note_undo_restores_original(vault):
     # undo the first patch -> back to original
     restored = store.undo("Concepts/Existing.md")
     assert restored == original
+
+
+# ---------------------------------------------------------------------------
+# Task 5: write via template renderer; overwrite floors with prior frontmatter
+# ---------------------------------------------------------------------------
+
+
+def test_overwrite_without_frontmatter_preserves_prior_block(vault):
+    """A model rewrite that omits the YAML block must not erase the user's
+    metadata: prior frontmatter re-injected, AI ensured — no deferred note,
+    no silent data loss."""
+    op = Op(op=OpType.overwrite, path="Concepts/Existing.md",
+            heading="Existing", source_basename="src.md",
+            content="# Rewritten\n\nnew body\n")
+    execute_one(op)
+    landed = (vault / "Concepts" / "Existing.md").read_text(encoding="utf-8")
+    head = landed.split("\n---\n")[0]
+    assert "tags:\n  - seed" in head
+    assert "AI: true" in head
+    assert "# Rewritten" in landed and "Body." not in landed
+
+
+def test_overwrite_no_prior_block_gets_minimal_floor(vault):
+    op = Op(op=OpType.overwrite, path="Hubs/AI.md",
+            heading="AI", source_basename="src.md",
+            content="# AI\n\nrewritten\n")
+    execute_one(op)
+    landed = (vault / "Hubs" / "AI.md").read_text(encoding="utf-8")
+    assert landed.startswith("---\nAI: true\nlast modified: ")
+    assert "# AI\n\nrewritten" in landed
+
+
+def test_write_uses_vault_default_template(vault):
+    """e2e for the spec: a pipeline write op into a vault carrying a custom
+    default template lands matching the template skeleton."""
+    from silica.kernel.vault_manifest import reset_manifest_cache
+    (vault / "templates").mkdir()
+    (vault / "templates" / "spoke.md").write_text(
+        "---\nsource-template: spoke\ntags: {{tags}}\nlast modified: {{date}}\n"
+        "AI: true\n---\n\n# {{title}}\n\n{{body}}\n",
+        encoding="utf-8",
+    )
+    (vault / "vault.yaml").write_text(
+        "conventions:\n  default_template: spoke\n", encoding="utf-8")
+    reset_manifest_cache()
+    try:
+        op = Op(op=OpType.write, path="Concepts/New.md",
+                heading="New", source_basename="src.md",
+                snippet="Body.", hub="AI")
+        execute_one(op)
+    finally:
+        reset_manifest_cache()
+    landed = (vault / "Concepts" / "New.md").read_text(encoding="utf-8")
+    assert "source-template: spoke" in landed
+    assert "tags:\n  - ai\n" in landed          # hub-derived default tag
+    assert "# New\n\nBody." in landed
+    assert "parent note" not in landed           # not in this template

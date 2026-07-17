@@ -304,3 +304,35 @@ def test_ofm_lint_extra_callouts_whitelisted_from_manifest(tmp_path, monkeypatch
     note = _note_with_n_tags(1) + "\n> [!clinica] some clinical note\n"
     violations = ofm_lint(note)["violations"]
     assert not any("unknown callout type" in v for v in violations)
+
+
+# ---------------------------------------------------------------------------
+# template conventions parsing
+# ---------------------------------------------------------------------------
+
+
+def test_template_conventions_parsed_from_vault_yaml(tmp_path):
+    (tmp_path / "vault.yaml").write_text(
+        "conventions:\n  default_template: paper\n  templates_dir: tpl\n",
+        encoding="utf-8",
+    )
+    c = load_manifest(tmp_path).conventions
+    assert c.default_template == "paper"
+    assert c.templates_dir == "tpl"
+
+
+def test_template_conventions_defaults(tmp_path):
+    c = load_manifest(tmp_path).conventions
+    assert c.default_template is None
+    assert c.templates_dir == "templates"
+
+
+def test_templates_dir_traversal_guard(tmp_path):
+    """Same trust boundary as wiki_dir: vault.yaml is user-authored and
+    templates_dir reaches file reads — traversal/absolute paths fall back."""
+    for bad in ("../outside", "/abs/path", "a/../../b", "C:\\evil"):
+        (tmp_path / "vault.yaml").write_text(
+            f"conventions:\n  templates_dir: {bad}\n", encoding="utf-8",
+        )
+        reset_manifest_cache()
+        assert load_manifest(tmp_path).conventions.templates_dir == "templates"

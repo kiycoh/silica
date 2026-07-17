@@ -47,8 +47,11 @@ low-density notes — write like you'd want to re-read.
    `silica_patch_note {name, heading, snippet, source_basename}` —
    `source_basename` is provenance (the file or conversation the snippet
    came from).
-2. New concept → `silica_write_note {path, content}`. It refuses to overwrite
-   by design: an "already exists" error means patch instead.
+2. New concept → `silica_write_note {path, body, title?, tags?, related?,
+   parent?, template?}`. `body` is markdown only — frontmatter is applied
+   mechanically from the vault template; never include a YAML block. It
+   refuses to overwrite by design: an "already exists" error means patch
+   instead.
 3. Note shape: one atomic concept per note; YAML frontmatter with tags;
    `[[wikilinks]]` to the related notes your searches surfaced; write in the
    vault's language (read one existing note if unsure).

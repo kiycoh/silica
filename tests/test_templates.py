@@ -1,4 +1,13 @@
-from silica.kernel.templates import ensure_ai_flag, template_spoke
+import datetime
+import logging
+
+from silica.kernel.templates import (
+    BUILTIN_TEMPLATE,
+    ensure_ai_flag,
+    prepare_fields,
+    render_note,
+    template_spoke,
+)
 
 
 def test_spoke_does_not_double_wrap_bracketed_parent_and_related():
@@ -40,3 +49,227 @@ def test_ensure_ai_flag_is_conservative():
     user_false = "---\nAI: false\ntags:\n  - x\n---\n# n\nbody"
     assert ensure_ai_flag(user_false) == user_false  # keeps user's explicit value
     assert ensure_ai_flag("# no frontmatter\nbody") == "# no frontmatter\nbody"
+
+
+def test_builtin_template_parity_with_template_spoke():
+    """The guarantee that existing vaults do not change behavior: the built-in
+    template through render_note is byte-identical to template_spoke."""
+    cases = [
+        dict(heading="Varianza", snippet="La varianza misura la dispersione.", hub="Statistica"),
+        dict(heading="GPT", snippet="testo", hub="[[IA Generativa]]",
+             parent="[[Rinascita dell'IA]]",
+             related=["[[Reti Neurali]]", "calcolo parallelo"],
+             tags=["Tag One", "tag-one"], title="Custom Title"),
+        dict(heading="Empty", snippet="", hub="AI"),
+    ]
+    for c in cases:
+        legacy = template_spoke(**c)
+        fields = prepare_fields(
+            title=c.get("title") or c["heading"], body=c["snippet"], hub=c["hub"],
+            tags=c.get("tags"), related=c.get("related"), parent=c.get("parent"),
+        )
+        assert render_note(BUILTIN_TEMPLATE, fields) == legacy, c
+
+
+def test_render_drops_empty_lines_and_expands_lists():
+    tpl = ("---\nparent note: {{parent}}\nrelated: {{related}}\n"
+           "tags: {{tags}}\nAI: true\n---\n\n# {{title}}\n\n{{body}}\n")
+    out = render_note(tpl, {"parent": "", "related": ['"[[A]]"', '"[[B]]"'],
+                            "tags": [], "title": "T", "body": "B"})
+    assert "parent note" not in out          # empty scalar: line dropped
+    assert "tags" not in out                 # empty list: key line dropped
+    assert 'related:\n  - "[[A]]"\n  - "[[B]]"\n' in out
+    assert out.endswith("# T\n\nB\n")
+    assert "AI: true" in out                 # literal lines pass through
+
+
+def test_render_removes_unknown_placeholder_with_warning(caplog):
+    tpl = "---\nfoo: {{mystery}}\nAI: true\n---\n\nBody {{alsounknown}}end\n"
+    with caplog.at_level(logging.WARNING):
+        out = render_note(tpl, {})
+    assert "mystery" not in out and "foo" not in out   # fm line dropped
+    assert "Body end" in out                           # body: removed in place
+    assert "unknown placeholder" in caplog.text
+
+
+def test_prepare_fields_strips_leading_yaml_from_body(caplog):
+    with caplog.at_level(logging.WARNING):
+        f = prepare_fields(title="T", body="---\ntags: [x]\n---\n\nReal body.")
+    assert f["body"] == "Real body."
+    assert "leading YAML" in caplog.text
+
+
+def test_prepare_fields_fallbacks_without_hub():
+    """Write-tool shape: no hub -> no hub merge, no default tag, parent optional."""
+    f = prepare_fields(title="T", body="B")
+    assert f["parent"] == "" and f["related"] == [] and f["tags"] == []
+    assert f["date"] == datetime.date.today().isoformat()
+    f2 = prepare_fields(title="T", body="B", parent="[[P]]", related=["P", "Q"])
+    assert f2["parent"] == '"[[P]]"'
+    assert f2["related"] == ['"[[P]]"', '"[[Q]]"']   # deduplicated
+
+
+def test_render_preserves_template_body_spacing():
+    """The renderer never reformats the author's body spacing: zero blank
+    lines after the closing fence stays zero, two stays two."""
+    out0 = render_note("---\nAI: true\n---\n# {{title}}\n", {"title": "T"})
+    assert out0 == "---\nAI: true\n---\n# T\n"
+    out2 = render_note("---\nAI: true\n---\n\n\n# {{title}}\n", {"title": "T"})
+    assert out2 == "---\nAI: true\n---\n\n\n# T\n"
+
+
+def test_floor_preserves_prior_frontmatter_on_bare_rewrite():
+    """A model that omits frontmatter while rewriting means 'keep it', not
+    'delete it': the prior block is re-injected verbatim, AI ensured,
+    last modified refreshed — no silent metadata loss, lint green."""
+    from silica.kernel import ofm
+    from silica.kernel.templates import ensure_system_floor
+    prior = ("---\ntags:\n  - keep\naliases:\n  - K\ncustom: v\n"
+             "last modified: 2020-01-01\n---\n\n# Old\n\nold body\n")
+    out = ensure_system_floor("# New\n\nnew body\n", prior=prior)
+    head, tail = out.split("\n---\n", 1)
+    assert "tags:\n  - keep" in head and "custom: v" in head and "aliases:" in head
+    assert "AI: true" in head
+    today = datetime.date.today().isoformat()
+    assert f"last modified: {today}" in head
+    assert "2020-01-01" not in head
+    assert tail == "\n# New\n\nnew body\n"
+    # feeding the output back as prior must not grow blank lines
+    out2 = ensure_system_floor("# Again\n\nbody2\n", prior=out)
+    assert "\n---\n\n# Again" in out2 and "\n\n\n" not in out2
+    assert "old body" not in out
+    assert not any("AI" in v for v in ofm.ofm_lint(out, stem="New")["violations"])
+
+
+def test_floor_creates_minimal_block_when_no_prior():
+    from silica.kernel.templates import ensure_system_floor
+    today = datetime.date.today().isoformat()
+    out = ensure_system_floor("# N\n\nbody\n")
+    assert out.startswith(f"---\nAI: true\nlast modified: {today}\n---\n\n# N")
+    # prior without a block is the same case
+    assert ensure_system_floor("# N\n\nbody\n", prior="# bare prior\n") == out
+
+
+def test_floor_with_existing_block_is_ensure_ai_flag():
+    """Content that carries its own frontmatter: today's behavior, unchanged —
+    prior is ignored, last modified NOT touched."""
+    from silica.kernel.templates import ensure_system_floor
+    c = "---\ntags:\n  - x\nlast modified: 2020-01-01\n---\n# n\nbody"
+    assert ensure_system_floor(c) == ensure_ai_flag(c)
+    assert ensure_system_floor(c, prior="---\nother: y\n---\nold") == ensure_ai_flag(c)
+    assert "2020-01-01" in ensure_system_floor(c)
+
+
+def test_floor_adds_last_modified_when_prior_lacks_it():
+    from silica.kernel.templates import ensure_system_floor
+    out = ensure_system_floor("# N\nb\n", prior="---\ntags:\n  - k\n---\n\nold\n")
+    assert f"last modified: {datetime.date.today().isoformat()}" in out.split("\n---\n")[0]
+
+
+def test_floor_preserves_crlf_prior_metadata():
+    """CRLF notes (Windows-synced vaults): prior metadata still preserved,
+    fences canonicalized — not silently replaced by the minimal block."""
+    from silica.kernel.templates import ensure_system_floor
+    prior = "---\r\ntags:\r\n  - keep\r\n---\r\n\r\nold\r\n"
+    out = ensure_system_floor("# New\n\nbody\n", prior=prior)
+    head = out.split("\n---\n")[0]
+    assert "keep" in head and "AI: true" in head
+
+
+def test_floor_canonicalizes_fence_whitespace():
+    """Trailing space on the prior's closing fence must not mangle the splice:
+    last modified lands inside the block, never after the body."""
+    from silica.kernel.templates import ensure_system_floor
+    prior = "---\ntags:\n  - keep\n--- \n\nold\n"
+    out = ensure_system_floor("# New\n\nbody\n", prior=prior)
+    head, tail = out.split("\n---\n", 1)
+    assert "keep" in head and "AI: true" in head
+    assert f"last modified: {datetime.date.today().isoformat()}" in head
+    assert "last modified" not in tail
+
+
+def test_crlf_template_renders_lists_not_reprs(tpl_vault):
+    """A CRLF template file must render list placeholders as YAML sequences,
+    not Python reprs (read path normalizes line endings)."""
+    from silica.kernel.templates import render_note, resolve_template
+    (tpl_vault / "templates").mkdir()
+    (tpl_vault / "templates" / "win.md").write_bytes(
+        b"---\r\ntags: {{tags}}\r\nAI: true\r\n---\r\n\r\n{{body}}\r\n")
+    out = render_note(resolve_template("win"), {"tags": ["a", "b"], "body": "B"})
+    head = out.split("\n---\n")[0]
+    assert "tags:\n  - a\n  - b" in out and "[" not in head
+
+
+import pytest
+
+from silica.kernel.vault_manifest import reset_manifest_cache
+
+
+@pytest.fixture
+def tpl_vault(tmp_path, monkeypatch):
+    """Vault root for template resolution; manifest cache reset around it."""
+    monkeypatch.setattr("silica.config.CONFIG.vault_path", str(tmp_path))
+    reset_manifest_cache()
+    yield tmp_path
+    reset_manifest_cache()
+
+
+def _write_tpl(vault, name, body="{{body}}\n"):
+    d = vault / "templates"
+    d.mkdir(exist_ok=True)
+    (d / f"{name}.md").write_text(f"---\nx-tpl: {name}\nAI: true\n---\n\n{body}",
+                                  encoding="utf-8")
+
+
+def test_resolution_explicit_beats_vault_default(tpl_vault):
+    from silica.kernel.templates import resolve_template
+    _write_tpl(tpl_vault, "paper")
+    _write_tpl(tpl_vault, "other")
+    (tpl_vault / "vault.yaml").write_text(
+        "conventions:\n  default_template: other\n", encoding="utf-8")
+    reset_manifest_cache()
+    assert "x-tpl: paper" in resolve_template("paper")
+    assert "x-tpl: other" in resolve_template()
+
+
+def test_resolution_builtin_when_unconfigured(tpl_vault):
+    from silica.kernel.templates import BUILTIN_TEMPLATE, resolve_template
+    assert resolve_template() == BUILTIN_TEMPLATE
+
+
+def test_resolution_broken_default_falls_back_to_builtin(tpl_vault, caplog):
+    """The pipeline never stops for a broken template (soft, like vault.yaml)."""
+    from silica.kernel.templates import BUILTIN_TEMPLATE, resolve_template
+    (tpl_vault / "templates").mkdir()
+    (tpl_vault / "templates" / "broken.md").write_text("---\nunterminated",
+                                                       encoding="utf-8")
+    (tpl_vault / "vault.yaml").write_text(
+        "conventions:\n  default_template: broken\n", encoding="utf-8")
+    reset_manifest_cache()
+    with caplog.at_level(logging.WARNING):
+        assert resolve_template() == BUILTIN_TEMPLATE
+    assert "broken" in caplog.text
+
+
+def test_unknown_explicit_name_raises_listing_available(tpl_vault):
+    from silica.kernel.templates import TemplateNotFoundError, resolve_template
+    _write_tpl(tpl_vault, "paper")
+    with pytest.raises(TemplateNotFoundError, match="paper"):
+        resolve_template("nope")
+
+
+def test_path_shaped_template_names_rejected(tpl_vault, caplog):
+    """Template names are user-authored and reach a file path — separators
+    and traversal are rejected, mirroring the templates_dir trust boundary."""
+    from silica.kernel.templates import (BUILTIN_TEMPLATE, TemplateNotFoundError,
+                                         resolve_template)
+    with pytest.raises(TemplateNotFoundError):
+        resolve_template("../evil")
+    with pytest.raises(TemplateNotFoundError):
+        resolve_template("D:evil")
+    (tpl_vault / "vault.yaml").write_text(
+        "conventions:\n  default_template: ../evil\n", encoding="utf-8")
+    reset_manifest_cache()
+    with caplog.at_level(logging.WARNING):
+        assert resolve_template() == BUILTIN_TEMPLATE
+    assert "invalid vault default template name" in caplog.text

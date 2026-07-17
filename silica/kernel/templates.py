@@ -7,9 +7,20 @@ Migrated AS-IS from hermes_common/templates.py, with the bootstrap path
 hack removed (no longer needed — this is a proper Python package now).
 """
 import datetime
+import logging
 import re
 
+from silica.kernel import frontmatter
 from silica.kernel.frontmatter import clean_tag  # canonical; do not redefine
+
+logger = logging.getLogger(__name__)
+
+_PLACEHOLDER_RE = re.compile(r"\{\{(\w+)\}\}")
+
+# Template-scoped fence split: unlike frontmatter.FM_RE (whose trailing \s*
+# swallows every blank line after the closing fence), this stops at the first
+# newline so the template author's body spacing passes through unchanged.
+_TEMPLATE_FM_RE = re.compile(r"^---[ \t]*\n(.*?)\n---[ \t]*\n", re.DOTALL)
 
 
 def slugify(s: str) -> str:
@@ -82,6 +93,183 @@ AI: true
 """
 
 
+# The historical template_spoke layout as a template string. A vault with no
+# templates/ dir and no config renders bit-identically to the old code
+# (guarded by the golden parity test).
+BUILTIN_TEMPLATE = """---
+parent note: {{parent}}
+related: {{related}}
+tags: {{tags}}
+last modified: {{date}}
+AI: true
+---
+
+# {{title}}
+
+{{body}}
+"""
+
+
+def prepare_fields(*, title: str, body: str, hub: str | None = None,
+                   tags: list[str] | None = None,
+                   related: list[str] | None = None,
+                   parent: str | None = None) -> dict:
+    """Encode template_spoke's conditional fallbacks once, for every template.
+
+    Substitution in render_note is pure, so ALL conditional behavior lives
+    here: parent falls back to the hub, the hub is merged into related
+    (deduplicated), tags default to clean_tag(hub) when empty, date is
+    today's ISO date. Values come back ready to substitute — wikilinks
+    quoted, tags cleaned. Templates never re-implement these rules.
+
+    Also normalizes body: models drift toward emitting frontmatter at the
+    top of markdown regardless of instructions, so a leading YAML block is
+    stripped with a warning rather than landing inside the rendered note.
+    """
+    m = frontmatter.FM_RE.match(body)
+    if m:
+        logger.warning("prepare_fields: stripped leading YAML block from body")
+        body = body[m.end():]
+
+    hub_link = _link_name(hub) if hub else ""
+    parent_link = _link_name(parent) if parent else hub_link
+
+    related_items: list[str] = []
+    if parent_link:
+        related_items.append(f'"[[{parent_link}]]"')
+    if hub_link and f'"[[{hub_link}]]"' not in related_items:
+        related_items.append(f'"[[{hub_link}]]"')
+    for r in related or []:
+        r_link = f'"[[{_link_name(r)}]]"'
+        if r_link not in related_items:
+            related_items.append(r_link)
+
+    tag_list: list[str] = []
+    for t in tags or []:
+        ct = clean_tag(t)
+        if ct and ct not in tag_list:
+            tag_list.append(ct)
+    if not tag_list and hub_link:
+        ch = clean_tag(hub_link)
+        if ch:
+            tag_list.append(ch)
+
+    return {
+        "title": title,
+        "body": body.strip() or "(da espandere)",
+        "tags": tag_list,
+        "related": related_items,
+        "parent": f'"[[{parent_link}]]"' if parent_link else "",
+        "hub": f'"[[{hub_link}]]"' if hub_link else "",
+        "date": datetime.date.today().isoformat(),
+    }
+
+
+def render_note(template_source: str, fields: dict) -> str:
+    """Logic-free {{placeholder}} substitution over a whole-note skeleton.
+
+    Line-aware over the frontmatter block only: a frontmatter line whose
+    placeholder resolves empty is dropped, and a list value expands to a
+    YAML block sequence at its key (empty list drops the key line). In the
+    body, placeholders substitute in place. Unknown placeholders are
+    removed with a warning — they never block the write.
+    """
+    def _lookup(name: str):
+        if name not in fields:
+            logger.warning("render_note: unknown placeholder {{%s}} — removed", name)
+            return None
+        return fields[name]
+
+    def _sub_all(text: str) -> str:
+        return _PLACEHOLDER_RE.sub(lambda m: str(_lookup(m.group(1)) or ""), text)
+
+    m = _TEMPLATE_FM_RE.match(template_source)
+    if not m:
+        return _sub_all(template_source)
+
+    out: list[str] = []
+    for line in m.group(1).split("\n"):
+        ph = _PLACEHOLDER_RE.search(line)
+        if not ph:
+            out.append(line)
+            continue
+        val = _lookup(ph.group(1))
+        if isinstance(val, list):
+            if not val:
+                continue
+            out.append(line[:ph.start()].rstrip())
+            out.extend(f"  - {item}" for item in val)
+        elif val is None or str(val) == "":
+            continue
+        else:
+            out.append(_sub_all(line))
+    return "---\n" + "\n".join(out) + "\n---\n" + _sub_all(template_source[m.end():])
+
+
+def _bad_template_name(name: str) -> bool:
+    """True if a template name contains path separators, traversal sequences, or drive letters.
+
+    Rejects: path separators ("/", "\\"), parent-dir traversal (".."), and drive-relative
+    names (":") which would re-anchor pathlib operations to escape the templates dir.
+    """
+    return "/" in name or "\\" in name or ".." in name or ":" in name
+
+
+class TemplateNotFoundError(ValueError):
+    """Explicit template name that does not resolve — fails loudly."""
+
+
+def _read_template(path) -> str | None:
+    """Template source, or None when missing or malformed (a file that opens
+    a frontmatter fence and never closes it)."""
+    try:
+        source = path.read_text(encoding="utf-8")
+    except OSError:
+        return None
+    source = source.replace("\r\n", "\n")
+    if source.startswith("---") and not _TEMPLATE_FM_RE.match(source):
+        return None
+    return source
+
+
+def resolve_template(name: str | None = None) -> str:
+    """Resolution order: explicit name > vault.yaml default_template > built-in.
+
+    An explicit name that is missing/malformed raises TemplateNotFoundError
+    listing the available templates; a broken vault default degrades to the
+    built-in with a warning — ingestion never stops for a broken template.
+    """
+    from pathlib import Path
+
+    from silica.config import CONFIG
+    from silica.kernel.vault_manifest import get_active_manifest
+
+    conv = get_active_manifest().conventions
+    tdir = Path((getattr(CONFIG, "vault_path", "") or "").strip()) / conv.templates_dir
+    if name:
+        if _bad_template_name(name):
+            raise TemplateNotFoundError(
+                f"invalid template name {name!r} — names must not contain path separators, '..' or ':'")
+        source = _read_template(tdir / f"{name}.md")
+        if source is None:
+            available = sorted(p.stem for p in tdir.glob("*.md")) if tdir.is_dir() else []
+            raise TemplateNotFoundError(
+                f"template '{name}' not found or malformed in '{tdir}' — "
+                f"available: {', '.join(available) or 'none'}")
+        return source
+    if conv.default_template:
+        if _bad_template_name(conv.default_template):
+            logger.warning("invalid vault default template name %r — names must not contain path separators, '..' or ':' — using built-in",
+                           conv.default_template)
+            return BUILTIN_TEMPLATE
+        source = _read_template(tdir / f"{conv.default_template}.md")
+        if source is not None:
+            return source
+        logger.warning("vault default template %r missing or malformed — using built-in",
+                       conv.default_template)
+    return BUILTIN_TEMPLATE
+
+
 def patch_snippet(heading: str, snippet: str, source_basename: str, hub: str | None = None, existing_content: str | None = None) -> str:
     patch_text = f"""
 
@@ -139,6 +327,40 @@ def ensure_ai_flag(content: str) -> str:
     if _AI_KEY_RE.search(content[4:end_idx]):
         return content
     return content[:end_idx] + "\nAI: true" + content[end_idx:]
+
+
+_LAST_MODIFIED_RE = re.compile(r"^last modified:.*$", re.MULTILINE)
+
+
+def ensure_system_floor(content: str, prior: str | None = None) -> str:
+    """String-level floor under every write: `AI: true` + `last modified`
+    always land, whatever the model emitted. No YAML round-trip.
+
+    - content has a frontmatter block: ensure_ai_flag, unchanged.
+    - content has none but `prior` (the pre-write note) has one: re-inject
+      the prior block verbatim on top of the new body — omission means
+      "keep the user's metadata", not "delete it" — then ensure AI: true
+      and refresh `last modified` to today.
+    - no block anywhere: create the minimal one.
+    """
+    if content.startswith("---\n"):
+        return ensure_ai_flag(content)
+    today = datetime.date.today().isoformat()
+    pm = frontmatter.FM_RE.match(prior) if prior else None
+    if pm is None:
+        return f"---\nAI: true\nlast modified: {today}\n---\n\n{content.lstrip(chr(10))}"
+    # Rebuild the prior block with canonical bare fences: FM_RE tolerates CRLF
+    # and fence-line whitespace, but the splices below assume exactly
+    # "---\n...\n---\n".
+    block = "---\n" + pm.group(1) + "\n---\n"
+    merged = ensure_ai_flag(block + "\n" + content.lstrip("\n"))
+    end_idx = merged.find("\n---\n", 4)
+    head, tail = merged[:end_idx], merged[end_idx:]
+    if _LAST_MODIFIED_RE.search(head):
+        head = _LAST_MODIFIED_RE.sub(f"last modified: {today}", head, count=1)
+    else:
+        head += f"\nlast modified: {today}"
+    return head + tail
 
 
 def provenance_header(heading: str, source_basename: str) -> str:

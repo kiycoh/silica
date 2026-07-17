@@ -1,9 +1,12 @@
 """Tests for the commit_ops micro-gate (silica/agent/commit.py)."""
 from unittest.mock import patch
 
+import pytest
+
 from silica.agent.commit import commit_ops
 from silica.agent.bounds import dedup_bounds
 from silica.kernel.ops import Op, OpType
+import silica.kernel.checkpoints as checkpoints
 
 
 def _patch_op(path="Concepts/Big.md"):
@@ -77,3 +80,49 @@ def test_delete_op_path_is_leased():
     assert "notes/Foo.md" in leased_paths, (
         f"Delete op path 'notes/Foo.md' was not leased; got: {leased_paths}"
     )
+
+
+# ---------------------------------------------------------------------------
+# commit_derived — machine-generated notes with prior metadata preservation
+# ---------------------------------------------------------------------------
+
+
+@pytest.fixture
+def derived_vault(tmp_path, monkeypatch):
+    """Isolated fs vault for commit_derived tests; patches DRIVER + checkpoint store."""
+    vault_dir = tmp_path / "vault"
+    vault_dir.mkdir()
+    (vault_dir / "Wiki.md").write_text(
+        "---\ntags:\n  - custom\npinned: yes\n---\n\n# Wiki\n\nold\n",
+        encoding="utf-8",
+    )
+    monkeypatch.setenv("SILICA_BACKEND", "fs")
+    monkeypatch.setattr("silica.config.CONFIG.backend", "fs")
+    monkeypatch.setattr("silica.config.CONFIG.vault_path", str(vault_dir))
+    monkeypatch.setattr("silica.driver._driver", None)
+    monkeypatch.setattr("silica.kernel.checkpoints._store", None)
+    checkpoints.get_checkpoint_store(tmp_path / "checkpoints.db")
+    yield vault_dir
+    monkeypatch.setattr("silica.driver._driver", None)
+    monkeypatch.setattr("silica.kernel.checkpoints._store", None)
+
+
+def test_commit_derived_floors_bare_regen_with_prior_frontmatter(derived_vault):
+    """A derived regen that omits the YAML block keeps the note's prior
+    metadata and lands lint-green instead of rolling back."""
+    from silica.agent.commit import commit_derived
+    res = commit_derived("Wiki.md", "# Wiki\n\nregenerated\n")
+    assert res["status"] == "committed", res
+    landed = (derived_vault / "Wiki.md").read_text(encoding="utf-8")
+    head = landed.split("\n---\n")[0]
+    assert "tags:\n  - custom" in head and "pinned: yes" in head
+    assert "AI: true" in head
+    assert "regenerated" in landed and "old" not in landed
+
+
+def test_commit_derived_first_write_gets_minimal_floor(derived_vault):
+    from silica.agent.commit import commit_derived
+    res = commit_derived("Fresh.md", "# Fresh\n\nbody\n")
+    assert res["status"] == "committed", res
+    landed = (derived_vault / "Fresh.md").read_text(encoding="utf-8")
+    assert landed.startswith("---\nAI: true\nlast modified: ")

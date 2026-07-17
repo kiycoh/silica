@@ -52,16 +52,16 @@ def commit_derived(rel: str, content: str) -> dict[str, Any]:
     Returns {"status": committed | rolled_back | error, "reason": ...}.
     """
     from silica.driver import DRIVER
-    from silica.kernel.templates import ensure_ai_flag
+    from silica.kernel.templates import ensure_system_floor
     from silica.kernel.workqueue import path_lease
     from silica.tools.composed import silica_lint
 
-    content = ensure_ai_flag(content)
     with path_lease(rel):
         try:
             prior: str | None = DRIVER.read_note(rel).content
         except Exception:
             prior = None
+        content = ensure_system_floor(content, prior=prior)
         try:
             if prior is None:
                 DRIVER.create(rel, content)

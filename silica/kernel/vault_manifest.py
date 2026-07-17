@@ -51,6 +51,10 @@ class VaultConventions:
     max_tags: int = 3
     extra_callouts: tuple[str, ...] = ()
     wiki_dir: str = ""  # landing dir for /wiki notes; "" ⇒ vault root
+    # Frontmatter templates (2026-07-17 spec): None ⇒ built-in template_spoke
+    # layout — a vault with no config behaves bit-identically to before.
+    default_template: str | None = None
+    templates_dir: str = "templates"
 
 
 DEFAULT_CONVENTIONS = VaultConventions()
@@ -120,12 +124,33 @@ def _parse_conventions(raw: dict) -> VaultConventions:
                            "path inside the vault — ignoring %r", wiki_dir)
             wiki_dir = ""
 
+    default_template = conv_raw.get("default_template")
+    if isinstance(default_template, str) and default_template.strip():
+        default_template = default_template.strip()
+    else:
+        default_template = None
+
+    templates_dir = conv_raw.get("templates_dir")
+    templates_dir = templates_dir.strip() if isinstance(templates_dir, str) else ""
+    if templates_dir:
+        # trust boundary: same rule as wiki_dir — user-authored path that
+        # reaches the read path must stay inside the vault
+        parts = templates_dir.replace("\\", "/").split("/")
+        if templates_dir.startswith(("/", "\\")) or ".." in parts or ":" in parts[0]:
+            logger.warning("vault.yaml: conventions.templates_dir must be a relative "
+                           "path inside the vault — ignoring %r", templates_dir)
+            templates_dir = ""
+    if not templates_dir:
+        templates_dir = "templates"
+
     return VaultConventions(
         language=language,
         reply_language=reply_language,
         max_tags=max_tags,
         extra_callouts=extra_callouts,
         wiki_dir=wiki_dir,
+        default_template=default_template,
+        templates_dir=templates_dir,
     )
 
 
