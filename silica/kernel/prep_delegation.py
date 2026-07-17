@@ -91,6 +91,105 @@ def payload_checksum(payload_json: str) -> str:
     return hashlib.sha256(payload_json.encode("utf-8")).hexdigest()
 
 
+# Per-string cap when echoing a rejected op back to the model: enough to
+# recognize the op, not enough to blow up the prompt with full note bodies.
+_STEER_ECHO_MAX_CHARS = 280
+
+
+def _truncate_op_echo(obj, limit: int = _STEER_ECHO_MAX_CHARS):
+    """Deep-copy `obj` with long strings truncated and empty fields dropped."""
+    if isinstance(obj, str):
+        return obj if len(obj) <= limit else obj[:limit] + f"… [truncated, {len(obj)} chars total]"
+    if isinstance(obj, dict):
+        return {k: _truncate_op_echo(v, limit) for k, v in obj.items()
+                if v is not None and v != "" and v != []}
+    if isinstance(obj, list):
+        return [_truncate_op_echo(v, limit) for v in obj]
+    return obj
+
+
+def render_steer_feedback(
+    rejected: list[dict],
+    *,
+    attempt: int,
+    max_attempts: int,
+    accepted: list[dict] | None = None,
+    partial: bool = False,
+    ungrounded: list[dict] | None = None,
+) -> str:
+    """Structured per-op steering feedback for a re-delegation attempt.
+
+    Paper-aligned (PDDL-INSTRUCT): the corrective prompt echoes the previous
+    output with a per-op verdict and the validator's detailed reason, instead
+    of a flat concatenation of reasons — detailed feedback measurably beats
+    binary feedback in verifier-guided refinement loops.
+
+    Args:
+        rejected: validator rejection entries, each `{"op": {...}, "reason": str}`
+            (entries missing `op` degrade to a reason-only line).
+        attempt/max_attempts: steer-arc position, shown in the header.
+        accepted: validated op dicts from the same pass (partial steer) —
+            listed so the model does not re-emit them.
+        partial: True when the payload was filtered to the rejected concepts.
+        ungrounded: span-grounding findings on ACCEPTED ops (`{"heading",
+            "path", "spans"}`) — advisory only, the gate stays warn-only; the
+            retry must not introduce more content untraceable to the payload.
+    """
+    accepted = accepted or []
+    lines = [
+        f"## STEERING CORRECTION (attempt {attempt}/{max_attempts})",
+        f"Your previous output was validated: {len(accepted)} op(s) ACCEPTED, "
+        f"{len(rejected)} op(s) REJECTED.",
+    ]
+    if partial:
+        lines.append(
+            "The payload in this message now contains ONLY the concepts whose ops "
+            "were rejected; the accepted ops are already being written."
+        )
+    else:
+        lines.append("Regenerate the full output, fixing every rejected op below.")
+
+    if accepted:
+        lines.append("\n### Accepted ops (do NOT re-emit these)")
+        for op in accepted:
+            if isinstance(op, dict):
+                lines.append(f"- [{op.get('op', '?')}] {op.get('path') or op.get('heading', '?')}")
+
+    for i, r in enumerate(rejected, 1):
+        if not isinstance(r, dict):
+            continue
+        op = r.get("op") if isinstance(r.get("op"), dict) else None
+        label = f"[{op.get('op', '?')}] \"{op.get('title') or op.get('heading', '?')}\"" if op else "(op not recorded)"
+        lines.append(f"\n### Rejected op {i} — {label}")
+        lines.append(f"Verdict: REJECTED — {r.get('reason') or 'no reason recorded'}")
+        if op:
+            lines.append("Your op was:")
+            lines.append("```json")
+            lines.append(json.dumps(_truncate_op_echo(op), ensure_ascii=False, indent=2))
+            lines.append("```")
+
+    if ungrounded:
+        lines.append(
+            "\n### Grounding warnings (accepted, but fix the habit)\n"
+            "These accepted ops contain spans NOT traceable to any payload excerpt. "
+            "They were not rejected, but your corrected ops must only carry facts "
+            "grounded in inbox_excerpt:"
+        )
+        for u in ungrounded:
+            if not isinstance(u, dict):
+                continue
+            spans = " | ".join(s[:80] for s in u.get("spans", [])[:3])
+            lines.append(f"- \"{u.get('heading', '?')}\" ({u.get('path', '?')}): {spans}")
+
+    lines.append(
+        "\n### Instructions\n"
+        "For EVERY rejected op above, re-emit a corrected op that fixes exactly "
+        "the violated constraint stated in its verdict. Do not introduce new "
+        "concepts and do not re-emit accepted ops."
+    )
+    return "\n".join(lines)
+
+
 # Floor for the computed output budget. If the prompt is so large that no
 # meaningful headroom remains, we still ask for at least this much rather than a
 # negative/zero value — the API call will surface the real problem instead of us
@@ -251,12 +350,8 @@ def run_distiller(
         substrate=substrate,
     )
 
-    steer_section = (
-        f"\n\n## STEERING CORRECTION (attempt {steer_context.split('|attempt=')[1].split('|')[0] if '|attempt=' in steer_context else '?'})\n"
-        f"{steer_context}\n\n"
-        f"Please revise your output to avoid the issues described above.\n"
-        if steer_context else ""
-    )
+    # steer_context arrives fully rendered (render_steer_feedback), header included.
+    steer_section = f"\n\n{steer_context}\n" if steer_context else ""
     user_message = (
         f"{prompt_text}\n\n"
         f"---\n"

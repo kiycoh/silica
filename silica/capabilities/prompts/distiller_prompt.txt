@@ -24,6 +24,19 @@ Your output will be rejected by the post-distillation validator if it violates a
      - Incorrect `source_basename`: `"Costo marginale.md"` (derived from path).
      - Correct `source_basename`: `"Lezione 04.md"` (derived from `batch.inbox_file` containing that concept). Do NOT derive from `path` (destination). Do NOT invent. If you cannot determine it, emit `"op": "skip"` with `"reason": "missing source attribution"`.
 
+### Contrastive Examples (most common rejections, with the fix)
+The validator applies these mechanically — one rejected op wastes the attempt.
+
+1. **Invented heading** — payload concept is `"Gradient Descent"`:
+   - ✗ `"heading": "Gradient Descent Optimization"` → REJECTED: heading not present in payload concepts.
+   - ✓ `"heading": "Gradient Descent", "title": "Gradient Descent Optimization"` — `heading` is the traceability anchor, verbatim from the payload; `title` handles display.
+2. **Placeholder body** — inbox_excerpt has extractable facts but the body is `"See the lecture for details."`:
+   - ✗ → REJECTED: snippet too short — would write a placeholder note.
+   - ✓ Extract the actual definitions/formulas into the body; if the excerpt truly yields nothing, emit `"op": "skip"` instead.
+3. **Descriptive meta-body** — body is `"This section covers the basics of neural networks."`:
+   - ✗ → a note that DESCRIBES the source instead of carrying facts is worse than no note.
+   - ✓ Body carries the facts themselves, verbatim from the excerpt; otherwise `"op": "skip"`.
+
 ## Input Payload Schema
 The payload file referenced in your task context has shape:
 

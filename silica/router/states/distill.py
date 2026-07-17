@@ -118,6 +118,54 @@ def _enqueue_short_snippet_expands(fsm: "InjectorFSM", rejected_raw: list) -> No
             logger.debug("VALIDATE: failed to enqueue expand item: %s", _qe)
 
 
+def _steer_retryable(fsm: "InjectorFSM", rejected_raw: list, idx: int) -> list:
+    """Rejections eligible for the partial steer arc.
+
+    Excluded: failure classes with a specialized in-run recovery lane
+    (near-title → dedup judge, short snippet → expand worker), collision-routed
+    ops (not distiller-authored — steering the distiller about them is noise),
+    and entries with no payload heading to rebuild a retry payload from.
+    """
+    collision_ops = fsm.context.get(f"chunk_{idx}_collision_ops", []) or []
+    collision_keys = {
+        (o.get("heading"), o.get("path")) for o in collision_ops if isinstance(o, dict)
+    }
+    out = []
+    for r in rejected_raw:
+        if not isinstance(r, dict):
+            continue
+        reason = r.get("reason", "") or ""
+        if _NEAR_TITLE_RE.search(reason) or reason.startswith("snippet too short"):
+            continue
+        op = r.get("op") if isinstance(r.get("op"), dict) else None
+        if not op or not op.get("heading"):
+            continue
+        if (op.get("heading"), op.get("path")) in collision_keys:
+            continue
+        out.append(r)
+    return out
+
+
+def _filter_chunk_to_concepts(chunk: dict, names: set) -> dict | None:
+    """Copy of `chunk` with batches filtered to the named concepts (retry payload).
+
+    Returns None when nothing matches — the caller falls back to the normal
+    partial-success path instead of steering.
+    """
+    names = {n for n in names if n}
+    if not names or not isinstance(chunk, dict):
+        return None
+    batches = []
+    for batch in chunk.get("batches", []):
+        kept = [c for c in batch.get("concepts", [])
+                if isinstance(c, dict) and c.get("name") in names]
+        if kept:
+            batches.append({**batch, "concepts": kept})
+    if not batches:
+        return None
+    return {**chunk, "batches": batches}
+
+
 def _inject_graph_ctx(chunk: dict, vault_ctx: dict) -> dict:
     """Return a shallow-enriched copy of chunk with graph_context added to concepts.
 
@@ -164,27 +212,40 @@ def handle_delegate(fsm: "InjectorFSM") -> None:
     current_chunk = fsm._chunks[fsm._current_chunk_idx]
     idx = fsm._current_chunk_idx
 
-    # Content-addressed idempotency (Phase 2): if this chunk was already
-    # processed in a prior run with identical input, skip DELEGATE→SANITIZE→VALIDATE
-    # and reuse the persisted knowledge-block ops file.
-    #
-    # Use the pre-COLLISION hash stored by _handle_collision so the key is
-    # based on the original source input, not the vault-state-dependent
-    # post-COLLISION chunk (which changes when resumed after a partial run).
+    # Partial-steer retry: VALIDATE parked a payload filtered to the rejected
+    # concepts. Consume it in place of the full chunk.
+    retry_payload = fsm.context.pop(f"chunk_{idx}_retry_payload", None)
+    if retry_payload is not None:
+        current_chunk = retry_payload
+
     import json as _json
-    chunk_hash = fsm.context.get(f"chunk_{idx}_input_hash") or hashlib.sha256(
-        _json.dumps(current_chunk, sort_keys=True).encode()
-    ).hexdigest()
-    saved_ops_path = fsm.progress.is_checkpoint_done(fsm._chunk_task_id("validate"), chunk_hash)
-    if saved_ops_path and os.path.exists(saved_ops_path):
-        logger.info(
-            "DELEGATE chunk %d: content-addressed hit (hash=%s…) — skipping to SNAPSHOT",
-            idx,
-            chunk_hash[:8],
-        )
-        fsm.context["ops_path"] = saved_ops_path
-        fsm.state = orch.InjectorState.SNAPSHOT
-        return
+    if retry_payload is None:
+        # Content-addressed idempotency (Phase 2): if this chunk was already
+        # processed in a prior run with identical input, skip DELEGATE→SANITIZE→VALIDATE
+        # and reuse the persisted knowledge-block ops file.
+        #
+        # Use the pre-COLLISION hash stored by _handle_collision so the key is
+        # based on the original source input, not the vault-state-dependent
+        # post-COLLISION chunk (which changes when resumed after a partial run).
+        chunk_hash = fsm.context.get(f"chunk_{idx}_input_hash") or hashlib.sha256(
+            _json.dumps(current_chunk, sort_keys=True).encode()
+        ).hexdigest()
+        saved_ops_path = fsm.progress.is_checkpoint_done(fsm._chunk_task_id("validate"), chunk_hash)
+        if saved_ops_path and os.path.exists(saved_ops_path):
+            logger.info(
+                "DELEGATE chunk %d: content-addressed hit (hash=%s…) — skipping to SNAPSHOT",
+                idx,
+                chunk_hash[:8],
+            )
+            fsm.context["ops_path"] = saved_ops_path
+            fsm.state = orch.InjectorState.SNAPSHOT
+            return
+    else:
+        # Steer retry is mid-chunk work: never content-addressed-skip, and keep
+        # the first pass's hash so the checkpoint stays keyed to the source input.
+        chunk_hash = fsm.context.get(f"chunk_{idx}_hash", "") or hashlib.sha256(
+            _json.dumps(current_chunk, sort_keys=True).encode()
+        ).hexdigest()
 
     logger.info(f"--- DISTILLING BATCH {idx + 1}/{len(fsm._chunks)} ---")
     fsm._progress_note(fsm._chunk_task_id("distill"), "distill", "running")
@@ -284,6 +345,13 @@ def handle_validate(fsm: "InjectorFSM") -> None:
     collision_ops = fsm.context.get(f"chunk_{idx}_collision_ops", [])
     if collision_ops:
         ops_raw = list(collision_ops) + list(ops_raw)
+
+    # Partial-steer retry: validated ops from the previous attempt re-enter the
+    # gate ahead of the retry output — re-validation is deterministic, and the
+    # path-dedup keeps the richer op if the model re-emitted one anyway.
+    carry_ops = fsm.context.pop(f"chunk_{idx}_carry_ops", None)
+    if carry_ops:
+        ops_raw = list(carry_ops) + list(ops_raw)
 
     # Cohesion pass: inject sibling cross-references into write ops' related[]
     # before validation so the links land in the written frontmatter.
@@ -408,26 +476,24 @@ def handle_validate(fsm: "InjectorFSM") -> None:
             res.get("validated_count", 0),
         )
 
+    from silica.kernel.prep_delegation import render_steer_feedback
+
+    steer_attempts = fsm.context.get(f"chunk_{idx}_steer_attempts", 0)
+    _max_steer = fsm._get_recipe_gate("max_steer_attempts", 2)
+
     # Abort only when no validated ops remain — partial success is fine.
     if res.get("validated_count", 0) == 0:
-        # Phase 6 steering arc: re-delegate with rejection reason injected (max 2 attempts).
-        steer_attempts = fsm.context.get(f"chunk_{idx}_steer_attempts", 0)
-        _max_steer = fsm._get_recipe_gate("max_steer_attempts", 2)
+        # Phase 6 steering arc: re-delegate with per-op rejection feedback (max 2 attempts).
         if steer_attempts < _max_steer:
             steer_attempts += 1
             fsm.context[f"chunk_{idx}_steer_attempts"] = steer_attempts
-            # Build a short rejection summary to inject as corrective context.
-            rejected_raw = res.get("rejected_ops", [])
-            reasons = "; ".join(
-                r.get("reason", "") for r in rejected_raw if isinstance(r, dict) and r.get("reason")
+            fsm.context[f"chunk_{idx}_steer_context"] = render_steer_feedback(
+                res.get("rejected_ops", []),
+                attempt=steer_attempts,
+                max_attempts=_max_steer,
+                partial=False,
+                ungrounded=res.get("ungrounded", []),
             )
-            steer_msg = (
-                f"|attempt={steer_attempts}|"
-                f" All {res.get('rejected_count', '?')} ops were rejected."
-                f" Reasons: {reasons or 'no reason provided'}."
-                f" Produce valid ops that satisfy the pipeline constraints."
-            )
-            fsm.context[f"chunk_{idx}_steer_context"] = steer_msg
             logger.warning(
                 "VALIDATE: steer attempt %d/%d for chunk %d — re-delegating with correction.",
                 steer_attempts, _max_steer, idx,
@@ -451,6 +517,41 @@ def handle_validate(fsm: "InjectorFSM") -> None:
         fsm._progress_note(fsm._chunk_task_id("validate"), "validate", "done")
         fsm.state = orch.InjectorState.CLEANUP
         return
+
+    # Partial rejection: steer ONLY the rejected concepts back through the
+    # distiller with per-op feedback, carrying the validated ops forward for
+    # the merge on the next VALIDATE pass. Rejections owned by a specialized
+    # in-run lane (dedup judge, expand worker) are excluded — racing two
+    # recovery paths would author the same notes twice.
+    retryable = _steer_retryable(fsm, rejected_raw, idx) if rejected_raw else []
+    if retryable and steer_attempts < _max_steer:
+        retry_payload = _filter_chunk_to_concepts(
+            fsm._chunks[fsm._current_chunk_idx] if fsm._chunks else {},
+            {r["op"].get("heading", "") for r in retryable},
+        )
+        if retry_payload is not None:
+            steer_attempts += 1
+            fsm.context[f"chunk_{idx}_steer_attempts"] = steer_attempts
+            fsm.context[f"chunk_{idx}_steer_context"] = render_steer_feedback(
+                retryable,
+                attempt=steer_attempts,
+                max_attempts=_max_steer,
+                accepted=res.get("validated_ops", []),
+                partial=True,
+                ungrounded=res.get("ungrounded", []),
+            )
+            fsm.context[f"chunk_{idx}_retry_payload"] = retry_payload
+            fsm.context.setdefault(f"chunk_{idx}_carry_ops", []).extend(
+                res.get("validated_ops", [])
+            )
+            logger.warning(
+                "VALIDATE: partial steer attempt %d/%d for chunk %d — re-delegating %d rejected op(s), carrying %d validated.",
+                steer_attempts, _max_steer, idx, len(retryable), res.get("validated_count", 0),
+            )
+            fsm._progress_note(fsm._chunk_task_id("validate"), "validate", "running",
+                                error=f"steer {steer_attempts}/{_max_steer} (partial)")
+            fsm.state = orch.InjectorState.DELEGATE
+            return
 
     # Knowledge-block consolidation (Phase 2): persist the validated ops to
     # a stable path in the run directory so they survive tmp cleanup and
