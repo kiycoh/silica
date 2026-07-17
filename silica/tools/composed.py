@@ -45,7 +45,6 @@ from silica.tools.graph import (  # noqa: F401
     EmbedRefreshArgs,
     GraphExportArgs,
     SemanticSearchArgs,
-    SimilarArgs,
     VaultReportArgs,
     _in_folder,
     silica_autolink,
@@ -56,7 +55,6 @@ from silica.tools.graph import (  # noqa: F401
     silica_health,
     silica_related,
     silica_semantic_search,
-    silica_similar,
     silica_vault_report,
 )
 from silica.tools.curate import (  # noqa: F401

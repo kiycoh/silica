@@ -31,7 +31,6 @@ logger = logging.getLogger(__name__)
 CORE_TOOLS = (
     "silica_recall",
     "silica_semantic_search",
-    "silica_similar",
     "silica_related",
     "silica_concepts",
     "silica_search",

@@ -74,7 +74,7 @@ def facade_retrieve(query: str, *, k: int, use_embedder: bool = True,
     """Fused first-stage retrieval + cross-encoder rerank for a fresh text query.
 
     The single retrieval path shared by the chat tools
-    (silica_semantic_search / silica_similar) and perceive() — and therefore by
+    (silica_semantic_search) and perceive() — and therefore by
     the eval adapter. Both lanes (active vault + personal memory, ADR-0019) are
     queried; a down leg abstains to the survivor.
 

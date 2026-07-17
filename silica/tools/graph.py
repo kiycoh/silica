@@ -263,7 +263,7 @@ def silica_backlink(new_titles: list[str], neighbourhood: list[str]) -> dict[str
 def _facade_search(text: str, k: int) -> dict[str, Any]:
     """Fused embeddings + co-occurrence search for a fresh text, then reranked.
 
-    Shared core of silica_semantic_search and silica_similar, now routed
+    Shared core of silica_semantic_search, now routed
     through perception.facade_retrieve — the same retrieval path perceive()
     and the memory eval use. Returns ``{"results": [{path, name, score}, ...]}``
     or ``{"error": ...}`` when no index is available at all. The two legs
@@ -299,14 +299,16 @@ class SemanticSearchArgs(BaseModel):
 def silica_semantic_search(query: str, k: int = 5) -> dict[str, Any]:
     """Find vault notes by MEANING: fuses embeddings + co-occurrence, then reranks.
 
-    Use for "what do I have about X" when the exact wording is unknown. Routes
-    through the same relatedness facade as autolink/collision — RRF fusion of the
-    embedding and co-occurrence legs, cross-encoder reranked when configured — so
-    a leg that is down (empty embedding index, embedder offline) degrades to the
-    survivor instead of failing. For literal text matches use
-    silica_search_context; to rank against a longer text you already have use
-    silica_similar. Returns at most k results, best first; verify with
-    silica_read_note before acting on them.
+    Use for "what do I have about X" when the exact wording is unknown, and for
+    "which notes resemble this content" — `query` can be a short phrase or a
+    whole paragraph/note body you already have. Routes through the same
+    relatedness facade as autolink/collision — RRF fusion of the embedding and
+    co-occurrence legs, cross-encoder reranked when configured — so a leg that is
+    down (empty embedding index, embedder offline) degrades to the survivor
+    instead of failing. For literal text matches use silica_search_context; when
+    the text IS an existing note, prefer silica_related (it adds the note-edges
+    leg). Returns at most k results, best first; verify with silica_read_note
+    before acting on them.
     """
     return {"query": query, **_facade_search(query, k=k)}
 
@@ -338,24 +340,6 @@ def silica_recall(query: str, k: int = 15) -> dict[str, Any]:
             "notes": [b.path for b in p.blocks], "facts": len(p.fact_hits)}
 
 
-class SimilarArgs(BaseModel):
-    text: str = Field(description="Text to find similar notes for (title, snippet, or concept description)")
-    k: int = Field(default=5, description="Number of results to return")
-
-@tool(SimilarArgs, cls="composed")
-def silica_similar(text: str, k: int = 5) -> dict[str, Any]:
-    """Find vault notes semantically similar to a given text snippet.
-
-    Same relatedness facade as silica_semantic_search (fused embeddings +
-    co-occurrence, reranked), but framed for a longer text (a note body, a
-    paragraph) rather than a short query — use it for "which notes resemble this
-    content". A down leg degrades to the survivor instead of failing. When the text
-    IS an existing note, prefer silica_related (it takes the note directly and adds
-    the note-edges leg).
-    """
-    return {"text": text[:120], **_facade_search(text, k=k)}
-
-
 class RelatedArgs(BaseModel):
     note: str = Field(description="Note name (wikilink-style) or vault-relative path to find related notes for")
     k: int = Field(default=5, description="Number of results to return")
@@ -368,7 +352,7 @@ def silica_related(note: str, k: int = 5) -> dict[str, Any]:
     direct note-edges (CORRELATE) — into one ranked shortlist with provenance, so
     you get a bounded set of candidates instead of guessing. Use this when asked
     "what's related/relevant to note X" INSTEAD of reading X and keyword-searching
-    from its words. For free-form text that is not a note, use silica_similar. Each
+    from its words. For free-form text that is not a note, use silica_semantic_search. Each
     result carries `evidence` (embed:0.83, cooccur:w9, edge:0.57) naming which metric
     proposed it, plus `cluster` (its graph community, labeled by hub note) when the
     cluster cache is warm, and `distance` (wikilink hops from the query; null =
@@ -522,7 +506,7 @@ class EmbedRefreshArgs(BaseModel):
 def silica_embed_refresh(folder: str = "", force: bool = False) -> dict[str, Any]:
     """Build or refresh the vault embedding index.
 
-    Powers silica_semantic_search, silica_similar, and silica_dedup — run it
+    Powers silica_semantic_search, silica_related, and silica_dedup — run it
     first if those report an empty index. Incremental: skips notes already
     indexed (unless force=True). Call after bulk writes to keep it fresh.
     """
