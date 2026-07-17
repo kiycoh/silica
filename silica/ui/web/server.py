@@ -185,10 +185,9 @@ _ASSET_EXTS = {".png", ".jpg", ".jpeg", ".gif", ".webp", ".svg", ".bmp"}
 # --- OFM (Obsidian-flavored markdown) sugar ----------------------------------
 # ==highlight== | #tag (letter-first, so #123 and hex colors stay literal)
 _MARK_OR_TAG = re.compile(r"==([^=\n]+)==|(?<![\w#])#([A-Za-z_][\w/-]*)")
-# ponytail: regex-level strip of %%comments%% and trailing ^block-ids; move to
-# the token stream if a code-heavy vault ever gets bitten.
 _COMMENT = re.compile(r"%%.*?%%", re.S)
 _BLOCK_ID = re.compile(r"[ \t]+\^[\w-]+[ \t]*$", re.M)
+_FENCE = re.compile(r" {0,3}(`{3,}|~{3,})")
 _CALLOUT_HEAD = re.compile(r"\[!(\w+)\][+-]?[ \t]*(.*)")  # first line of a callout quote
 _TASK_HEAD = re.compile(r"^\[([ xX])\][ \t]+")  # first inline text of a task list item
 _FRONTMATTER = re.compile(r"\A---\r?\n(.*?)\r?\n(?:---|\.\.\.)[ \t]*(?:\r?\n|\Z)", re.S)
@@ -362,6 +361,38 @@ def _highlight(code: str, lang: str, _attrs: str) -> str:
     return highlight(code, lexer, HtmlFormatter(nowrap=True))
 
 
+# ponytail: fence-aware pre-pass, not full token-stream — %% inside inline
+# `code spans` still strips; move into the markdown-it stream if that bites.
+def _strip_ofm_meta(text: str) -> str:
+    """Strip %%comments%% and trailing ^block-ids, sparing fenced code where
+    %% and ^ are code (a lone %% in a fence would otherwise pair with a prose
+    %% and swallow everything between)."""
+    pieces: list[str] = []
+    run: list[str] = []
+    fence: tuple[str, int] | None = None  # (marker char, marker length)
+
+    def _flush() -> None:
+        if run:
+            pieces.append(_BLOCK_ID.sub("", _COMMENT.sub("", "\n".join(run))))
+            run.clear()
+
+    for line in text.split("\n"):
+        m = _FENCE.match(line)
+        if fence is None:
+            if m:
+                _flush()
+                fence = (m.group(1)[0], len(m.group(1)))
+                pieces.append(line)
+            else:
+                run.append(line)
+        else:
+            pieces.append(line)
+            if m and m.group(1)[0] == fence[0] and len(m.group(1)) >= fence[1]:
+                fence = None
+    _flush()
+    return "\n".join(pieces)
+
+
 def _linkify(text: str, resolve=None) -> str:
     """Render markdown (+ OFM sugar) to HTML, linkifying resolvable note refs
     when `resolve` is given. Works on the markdown-it token stream, so
@@ -371,7 +402,7 @@ def _linkify(text: str, resolve=None) -> str:
     from markdown_it.token import Token
     from mdit_py_plugins.dollarmath import dollarmath_plugin
 
-    text = _BLOCK_ID.sub("", _COMMENT.sub("", text or ""))
+    text = _strip_ofm_meta(text or "")
     md = MarkdownIt(options_update={"highlight": _highlight}).enable("table").enable("strikethrough")
     # allow_space=False keeps prose prices ("$5 and $10") out of math
     md.use(dollarmath_plugin, allow_space=False, allow_digits=False)
@@ -437,10 +468,6 @@ def _render_frontmatter(props: dict) -> str:
             f'<div class="fm-row"><span class="fm-key">{_html.escape(str(key))}</span>{chips}</div>'
         )
     return '<details class="fm" open><summary>properties</summary>' + "".join(rows) + "</details>"
-
-
-def _render_md(text: str) -> str:
-    return _linkify(text)
 
 
 def _sse(data: dict) -> str:

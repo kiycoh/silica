@@ -483,6 +483,23 @@ def test_ofm_comments_and_block_ids_stripped():
     assert "keep" in html and "next line" in html
 
 
+def test_ofm_strip_spares_fenced_code():
+    # %% and trailing ^ids inside a fence are code, not OFM sugar — and a
+    # lone %% in a fence must not pair with a prose %% and swallow the block.
+    from silica.ui.web.server import _linkify
+
+    md = (
+        "before %%gone%%\n\n"
+        "```\n%% cell marker\nx = y ^2\n```\n\n"
+        "after %%also gone%% end\n"
+    )
+    html = _linkify(md, _fake_resolve)
+    assert "gone" not in html
+    assert "%% cell marker" in html
+    assert "x = y ^2" in html
+    assert "before" in html and "after" in html and "end" in html
+
+
 def test_ofm_image_embed_becomes_img_via_asset():
     from silica.ui.web.server import _linkify
 
