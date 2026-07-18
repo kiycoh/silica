@@ -335,6 +335,7 @@ def run_distiller(
     substrate: str | None = None,
     session_date: str = "",
     language: str | None = None,
+    escalate: bool = False,
 ) -> dict:
     """Call the Distiller LLM (single-turn) for one payload chunk.
 
@@ -345,6 +346,7 @@ def run_distiller(
         ledger_digest: compact run summary injected as context header (Phase 2)
         steer_context: corrective steering note injected when re-attempting after
             rejection (Phase 6). States why the previous output was rejected.
+        escalate: route this call to the escalation model (steer retries; Tier 2 cascade).
 
     Returns:
         parsed dict with {"updates": [...]} or {"error": ...}
@@ -392,7 +394,7 @@ def run_distiller(
         {"role": "user", "content": user_parts},
     ]
 
-    logger.info("Calling Distiller LLM")
+    logger.info("Calling Distiller LLM%s", " (escalated)" if escalate else "")
 
     # #2: size the output budget to the real prompt + model context window
     # instead of a fixed ceiling. Window and output cap come from the live
@@ -404,8 +406,12 @@ def run_distiller(
     ceiling = int(os.getenv("DISTILLER_MAX_TOKENS", "0"))
     if not context_window or not ceiling:
         from silica.agent.providers import model_limits
-        # Same worker→router fallback as get_provider(role="worker").
-        w_provider, w_model = CONFIG.worker_provider, CONFIG.worker_model
+        # Same fallback chain as get_provider for the active role.
+        if escalate:
+            w_provider, w_model = (CONFIG.distill_escalation_provider,
+                                   CONFIG.distill_escalation_model)
+        else:
+            w_provider, w_model = CONFIG.worker_provider, CONFIG.worker_model
         if not w_provider or not w_model:
             w_provider, w_model = CONFIG.provider, CONFIG.model
         window, out_cap = model_limits(w_provider, w_model)
@@ -426,24 +432,26 @@ def run_distiller(
 
     deadline = float(os.getenv("DISTILLER_TIMEOUT", "300"))
     try:
-        provider = get_provider(CONFIG, role="worker")
+        provider = get_provider(CONFIG, role="escalation" if escalate else "worker")
         response = _call_with_deadline(lambda: provider.call_llm(
             messages=messages,
             tools=None,
             response_schema=DistillerOutput,
             max_tokens=max_tokens,
-            openrouter_provider=CONFIG.openrouter_provider_distiller,
+            # The distiller pin is tied to the worker model's provider routing;
+            # an escalated call must not inherit it.
+            openrouter_provider=None if escalate else CONFIG.openrouter_provider_distiller,
         ), deadline)
     except Exception as e:
         logger.warning("Distiller provider call failed, falling back to litellm: %s", e)
         from silica.agent.llm import call_llm
         response = _call_with_deadline(lambda: call_llm(
-            model=CONFIG.model,
+            model=(CONFIG.distill_escalation_model or CONFIG.model) if escalate else CONFIG.model,
             messages=messages,
             tools=None,
             max_tokens=max_tokens,
             response_format=DistillerOutput,
-            openrouter_provider=CONFIG.openrouter_provider_distiller,
+            openrouter_provider=None if escalate else CONFIG.openrouter_provider_distiller,
         ), deadline)
 
     raw_output = response.text or ""
