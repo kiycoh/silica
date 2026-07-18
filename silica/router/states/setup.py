@@ -196,6 +196,165 @@ def build_vault_graph_ctx(fsm: "InjectorFSM") -> dict[str, dict]:
         return {}
 
 
+def novelty_gate(fsm: "InjectorFSM", raw_payload: dict) -> tuple[dict, int]:
+    """SAGE-style capture-side novelty gate (Tier 2 cost).
+
+    Concepts whose top vault candidate scores >= CONFIG.novelty_tau leave the
+    payload BEFORE chunking, so chunk count (= distiller calls) falls with
+    them. They are never dropped: each goes to the deferred store and, when a
+    work queue is running, to the concurrent ternary dedup judge (duplicate /
+    distinct / contradicts), which authors the patch when warranted.
+
+    tau unset/0 = off (payload returned untouched). Best-effort: embedder or
+    store trouble keeps concepts in the payload, same contract as COLLISION.
+    Returns (filtered_payload, diverted_count).
+    """
+    tau = float(getattr(orch.CONFIG, "novelty_tau", 0.0) or 0.0)
+    if tau <= 0.0:
+        return raw_payload, 0
+    tau_high = getattr(orch.CONFIG, "sim_threshold_high", 0.85)
+    if tau <= tau_high:
+        logger.warning(
+            "NOVELTY: novelty_tau %.2f <= sim_threshold_high %.2f; the gate "
+            "will swallow COLLISION's patch band. Proceeding as configured.",
+            tau, tau_high,
+        )
+
+    try:
+        from silica.agent.providers import get_embedder
+        from silica.kernel.embed import get_store
+        store = get_store()
+        if len(store) == 0:
+            return raw_payload, 0
+        embedder = get_embedder(orch.CONFIG)
+    except Exception as _e:
+        logger.debug("NOVELTY: embedder unavailable (%s); gate skipped", _e)
+        return raw_payload, 0
+
+    # Co-occurrence leg is optional, exactly as in COLLISION: absence means
+    # the relatedness facade degrades to the embedding ranking alone.
+    cooccur_store = None
+    try:
+        from silica.kernel.cooccurrence import get_cooccur_store
+        cooccur_store = get_cooccur_store(lang=orch.CONFIG.cooccurrence_lang)
+        if len(cooccur_store) == 0:
+            cooccur_store = None
+    except Exception:
+        cooccur_store = None
+
+    from silica.kernel.embed import _note_text
+    from silica.kernel.paths import is_inbox_path
+    from silica.kernel.relatedness import related_notes_for_query
+
+    def _embed_text(c) -> str:
+        if isinstance(c, dict):
+            return _note_text(c.get("name", ""), c.get("excerpt", ""))
+        return _note_text(str(c), "")
+
+    texts: list[str] = []
+    for batch in raw_payload.get("batches", []):
+        for c in batch.get("concepts", []):
+            et = _embed_text(c)
+            if et.strip():
+                texts.append(et)
+    uniq = list(dict.fromkeys(texts))
+    if not uniq:
+        return raw_payload, 0
+    try:
+        vecs = embedder.embed(uniq)
+        if len(vecs) != len(uniq):
+            return raw_payload, 0
+    except Exception as _e:
+        logger.debug("NOVELTY: batch embed failed (%s); gate skipped", _e)
+        return raw_payload, 0
+    vec_by_text = dict(zip(uniq, vecs))
+
+    kept_batches: list[dict] = []
+    diverted: list[dict] = []
+    for batch in raw_payload.get("batches", []):
+        inbox_file = batch.get("inbox_file", fsm.inbox_file)
+        kept: list = []
+        for c in batch.get("concepts", []):
+            name = c.get("name", "") if isinstance(c, dict) else str(c)
+            vec = vec_by_text.get(_embed_text(c))
+            if not name or vec is None:
+                kept.append(c)
+                continue
+            try:
+                excerpt = c.get("excerpt", "") if isinstance(c, dict) else ""
+                related = related_notes_for_query(
+                    query_vec=vec,
+                    query_text=f"{name}\n{excerpt}".strip(),
+                    embed_store=store,
+                    cooccur_store=cooccur_store,
+                    k=5,
+                )
+            except Exception as _se:
+                logger.debug("NOVELTY: relatedness lookup failed for '%s': %s", name, _se)
+                kept.append(c)
+                continue
+            related = [r for r in related if not is_inbox_path(r.path)]
+            best = related[0] if related else None
+            # A cooccur-only candidate has no cosine to hold tau against.
+            if best is None or best.embed_score is None or best.embed_score < tau:
+                kept.append(c)
+                continue
+            logger.info(
+                "NOVELTY: '%s' ~ '%s' (score=%.3f >= tau=%.2f); diverted to dedup lane",
+                name, best.path, best.embed_score, tau,
+            )
+            diverted.append({
+                "concept": c,
+                "inbox_file": inbox_file,
+                "top_match": {"path": best.path, "name": best.name,
+                              "score": best.embed_score},
+                "score": best.embed_score,
+            })
+        if kept:
+            kept_batches.append({**batch, "concepts": kept})
+
+    if diverted:
+        from silica.router.states.collision import _deferred_op_dict
+        fsm._defer_ops(
+            [_deferred_op_dict(fsm, d, "novelty_gate") for d in diverted],
+            {
+                (d["concept"].get("name", str(i)) if isinstance(d["concept"], dict) else str(i)):
+                f"novelty_gate score={d['score']:.3f}"
+                for i, d in enumerate(diverted)
+            },
+            phase="NOVELTY",
+        )
+        if fsm.work_queue is not None:
+            from silica.kernel.workqueue import WorkItem
+            for d in diverted:
+                c = d["concept"]
+                match = d["top_match"]
+                if not match.get("path"):
+                    continue
+                try:
+                    fsm.work_queue.enqueue(WorkItem(
+                        kind="dedup",
+                        target_path=match["path"],
+                        context={
+                            "concept": c.get("name", "") if isinstance(c, dict) else str(c),
+                            "excerpt": c.get("excerpt", "") if isinstance(c, dict) else "",
+                            "candidate": match.get("name", match["path"]),
+                            "score": d["score"],
+                            "inbox_file": d["inbox_file"],
+                            "hub": fsm.hub,
+                            "content_hash": fsm._current_content_hash,
+                            "target_dir": fsm.target_dir,
+                        },
+                        reason=f"novelty_gate score={d['score']:.3f}",
+                    ))
+                except Exception as _qe:
+                    logger.debug("NOVELTY: failed to enqueue dedup item: %s", _qe)
+        logger.info("NOVELTY: %d concept(s) diverted to the dedup lane pre-chunk",
+                    len(diverted))
+
+    return {**raw_payload, "batches": kept_batches}, len(diverted)
+
+
 def handle_payload(fsm: "InjectorFSM") -> None:
     """Payload assembly for the CURRENT file only (per-file pipeline).
 
@@ -235,11 +394,27 @@ def handle_payload(fsm: "InjectorFSM") -> None:
     elif "payload" in res:
         raw_payload = res["payload"]
 
+    # Tier 2 novelty gate: divert already-captured concepts to the dedup lane
+    # BEFORE chunking so chunk count (= distiller calls) falls with them.
+    diverted_all = False
+    if raw_payload is not None:
+        raw_payload, _n_diverted = novelty_gate(fsm, raw_payload)
+        diverted_all = _n_diverted > 0 and not any(
+            b.get("concepts") for b in raw_payload.get("batches", [])
+        )
+
     new_chunks: list[dict] = []
     if raw_payload and max_concepts > 0:
         # Single-file recon → normally a single group; collect all defensively.
         for fg in partition_by_file(raw_payload, max_concepts) or []:
             new_chunks.extend(fg.get("chunks", []))
+
+    if not new_chunks and diverted_all:
+        # Every concept diverted: one empty chunk carries the file through the
+        # normal pipeline (DELEGATE skips the LLM, VALIDATE short-circuits).
+        # Falling through would resurrect the unfiltered fallback chunks.
+        new_chunks = [{"schema_version": raw_payload.get("schema_version", 1),
+                       "batches": []}]
 
     if not new_chunks:
         # Fallback: all chunks of this payload belong to the current file.

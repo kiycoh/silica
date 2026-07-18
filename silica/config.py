@@ -137,6 +137,15 @@ class SilicaConfig:
         default_factory=lambda: int(os.getenv("SILICA_DISTILL_CONCURRENCY", "3"))
     )
 
+    # Tier 2 novelty gate (SAGE-style): a concept whose top vault candidate
+    # scores at or above this cosine leaves the payload BEFORE chunking and
+    # goes to the dedup-judge lane (deferred store + concurrent ternary judge).
+    # 0 = gate off. Flip the default to 0.93 only after the bench A/B passes
+    # (see docs spec 2026-07-18-ingest-tier2-cost-design).
+    novelty_tau: float = field(
+        default_factory=lambda: float(os.getenv("SILICA_NOVELTY_TAU", "0"))
+    )
+
     # Vault path — used by the fs backend and for context.
     vault_path: str = field(
         default_factory=lambda: os.getenv("SILICA_VAULT", "")
