@@ -101,6 +101,10 @@ def test_silica_run_injector_is_registered():
     tool = TOOLS["silica_run_injector"]
     assert tool.cls == "composed"
 
+# Pin k=1: this asserts the inline single-chunk delegate contract, which is the
+# k=1 path. At the default k=3 the prefetcher fires an extra lookahead call and
+# call_args (last call) would no longer be this chunk's.
+@patch("silica.router.states.distill.orch.CONFIG.distill_concurrency", 1)
 @patch("silica.router.states.distill.run_distiller")
 def test_fsm_delegate_single_chunk(mock_run_distiller):
     fsm = InjectorFSM("Inbox/test.md", "TargetDir")
@@ -129,6 +133,9 @@ def test_fsm_delegate_single_chunk(mock_run_distiller):
         assert fsm.context["chunk"]["distiller_output_path"] == "temp_chunk_path.json"
 
 
+# Pin k=1: asserts the inline delegate's session_date + a single read_note; at
+# the default k=3 the prefetch snapshot reads the doc a second time.
+@patch("silica.router.states.distill.orch.CONFIG.distill_concurrency", 1)
 @patch("silica.router.states.distill.run_distiller")
 def test_fsm_delegate_dated_doc_anchors_session_date(mock_run_distiller):
     """A source doc with frontmatter `date:` anchors the distiller's

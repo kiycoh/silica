@@ -101,11 +101,13 @@ class SilicaConfig:
     )
 
     # Distiller prefetch width for /ingest (Tier 1 speed): how many chunk
-    # distillations may be in flight at once. 1 = fully sequential (today's
-    # behavior, bit-identical). Flip the default to 3 only after the
-    # frozen-corpus A/B gate passes (see docs spec 2026-07-18).
+    # distillations may be in flight at once. 1 = fully sequential. Default is 3
+    # since the 2026-07-18 k=1-vs-k=3 staleness A/B (bench/kway_diff.py): a
+    # lookahead chunk's staler ledger_digest diverged from a k=1 baseline no more
+    # than a second k=1 run did (title agreement k1/k3 0.355 >= k1/k1 0.303) —
+    # the staleness effect sits inside the pipeline's own run-to-run noise.
     distill_concurrency: int = field(
-        default_factory=lambda: int(os.getenv("SILICA_DISTILL_CONCURRENCY", "1"))
+        default_factory=lambda: int(os.getenv("SILICA_DISTILL_CONCURRENCY", "3"))
     )
 
     # Vault path — used by the fs backend and for context.

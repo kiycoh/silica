@@ -45,8 +45,9 @@ def test_shutdown_cancels_pending():
 
 
 def test_config_knob_default():
+    # Default flipped 1 -> 3 after the 2026-07-18 k=1-vs-k=3 staleness A/B.
     from silica.config import CONFIG
-    assert getattr(CONFIG, "distill_concurrency", None) == 1
+    assert getattr(CONFIG, "distill_concurrency", None) == 3
 
 
 def test_handle_collision_honors_prefetch_marker():
