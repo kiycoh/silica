@@ -480,11 +480,19 @@ def get_provider(config: Any, role: str = "router") -> OpenAICompatibleProvider:
     role="router" (default) → uses config.provider / config.model (the main model).
     role="worker"            → uses config.worker_provider / config.worker_model so
                                leashed sub-agents can run on a separate small model.
+    role="escalation"        → uses config.distill_escalation_provider / _model for escalated steer retries.
 
     When the worker role specifies an explicit worker_api_key it wins over the
     preset; the endpoint always comes from the worker_provider preset.
     """
-    if role == "worker":
+    if role == "escalation":
+        provider_name = getattr(config, "distill_escalation_provider", None)
+        model_name = getattr(config, "distill_escalation_model", None)
+        if not provider_name or not model_name:
+            provider_name = getattr(config, "provider", "lmstudio")
+            model_name = getattr(config, "model", "")
+            role = "router"
+    elif role == "worker":
         provider_name = getattr(config, "worker_provider", None)
         model_name = getattr(config, "worker_model", None)
         if not provider_name or not model_name:

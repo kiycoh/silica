@@ -74,6 +74,22 @@ class SilicaConfig:
     def provider(self, val: str) -> None:
         self._provider = val
 
+    @property
+    def distill_escalation_provider(self) -> str | None:
+        """Escalation provider: explicit env wins, else derived from the model
+        prefix (same rule as the main model), else lmstudio for a bare name,
+        else None (get_provider then degrades the role to router)."""
+        if self._distill_escalation_provider is not None:
+            return self._distill_escalation_provider
+        m = self.distill_escalation_model
+        if not m:
+            return None
+        if "/" in m:
+            prefix = m.split("/", 1)[0]
+            if prefix in ("openrouter", "lmstudio", "ollama"):
+                return prefix
+        return "lmstudio"
+
     # --- Sub-agent worker model (leashed sub-agents run on a separate, smaller model) ---
     # The router (agent loop) uses `model`/`provider` above; sub-agents (dedup, refiner)
     # use these worker_* fields so they can run concurrently on a small local model.
@@ -87,6 +103,17 @@ class SilicaConfig:
     # Explicit API-key override for the worker model (endpoint comes from the preset).
     worker_api_key: str | None = field(
         default_factory=lambda: os.getenv("SILICA_WORKER_API_KEY", None)
+    )
+
+    # --- Distiller escalation model (Tier 2 cascade) ---
+    # A VALIDATE rejection escalates the steer retry to this model instead of
+    # re-steering the worker (UCCI-style cascade). Unset: escalation falls back
+    # to the router model. Opt-out: set it equal to the worker model.
+    distill_escalation_model: str | None = field(
+        default_factory=lambda: os.getenv("SILICA_DISTILL_ESCALATION_MODEL", None)
+    )
+    _distill_escalation_provider: str | None = field(
+        default_factory=lambda: os.getenv("SILICA_DISTILL_ESCALATION_PROVIDER", None)
     )
 
 
