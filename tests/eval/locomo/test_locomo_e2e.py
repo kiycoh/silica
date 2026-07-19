@@ -182,3 +182,106 @@ def test_run_question_session_recall_via_session_map(monkeypatch):
     # gold = sessions 1 and 3; retrieved = 1, 2, 3 via the map -> recall 1.0
     assert row["session_recall"] == 1.0
     assert row["sessions"] == 3
+
+
+def _scripted_run_agent(script):
+    """Fake run_agent: fires ToolCompleteEvents from `script` (list of
+    (name, args, result_json, iteration)) then returns script's answer."""
+    from silica.agent.events import ToolCompleteEvent
+
+    def fake(messages, model, tool_progress_callback=None, progress=None,
+             cancel_token=None, constraints=None):
+        assert constraints is not None
+        assert set(constraints.tools) == set(runner._READONLY_TOOLS)
+        assert constraints.max_iterations == runner._AGENT_MAX_ITERATIONS
+        for name, args, result, it in script["events"]:
+            tool_progress_callback(ToolCompleteEvent(
+                name=name, args=args, call_id=f"c{it}", result=result,
+                duration_s=0.0, iteration=it))
+        return script["answer"]
+
+    return fake
+
+
+def test_agent_instrumentation_and_notes_read(monkeypatch):
+    import silica.agent.loop as loop_mod
+
+    script = {
+        "events": [
+            ("silica_recall", {"query": "puppy", "k": 15},
+             json.dumps({"notes": ["memory/Puppy", "memory/Bob"], "facts": 1}), 0),
+            ("silica_search", {"query": "puppy"}, json.dumps({"hits": []}), 1),
+            ("silica_read_note", {"name": "Puppy"}, "body", 2),
+        ],
+        "answer": "Ann got a puppy.",
+    }
+    monkeypatch.setattr(loop_mod, "run_agent", _scripted_run_agent(script))
+    a = runner.answer_question_agent("stub", "Who got a puppy?", "2023-05-09",
+                                     ("Ann", "Bob"))
+    assert a["response"] == "Ann got a puppy."
+    assert a["tools_used"] == ["silica_recall", "silica_search", "silica_read_note"]
+    # notes_read = recall notes + read_note names, NOT search hits.
+    assert a["notes_read"] == sorted({"memory/Puppy", "memory/Bob", "Puppy"})
+    assert a["iterations"] == 4          # 3 tool passes + the final answer pass
+    assert a["budget_exhausted"] is False
+    assert a["error"] is None
+
+
+def test_agent_budget_exhausted_becomes_abstention(monkeypatch):
+    import silica.agent.loop as loop_mod
+
+    script = {"events": [], "answer": "(silica: maximum iterations reached)"}
+    monkeypatch.setattr(loop_mod, "run_agent", _scripted_run_agent(script))
+    a = runner.answer_question_agent("stub", "q?", "2023-05-09", ("Ann", "Bob"))
+    assert a["budget_exhausted"] is True
+    assert a["response"] == runner._ABSTAIN
+    assert a["iterations"] == runner._AGENT_MAX_ITERATIONS
+
+
+def test_agent_error_row(monkeypatch):
+    import silica.agent.loop as loop_mod
+
+    def boom(*a, **kw):
+        raise RuntimeError("tool failed 3 consecutive times")
+
+    monkeypatch.setattr(loop_mod, "run_agent", boom)
+    a = runner.answer_question_agent("stub", "q?", "2023-05-09", ("Ann", "Bob"))
+    assert a["error"].startswith("RuntimeError")
+    assert a["response"] == ""
+
+
+def test_run_question_agent_row_and_aggregate(monkeypatch):
+    monkeypatch.setattr(runner, "answer_question_agent",
+                        lambda *a, **kw: {"response": "Ann.", "iterations": 3,
+                                          "tools_used": ["silica_recall"],
+                                          "notes_read": ["memory/Puppy"],
+                                          "budget_exhausted": False, "error": None})
+    monkeypatch.setattr(runner, "judge", lambda *a, **kw: True)
+    row = runner.run_question(
+        {"question": "q?", "answer": "Ann", "evidence": ["D1:1"], "category": 4},
+        "conv-t_q0", {}, model="stub", judge_model="stub", k=2, stuff=False,
+        use_embedder=False, use_rerank=False, retrieval_only=False,
+        distill=True, episodic_ttl=0, flat_context=False, facts_last=False,
+        windows=None, window_chars=None, now="2023-05-09",
+        speakers=("Ann", "Bob"), answer_mode="agent",
+        session_map={"memory/Puppy": {"session_1"}}, n_sessions=2)
+    assert row["correct"] is True
+    assert row["iterations"] == 3
+    assert row["tools_used"] == ["silica_recall"]
+    assert row["session_recall"] == 1.0          # via notes_read + session_map
+    assert row["gold_in_context"] is None
+    assert row["ephemeral_hit"] is None
+    agg = runner._agent_aggregate([row])
+    assert agg["iterations_mean"] == 3.0
+    assert agg["tool_calls"] == {"silica_recall": 1}
+    assert agg["budget_exhausted_n"] == 0 and agg["error_n"] == 0
+    # One-shot rows carry the same keys as null: no schema fork.
+    assert runner._agent_aggregate([{"iterations": None}]) is None
+
+
+def test_vault_digest_detects_mutation(tmp_path):
+    (tmp_path / "a.md").write_text("one", encoding="utf-8")
+    d0 = runner._vault_digest(tmp_path)
+    assert d0 == runner._vault_digest(tmp_path)
+    (tmp_path / "a.md").write_text("two", encoding="utf-8")
+    assert runner._vault_digest(tmp_path) != d0

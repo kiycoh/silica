@@ -369,6 +369,109 @@ def answer_question(model: str, question: str, now: str, context: str,
     return (resp.text or "").strip()
 
 
+# --- Agent answer (e2e read path) --------------------------------------------
+# --answer agent: the real product loop over the frozen vault. Tools only,
+# plus the product's session-start vault map; WHAT and WHEN to retrieve is
+# entirely the agent's. Read-only lane: a write would contaminate the frozen
+# vault and break reuse.
+
+_READONLY_TOOLS = (
+    "silica_recall", "silica_search", "silica_semantic_search",
+    "silica_search_context", "silica_related", "silica_read_note",
+    "silica_outline", "silica_links", "silica_concepts",
+    "silica_graph_explain", "silica_props", "silica_exists", "silica_files",
+)
+_AGENT_MAX_ITERATIONS = 10   # below the product default 20: declared cost control
+_ABSTAIN = "I do not have that information."
+
+
+def answer_question_agent(model: str, question: str, now: str,
+                          speakers: tuple[str, str]) -> dict:
+    """One question through run_agent. Returns response + instrumentation:
+    iterations, tools_used (sequence), notes_read (recall/read deliveries,
+    not search hits), budget_exhausted, error."""
+    from silica.agent import loop as loop_mod
+    from silica.agent.constraints import AgentConstraints
+    from silica.agent.events import ToolCompleteEvent
+    from silica.kernel.vault_map import build_vault_map
+
+    system = (_CONTRACT_OPEN.format(a=speakers[0], b=speakers[1], now=now)
+              + _AGENT_DELIVERY + _CONTRACT_CLOSE)
+    messages = [{"role": "system", "content": system}]
+    vmap = build_vault_map()   # the product's CoALA session-start seed
+    if vmap:
+        messages.append({"role": "system", "content": vmap})
+    messages.append({"role": "user", "content": question})
+
+    events: list[ToolCompleteEvent] = []
+
+    def _collect(evt) -> None:
+        if isinstance(evt, ToolCompleteEvent):
+            events.append(evt)
+
+    err = None
+    try:
+        response = loop_mod.run_agent(
+            messages, model, tool_progress_callback=_collect,
+            constraints=AgentConstraints(tools=_READONLY_TOOLS,
+                                         max_iterations=_AGENT_MAX_ITERATIONS))
+    except Exception as e:   # includes the loop's 3-strike RuntimeError
+        response, err = "", f"{type(e).__name__}: {e}"
+
+    notes_read: set[str] = set()
+    for e in events:
+        if e.name == "silica_recall":
+            try:
+                notes_read.update(json.loads(e.result).get("notes") or [])
+            except Exception:
+                pass
+        elif e.name == "silica_read_note":
+            name = (e.args or {}).get("name")
+            if name:
+                notes_read.add(str(name))
+    exhausted = response == "(silica: maximum iterations reached)"
+    if exhausted:
+        # The product's real behavior under budget: no answer = abstention.
+        response = _ABSTAIN
+    return {
+        "response": (response or "").strip(),
+        "iterations": (_AGENT_MAX_ITERATIONS if exhausted
+                       else len({e.iteration for e in events}) + 1),
+        "tools_used": [e.name for e in events],
+        "notes_read": sorted(notes_read),
+        "budget_exhausted": exhausted,
+        "error": err,
+    }
+
+
+def _vault_digest(vault: Path) -> str:
+    """Belt beyond the toolset braces: content digest of every vault .md, taken
+    before the first and after the last question of a conversation."""
+    import hashlib
+
+    h = hashlib.sha256()
+    for f in sorted(vault.rglob("*.md")):
+        h.update(str(f.relative_to(vault)).encode())
+        h.update(f.read_bytes())
+    return h.hexdigest()
+
+
+def _agent_aggregate(rows: list[dict]) -> dict | None:
+    from collections import Counter
+
+    agent_rows = [r for r in rows if r.get("iterations") is not None]
+    if not agent_rows:
+        return None
+    dist = Counter(t for r in agent_rows for t in (r.get("tools_used") or []))
+    return {
+        "iterations_mean": round(sum(r["iterations"] for r in agent_rows)
+                                 / len(agent_rows), 2),
+        "tool_calls": dict(dist.most_common()),
+        "budget_exhausted_n": sum(bool(r.get("budget_exhausted")) for r in agent_rows),
+        "error_n": sum(bool(r.get("error")) for r in agent_rows),
+    }
+
+
 # --- Run ---------------------------------------------------------------------
 
 def run_question(qa: dict, qid: str, index: dict[str, dict], *, model: str,
@@ -386,41 +489,52 @@ def run_question(qa: dict, qid: str, index: dict[str, dict], *, model: str,
     is_abs = cat == _ADVERSARIAL
     gold = qa.get("adversarial_answer") if is_abs else qa.get("answer")
 
-    from silica.kernel import perception
-
-    win_kw = {}
-    if windows is not None:
-        win_kw["windows"] = windows
-    if window_chars is not None:
-        win_kw["window_chars"] = window_chars
-    p = perception.perceive(qa["question"], now=now, k=k,
-                            use_embedder=use_embedder, use_rerank=use_rerank,
-                            episodic_ttl_days=episodic_ttl, with_facts=distill,
-                            paths=list(index.keys()) if stuff else None, **win_kw)
-    rels = [b.path for b in p.blocks]
-
     gold_sessions = evidence_sessions(qa.get("evidence") or []) if not is_abs else set()
+    agent: dict | None = None
     ephemeral_hit: bool | None = None
-    if distill and gold_sessions:
-        if run_sessions:
-            # FSM mode: fact runs are Coordinator run_ids, mapped back to the
-            # session each run ingested (fsm_runs.json).
-            ephemeral_hit = any(run_sessions.get(r) in gold_sessions
-                                for chain in p.fact_chains
-                                for f in chain for r in f.runs)
-        else:
-            ephemeral_hit = _ephemeral_hit(p.fact_chains, gold_sessions)
-
     gold_in_ctx: bool | None = None
-    if retrieval_only:
-        response, correct = "", None
+
+    if answer_mode == "agent":
+        agent = answer_question_agent(model, qa["question"], now, speakers)
+        response = agent["response"]
+        # A crashed loop answered nothing: that is neither a correct answer
+        # nor a chosen abstention — scored wrong, surfaced via error_n.
+        correct = False if agent["error"] else judge(
+            judge_model, qtype, qa["question"], gold, response, is_abs=is_abs)
+        rels = agent["notes_read"]
     else:
-        context = p.render(facts_first=not facts_last, windowed=not flat_context)
-        if not is_abs:
-            gold_in_ctx = _gold_in_context(gold, context)
-        response = answer_question(model, qa["question"], now, context, speakers)
-        correct = judge(judge_model, qtype, qa["question"], gold, response,
-                        is_abs=is_abs)
+        from silica.kernel import perception
+
+        win_kw = {}
+        if windows is not None:
+            win_kw["windows"] = windows
+        if window_chars is not None:
+            win_kw["window_chars"] = window_chars
+        p = perception.perceive(qa["question"], now=now, k=k,
+                                use_embedder=use_embedder, use_rerank=use_rerank,
+                                episodic_ttl_days=episodic_ttl, with_facts=distill,
+                                paths=list(index.keys()) if stuff else None, **win_kw)
+        rels = [b.path for b in p.blocks]
+
+        if distill and gold_sessions:
+            if run_sessions:
+                # FSM mode: fact runs are Coordinator run_ids, mapped back to
+                # the session each run ingested (fsm_runs.json).
+                ephemeral_hit = any(run_sessions.get(r) in gold_sessions
+                                    for chain in p.fact_chains
+                                    for f in chain for r in f.runs)
+            else:
+                ephemeral_hit = _ephemeral_hit(p.fact_chains, gold_sessions)
+
+        if retrieval_only:
+            response, correct = "", None
+        else:
+            context = p.render(facts_first=not facts_last, windowed=not flat_context)
+            if not is_abs:
+                gold_in_ctx = _gold_in_context(gold, context)
+            response = answer_question(model, qa["question"], now, context, speakers)
+            correct = judge(judge_model, qtype, qa["question"], gold, response,
+                            is_abs=is_abs)
     retrieved_sessions: set[str] = set()
     if session_map is not None:
         for r in rels:
@@ -439,6 +553,11 @@ def run_question(qa: dict, qid: str, index: dict[str, dict], *, model: str,
         "ephemeral_hit": ephemeral_hit,
         "gold_in_context": gold_in_ctx,
         "response": response[:500],
+        "iterations": agent["iterations"] if agent else None,
+        "tools_used": agent["tools_used"] if agent else None,
+        "notes_read": agent["notes_read"] if agent else None,
+        "budget_exhausted": agent["budget_exhausted"] if agent else None,
+        "error": agent["error"] if agent else None,
     }
 
 
@@ -479,6 +598,13 @@ def run(data: list[dict], run_root: Path, *, model: str, judge_model: str, k: in
                    "seen_override": "session-date" if ingest_mode == "fsm" else None,
                    "fsm": {},
                    "failed_conversations": [],
+                   "max_iterations": (_AGENT_MAX_ITERATIONS
+                                      if answer_mode == "agent" else None),
+                   "agent_tools": (list(_READONLY_TOOLS)
+                                   if answer_mode == "agent" else None),
+                   "agent_temperature": ("provider-default"
+                                         if answer_mode == "agent" else None),
+                   "tainted": [],
                    "context": "flat" if flat_context else "windowed",
                    "windows": windows if windows is not None else perception.DEFAULT_WINDOWS,
                    "window_chars": (window_chars if window_chars is not None
@@ -492,6 +618,44 @@ def run(data: list[dict], run_root: Path, *, model: str, judge_model: str, k: in
         "metrics": {},
         "questions": rows,
     }
+
+    def _metrics(rs: list[dict]) -> dict:
+        m = aggregate(rs)
+        ag = _agent_aggregate(rs)
+        if ag:
+            m["agent"] = ag
+        return m
+
+    old_ttl = CONFIG.episodic_ttl_days
+    if answer_mode == "agent":
+        # silica_recall reads CONFIG (no per-call TTL): mirror --episodic-ttl,
+        # the same seam the slice parameterizes (0 = never expire, LoCoMo span).
+        CONFIG.episodic_ttl_days = episodic_ttl
+    try:
+        _run_conversations(data, rows, doc, run_root=run_root, model=model,
+                           judge_model=judge_model, k=k, stuff=stuff,
+                           use_embedder=use_embedder, use_rerank=use_rerank,
+                           retrieval_only=retrieval_only, distill=distill,
+                           episodic_ttl=episodic_ttl, reuse=reuse,
+                           flat_context=flat_context, facts_last=facts_last,
+                           windows=windows, window_chars=window_chars,
+                           key_schema=key_schema, categories=categories,
+                           limit=limit, ingest_mode=ingest_mode,
+                           answer_mode=answer_mode, verbose=verbose, out=out,
+                           planned=planned, metrics=_metrics)
+    finally:
+        CONFIG.episodic_ttl_days = old_ttl
+    doc.pop("partial", None)
+    doc["metrics"] = _metrics(rows)
+    return doc
+
+
+def _run_conversations(data, rows, doc, *, run_root, model, judge_model, k,
+                       stuff, use_embedder, use_rerank, retrieval_only,
+                       distill, episodic_ttl, reuse, flat_context, facts_last,
+                       windows, window_chars, key_schema, categories, limit,
+                       ingest_mode, answer_mode, verbose, out, planned,
+                       metrics) -> None:
     for inst in data:
         if limit is not None and len(rows) >= limit:
             break
@@ -537,6 +701,7 @@ def run(data: list[dict], run_root: Path, *, model: str, judge_model: str, k: in
             fsm_reused = reuse
         if not stuff:
             build_indexes(embed=use_embedder, force=not fsm_reused)
+        digest_before = _vault_digest(vault) if answer_mode == "agent" else None
         for qi, qa in qa_list:
             row = run_question(qa, f"{sample_id}_q{qi}", index, model=model,
                                judge_model=judge_model, k=k, stuff=stuff,
@@ -559,12 +724,14 @@ def run(data: list[dict], run_root: Path, *, model: str, judge_model: str, k: in
                 # Checkpoint after every question: a killed/hung run keeps
                 # everything scored so far, marked partial until the last row.
                 doc["partial"] = f"{len(rows)}/{planned}"
-                doc["metrics"] = aggregate(rows)
+                doc["metrics"] = metrics(rows)
                 out.write_text(json.dumps(doc, indent=2, ensure_ascii=False) + "\n",
                                encoding="utf-8")
-    doc.pop("partial", None)
-    doc["metrics"] = aggregate(rows)
-    return doc
+        if digest_before is not None and _vault_digest(vault) != digest_before:
+            # Read-only invariant: belt beyond the toolset braces.
+            logger.error("vault %s mutated during agent answering — RUN TAINTED",
+                         sample_id)
+            doc["config"]["tainted"].append(sample_id)
 
 
 def _print_summary(doc: dict) -> None:
@@ -599,6 +766,9 @@ def main(argv=None) -> int:
                     help="write path: 'distill' = slice ingest (per --distill), "
                          "'fsm' = full product Coordinator per session "
                          "(collision/dedup/deferred/anneal live)")
+    ap.add_argument("--answer", choices=("oneshot", "agent"), default="oneshot",
+                    help="read path: 'oneshot' = stuffed-context single call, "
+                         "'agent' = product run_agent loop with read-only tools")
     ap.add_argument("--conversations", default="",
                     help="comma-separated sample_ids to run "
                          "(pilot: conv-26,conv-47,conv-49)")
@@ -637,6 +807,9 @@ def main(argv=None) -> int:
     if args.ingest == "fsm" and (args.stuff or args.distill):
         print("--ingest fsm distills inside the FSM; drop --stuff/--distill")
         return 2
+    if args.answer == "agent" and (args.stuff or args.retrieval_only):
+        print("--answer agent retrieves via tools; drop --stuff/--retrieval-only")
+        return 2
     if args.retrieval_only:
         args.stuff = False  # nothing to retrieve when every session is stuffed in
     elif not args.model:
@@ -661,8 +834,8 @@ def main(argv=None) -> int:
                   facts_last=args.facts_last, windows=args.windows,
                   window_chars=args.window_chars, key_schema=args.key_schema,
                   categories=categories, limit=args.limit,
-                  ingest_mode=args.ingest, verbose=args.verbose,
-                  out=out)
+                  ingest_mode=args.ingest, answer_mode=args.answer,
+                  verbose=args.verbose, out=out)
     finally:
         import silica.driver
         silica.driver._driver = None
