@@ -210,6 +210,24 @@ def test_paths_override_skips_retrieval_keeps_order(tmp_path, monkeypatch):
     assert "[#2 | dated 2026-01-01]" in ctx
 
 
+def test_note_without_frontmatter_does_not_crash_perceive(tmp_path, monkeypatch):
+    """A body-only note (no frontmatter) must assemble cleanly. Product notes
+    written by the FSM write path can lack frontmatter; frontmatter.split then
+    returns data=None and _read_dated_body used to crash on data.get (found by
+    the LoCoMo e2e leg: perceive died mid-run at question 173/199)."""
+    _bind(tmp_path / "v", monkeypatch)
+    from silica.driver import DRIVER
+    DRIVER.create("memory/plain.md", "just a body, no frontmatter at all\n")
+    from silica.kernel.perception import perceive
+
+    p = perceive("anything", now="2026-05-01", use_embedder=False,
+                 paths=["memory/plain"])
+    assert [b.path for b in p.blocks] == ["memory/plain"]
+    ctx = p.render()
+    assert "just a body" in ctx
+    assert "[#1]" in ctx           # no date segment, no crash
+
+
 def test_unreadable_paths_are_skipped_rank_stays_dense(tmp_path, monkeypatch):
     _bind(tmp_path / "v", monkeypatch)
     _write("sessions/a.md", "2026-01-01", "alpha body")

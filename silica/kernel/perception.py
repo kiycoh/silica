@@ -152,7 +152,9 @@ def _read_dated_body(path: str, origin: str = "vault") -> tuple[str, str | None]
     from silica.kernel import frontmatter
 
     data, _raw, body = frontmatter.split(content)
-    date = str(data.get("date") or "").strip()
+    # data is None for a body-only note (no frontmatter) or a YAML error —
+    # product notes from the FSM write path can lack frontmatter entirely.
+    date = str((data or {}).get("date") or "").strip()
     return date, (body or content)
 
 
