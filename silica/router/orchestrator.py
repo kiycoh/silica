@@ -263,6 +263,7 @@ class InjectorFSM(BaseFSM[InjectorState]):
         *,
         inbox_files: list[str] | None = None,
         resume_run_id: str | None = None,
+        seen_override: str | None = None,
     ):
         # Normalize to a list. inbox_files takes precedence; inbox_file is a
         # compat shim inserted at position 0 if not already present.
@@ -282,6 +283,10 @@ class InjectorFSM(BaseFSM[InjectorState]):
             import os
             hub = os.path.basename(target_dir.rstrip("/\\"))
         self.hub = hub
+
+        # Bench-only episodic clock: when set, capture_from_distill dates
+        # facts with this ISO day instead of the ingest day (LoCoMo e2e leg).
+        self.seen_override = seen_override
 
         self.state = InjectorState.INIT
         self.context: dict[str, Any] = {}

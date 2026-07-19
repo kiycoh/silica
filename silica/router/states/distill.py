@@ -439,7 +439,9 @@ def handle_delegate(fsm: "InjectorFSM") -> None:
             run_id=fsm.progress.run_id,
             # Deliberately the ingest day, not the doc date: episodic TTL
             # keys off `seen`, and a backdated doc would expire on arrival.
-            seen=fsm.progress.started_at[:10],
+            # seen_override is the one bench exception (LoCoMo e2e leg):
+            # sessions carry historical dates temporal questions depend on.
+            seen=fsm.seen_override or fsm.progress.started_at[:10],
         )
 
         distiller_path = fsm._make_tmp(chunk_result)

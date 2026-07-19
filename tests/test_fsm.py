@@ -1367,3 +1367,57 @@ def test_hub_update_writes_parent_at_its_real_vault_path(tmp_path):
         f"parent not patched at its real path; overwrote: {overwritten_paths}"
     assert "testing/lezione_7.md" not in overwritten_paths
 
+
+
+@patch("silica.router.states.distill.orch.CONFIG.distill_concurrency", 1)
+@patch("silica.router.states.distill.run_distiller")
+def test_fsm_seen_override_reaches_episodic_capture(mock_run_distiller):
+    """seen_override (bench knob) replaces the ingest day in capture_from_distill."""
+    fsm = InjectorFSM("Inbox/test.md", "TargetDir", seen_override="2023-05-08")
+    fsm._chunks = [{"chunk_id": 0, "concepts": ["a"]}]
+    fsm._current_chunk_idx = 0
+    fsm.state = InjectorState.DELEGATE
+    mock_run_distiller.return_value = {"updates": []}
+
+    captured = {}
+
+    def _rec(result, *, run_id, seen, **kw):
+        captured["run_id"] = run_id
+        captured["seen"] = seen
+
+    with patch.object(fsm, "_make_tmp", return_value="tmp.json"), \
+         patch("silica.kernel.episodic.capture_from_distill", side_effect=_rec):
+        fsm.step()
+
+    assert captured["seen"] == "2023-05-08"
+    assert captured["run_id"] == fsm.progress.run_id
+
+
+@patch("silica.router.states.distill.orch.CONFIG.distill_concurrency", 1)
+@patch("silica.router.states.distill.run_distiller")
+def test_fsm_seen_default_is_ingest_day(mock_run_distiller):
+    """Without the override the product behavior is unchanged: ingest day."""
+    fsm = InjectorFSM("Inbox/test.md", "TargetDir")
+    fsm._chunks = [{"chunk_id": 0, "concepts": ["a"]}]
+    fsm._current_chunk_idx = 0
+    fsm.state = InjectorState.DELEGATE
+    mock_run_distiller.return_value = {"updates": []}
+
+    captured = {}
+
+    def _rec(result, *, run_id, seen, **kw):
+        captured["seen"] = seen
+
+    with patch.object(fsm, "_make_tmp", return_value="tmp.json"), \
+         patch("silica.kernel.episodic.capture_from_distill", side_effect=_rec):
+        fsm.step()
+
+    assert captured["seen"] == fsm.progress.started_at[:10]
+
+
+def test_coordinator_forwards_seen_override():
+    from silica.router.coordinator import Coordinator
+
+    coord = Coordinator(inbox_files=["Inbox/test.md"], target_dir="TargetDir",
+                        seen_override="2023-05-08")
+    assert coord.fsm.seen_override == "2023-05-08"
