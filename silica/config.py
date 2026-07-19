@@ -174,6 +174,13 @@ class SilicaConfig:
     episodic_nucleation_runs: int = field(
         default_factory=lambda: int(os.getenv("SILICA_EPISODIC_NUCLEATION_RUNS", "3"))
     )
+    # Canonical-keys matcher cascade (fase 2): capture-time embed-snap
+    # threshold on KEY embeddings, 0 = off. Probe-gated on LoCoMo
+    # (bench/locomo_embed_identity_gates.md, tau window ~0.80-0.85); a nonzero
+    # default requires the harness A/B to promote it.
+    episodic_embed_snap_tau: float = field(
+        default_factory=lambda: float(os.getenv("SILICA_EPISODIC_EMBED_SNAP_TAU", "0"))
+    )
 
     # Driver backend: "fs" (default, filesystem-native, headless) or "ws" (the
     # Obsidian bridge plugin over a loopback WebSocket, PROTOCOL.md — installed

@@ -20,6 +20,7 @@ from __future__ import annotations
 
 import json
 import logging
+import re
 import unicodedata
 from pathlib import Path
 
@@ -87,11 +88,22 @@ def _normalize(text: str) -> str:
     return "".join(out)
 
 
+# Change-marker token stems: models bake the CHANGE into the key
+# ("aspiration_reinforced", "job_update", "trip.new") despite the prompt's
+# key-discipline block — LoCoMo smoke 2026-07-18 showed the instruction being
+# ignored with the clean key in view. Folding these at lookup time makes the
+# variant MATCH the clean head so supersede chains stay whole.
+_CHANGE_MARKER_STEMS = frozenset({"reinforc", "reaffirm", "updat", "new", "chang"})
+_VERSION_TOKEN_RE = re.compile(r"v\d+$")
+
+
 def normalize_key(key: str) -> str:
     """Canonical `entity.attribute` form for MATCHING: casefold, then
-    snowball-stem every `_`-token of every `.` segment. Merges morphological
-    key drift (`model_kits.gifts` == `model_kit.gift`); semantic synonyms stay
-    distinct. Stored keys are never rewritten — this is lookup identity only.
+    snowball-stem every `_`-token of every `.` segment, dropping change-marker
+    tokens (`_reinforced`/`_update`/`.new`/`v2` — the change belongs in the
+    text, supersede encodes it). Merges morphological key drift
+    (`model_kits.gifts` == `model_kit.gift`); semantic synonyms stay distinct.
+    Stored keys are never rewritten — this is lookup identity only.
     """
     # ponytail: lang hardcoded to english — the distiller prompt shapes keys
     # as English-style slugs; non-English-keyed stores under-merge. Upgrade
@@ -101,8 +113,13 @@ def normalize_key(key: str) -> str:
     segs: list[str] = []
     for seg in key.casefold().split("."):
         toks = [stem_word(t, lang="english") for t in seg.split("_") if t]
-        if toks:
-            segs.append("_".join(toks))
+        kept = [t for t in toks
+                if t not in _CHANGE_MARKER_STEMS and not _VERSION_TOKEN_RE.fullmatch(t)]
+        if kept:
+            segs.append("_".join(kept))
+    if not segs:  # a key that is nothing but markers: fall back unfiltered
+        return ".".join("_".join(stem_word(t, lang="english") for t in s.split("_") if t)
+                        for s in key.casefold().split(".") if s.strip("_"))
     return ".".join(segs)
 
 
@@ -126,6 +143,21 @@ def enforce_key_schema(key: str, schema) -> str:
     if len(segs) > schema.max_depth:
         segs = segs[:schema.max_depth - 1] + ["_".join(segs[schema.max_depth - 1:])]
     return ".".join(segs)
+
+
+def _snap_entity(key: str) -> tuple:
+    """Entity namespace of a key, the HARD constraint of the snap fallback:
+    cosine may never merge across entities (same attribute of two people
+    embeds close by construction — superseding across them falsifies
+    history). `user.<name>.*` keys are per-person; any other first segment
+    is the entity itself (so assistant.* observations may chain across
+    sessions)."""
+    segs = [s for s in key.casefold().split(".") if s]
+    if not segs:
+        return ()
+    if segs[0] == "user" and len(segs) > 1:
+        return ("user", segs[1])
+    return (segs[0],)
 
 
 def key_tokens(key: str) -> set[str]:
@@ -200,6 +232,7 @@ class EpisodicStore:
         self.path = path if path is not None else store_path()
         self.next_id = 1
         self.facts: list[Fact] = []
+        self._key_vecs: dict[str, list[float]] = {}  # spaced key -> vec (snap cache)
         self._load()
 
     # ------------------------------------------------------------------
@@ -234,13 +267,18 @@ class EpisodicStore:
     # ------------------------------------------------------------------
 
     def capture(self, facts: list[dict], *, run_id: str, seen: str,
-                embedder=None, schema=None) -> None:
+                embedder=None, schema=None, snap_tau: float = 0.0) -> None:
         """Merge distiller ephemerals into the store. Mechanical, no LLM.
 
         Same key + same normalized text reinforces (last_seen, runs); same key
         + different text supersedes the live head; a new key starts a chain.
         New/changed facts are embedded when `embedder` is served; embedding
         failure is silent (recall falls back to lexical).
+
+        `snap_tau` > 0 arms the fallback of the matcher cascade (canonical
+        keys, fase 1/2): a coined key with no exact canonical match joins the
+        nearest live head by KEY-embedding cosine >= snap_tau. 0 (default)
+        is bit-identical to the pre-cascade store.
 
         `schema` (ADR-0021): an `EpisodicKeySchema` shapes stored keys via
         `enforce_key_schema` before merge; None means no enforcement —
@@ -265,6 +303,8 @@ class EpisodicStore:
                 key = shaped
             nkey = normalize_key(key)
             head = heads.get(nkey)
+            if head is None and snap_tau > 0 and embedder is not None:
+                head = self._snap_head(key, heads, embedder, snap_tau)
             if head is not None and _normalize(head.text) == _normalize(text):
                 head.last_seen = seen
                 if run_id not in head.runs:
@@ -277,6 +317,9 @@ class EpisodicStore:
             if head is not None:
                 fact.supersedes = head.id
                 head.status = "superseded"
+                old_nkey = normalize_key(head.key)
+                if old_nkey != nkey and heads.get(old_nkey) is head:
+                    del heads[old_nkey]  # snap join: retire the stale lookup
             self.facts.append(fact)
             heads[nkey] = fact
             created.append(fact)
@@ -290,6 +333,39 @@ class EpisodicStore:
         if folded:
             logger.debug("episodic capture: %d key(s) schema-folded", folded)
         self.save()
+
+    def _snap_head(self, key: str, heads: dict[str, Fact], embedder,
+                   tau: float) -> Fact | None:
+        """Fallback arm of the capture matcher cascade (canonical keys):
+        nearest live head by KEY-embedding cosine, joined when >= tau. Keys
+        embed spaced (`a.b_c` -> "a b c") and NEVER the fact text — text mixes
+        attribute with value and kills knowledge-update chains (probe-gated,
+        bench/locomo_embed_identity_gates.md). Embedding failure is silent:
+        the arrival simply starts its own chain."""
+        ent = _snap_entity(key)
+        candidates = [h for h in heads.values() if _snap_entity(h.key) == ent]
+        if not candidates:
+            return None
+        spaced = {k: k.replace(".", " ").replace("_", " ")
+                  for k in (key, *(h.key for h in candidates))}
+        missing = [k for k in spaced if spaced[k] not in self._key_vecs]
+        # ponytail: one embed batch per fallback arrival, cache per store
+        # instance; persist the cache in the store file if capture gets hot.
+        if missing:
+            try:
+                vecs = embedder.embed([spaced[k] for k in missing])
+            except Exception as e:
+                logger.debug("episodic snap: embedding skipped (%s)", e)
+                return None
+            for k, v in zip(missing, vecs):
+                self._key_vecs[spaced[k]] = list(v)
+        kv = self._key_vecs[spaced[key]]
+        best, best_cos = None, 0.0
+        for h in candidates:
+            c = _cosine(kv, self._key_vecs[spaced[h.key]])
+            if c > best_cos:
+                best, best_cos = h, c
+        return best if best_cos >= tau else None
 
     # ------------------------------------------------------------------
     # TTL sweep
@@ -424,8 +500,16 @@ def capture_from_distill(result: dict, *, run_id: str, seen: str) -> None:
             schema = load_manifest(episodic_home()).conventions.episodic_keys
         except Exception:
             pass
+        snap_tau = 0.0
+        try:
+            from silica.config import CONFIG
+
+            snap_tau = float(getattr(CONFIG, "episodic_embed_snap_tau", 0.0))
+        except Exception:
+            pass
         EpisodicStore().capture(ephemerals, run_id=run_id, seen=seen,
-                                embedder=embedder, schema=schema)
+                                embedder=embedder, schema=schema,
+                                snap_tau=snap_tau)
     except Exception as e:
         logger.warning("episodic capture failed (ingest continues): %s", e)
 

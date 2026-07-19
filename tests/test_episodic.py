@@ -105,6 +105,105 @@ def test_capture_without_embedder_or_broken_embedder_skips_silently(tmp_path):
     assert all(f.vec is None for f in store.live_facts())
 
 
+class _KeyedEmbedder:
+    """Fixed vec per exact input string; unknown inputs (fact texts) get a
+    distinct axis so only the labeled key reprs can snap."""
+
+    _TABLE = {
+        "user photo pic": [1.0, 0.0, 0.0],
+        "user photo shot": [0.96, 0.28, 0.0],   # cos vs pic = 0.96
+        "user hobby piano": [0.0, 1.0, 0.0],
+    }
+
+    def embed(self, texts):
+        return [self._TABLE.get(t, [0.0, 0.0, 1.0]) for t in texts]
+
+
+def test_embed_snap_off_by_default_keeps_synonym_chains_apart(tmp_path):
+    store = _store(tmp_path)
+    store.capture([{"key": "user.photo.pic", "text": "a"}],
+                  run_id="r1", seen="2026-07-18", embedder=_KeyedEmbedder())
+    store.capture([{"key": "user.photo.shot", "text": "b"}],
+                  run_id="r2", seen="2026-07-18", embedder=_KeyedEmbedder())
+    assert len(store.live_facts()) == 2
+
+
+def test_embed_snap_joins_synonym_key_and_keeps_coined_spelling(tmp_path):
+    store = _store(tmp_path)
+    store.capture([{"key": "user.photo.pic", "text": "a"}],
+                  run_id="r1", seen="2026-07-18", embedder=_KeyedEmbedder())
+    store.capture([{"key": "user.photo.shot", "text": "b"}],
+                  run_id="r2", seen="2026-07-18", embedder=_KeyedEmbedder(),
+                  snap_tau=0.8)
+    (head,) = store.live_facts()
+    assert head.key == "user.photo.shot"          # Layer A invariant: spelling survives
+    old = next(f for f in store.facts if f.key == "user.photo.pic")
+    assert head.supersedes == old.id and old.status == "superseded"
+
+
+def test_embed_snap_rejects_distinct_key_below_tau(tmp_path):
+    store = _store(tmp_path)
+    store.capture([{"key": "user.photo.pic", "text": "a"}],
+                  run_id="r1", seen="2026-07-18", embedder=_KeyedEmbedder())
+    store.capture([{"key": "user.hobby.piano", "text": "b"}],
+                  run_id="r2", seen="2026-07-18", embedder=_KeyedEmbedder(),
+                  snap_tau=0.8)
+    assert len(store.live_facts()) == 2
+
+
+def test_embed_snap_in_batch_retires_stale_head_lookup(tmp_path):
+    # pic -> shot (snap) -> pic again, all in one batch: the third arrival must
+    # chain onto the live shot head, not resurrect the superseded pic entry.
+    store = _store(tmp_path)
+    store.capture([{"key": "user.photo.pic", "text": "a"},
+                   {"key": "user.photo.shot", "text": "b"},
+                   {"key": "user.photo.pic", "text": "c"}],
+                  run_id="r1", seen="2026-07-18", embedder=_KeyedEmbedder(),
+                  snap_tau=0.8)
+    (head,) = store.live_facts()
+    assert head.text == "c"
+    assert len(store.chain(head)) == 3
+
+
+def test_embed_snap_never_joins_across_entities(tmp_path):
+    # Same attribute, different person: cosine is high by construction, but
+    # supersede across entities falsifies history — the guard is hard.
+    class _SameVec:
+        def embed(self, texts):
+            return [[1.0, 0.0] for _ in texts]
+
+    store = _store(tmp_path)
+    store.capture([{"key": "user.caroline.flower_preferences", "text": "a"},
+                   {"key": "user.melanie.flower_preferences", "text": "b"}],
+                  run_id="r1", seen="2026-07-18", embedder=_SameVec(),
+                  snap_tau=0.5)
+    assert len(store.live_facts()) == 2
+
+
+def test_embed_snap_broken_embedder_is_silent(tmp_path):
+    store = _store(tmp_path)
+    store.capture([{"key": "user.photo.pic", "text": "a"}],
+                  run_id="r1", seen="2026-07-18")
+    store.capture([{"key": "user.photo.shot", "text": "b"}],
+                  run_id="r2", seen="2026-07-18", embedder=_BrokenEmbedder(),
+                  snap_tau=0.8)
+    assert len(store.live_facts()) == 2
+
+
+def test_capture_from_distill_wires_snap_tau_from_config(tmp_path, monkeypatch):
+    import silica.agent.providers as providers
+    from silica.config import CONFIG
+    from silica.kernel.episodic import EpisodicStore, capture_from_distill
+
+    monkeypatch.setattr(CONFIG, "episodic_embed_snap_tau", 0.8, raising=False)
+    monkeypatch.setattr(providers, "get_embedder", lambda cfg: _KeyedEmbedder())
+    capture_from_distill({"ephemerals": [{"key": "user.photo.pic", "text": "a"}]},
+                         run_id="r1", seen="2026-07-18")
+    capture_from_distill({"ephemerals": [{"key": "user.photo.shot", "text": "b"}]},
+                         run_id="r2", seen="2026-07-18")
+    assert len(EpisodicStore().live_facts()) == 1
+
+
 def test_episodic_home_resolves_even_when_active_vault_is_memory_vault(tmp_path, monkeypatch):
     """Unlike memory_lane.memory_vault(), episodic_home never abstains."""
     from silica.config import CONFIG
@@ -331,6 +430,42 @@ def test_normalize_key_merges_morphological_variants():
     assert normalize_key("user.address") == "user.address"
     # dots stay segment separators, underscores stay token separators
     assert normalize_key("model_kits.last_project") == "model_kit.last_project"
+
+
+def test_normalize_key_folds_change_marker_tokens():
+    # LoCoMo smoke 2026-07-18: models bake the CHANGE into the key
+    # ("aspiration_reinforced") despite the prompt's key-discipline block.
+    # Mechanical lever: change-marker tokens fold away at lookup time so the
+    # variant MATCHES the clean head. Stored spelling is never rewritten.
+    from silica.kernel.episodic import normalize_key
+
+    assert (normalize_key("caroline.counseling.aspiration_reinforced")
+            == normalize_key("caroline.counseling.aspiration"))
+    assert normalize_key("user.job_update") == normalize_key("user.job")
+    assert normalize_key("user.job_updated") == normalize_key("user.job")
+    assert normalize_key("sam.trip.new") == normalize_key("sam.trip")
+    assert normalize_key("user.diet.changed") == normalize_key("user.diet")
+    assert normalize_key("user.plan.v2") == normalize_key("user.plan")
+    # a key that is nothing but markers must not normalize to empty
+    assert normalize_key("new") != ""
+
+
+def test_capture_change_marker_variant_supersedes_clean_head(tmp_path):
+    # aspiration_reinforced arriving after aspiration must extend the SAME
+    # chain, not open a parallel one.
+    store = _store(tmp_path)
+    store.capture([{"key": "elena.counseling.aspiration",
+                    "text": "Elena wants to become a counselor"}],
+                  run_id="s1", seen="2026-05-01")
+    store.capture([{"key": "elena.counseling.aspiration_reinforced",
+                    "text": "Elena reaffirmed her counseling aspiration"}],
+                  run_id="s4", seen="2026-05-20")
+
+    live = store.live_facts()
+    assert len(live) == 1
+    head = live[0]
+    assert head.text == "Elena reaffirmed her counseling aspiration"
+    assert head.supersedes is not None  # chained, not parallel
 
 
 def test_normalize_key_idempotent():
