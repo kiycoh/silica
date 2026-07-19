@@ -214,12 +214,18 @@ class EmbedStore:
         self._mat: np.ndarray | None = None
         self._mat_paths: list[str] = []
         self._mat_dim: int | None = None
+        self._tmat: np.ndarray | None = None
+        self._tmat_paths: list[str] = []
+        self._tmat_dim: int | None = None
         self._load()
 
     def _invalidate_matrix(self) -> None:
         self._mat = None
         self._mat_paths = []
         self._mat_dim = None
+        self._tmat = None
+        self._tmat_paths = []
+        self._tmat_dim = None
 
     # ------------------------------------------------------------------
     # I/O
@@ -323,31 +329,61 @@ class EmbedStore:
     # Search
     # ------------------------------------------------------------------
 
-    def _ensure_matrix(self) -> None:
-        """Build the unit-normalized search matrix from _notes (lazy, cached).
+    def _build_matrix(self, vec_key: str) -> tuple[np.ndarray, list[str], int | None]:
+        """Unit-normalized search matrix, path list, and dim for a vector field.
 
-        Only notes sharing the modal embedding dimension (that of the first
-        note) are placed in the matrix; any odd-dimension note falls through to
-        a 0.0 score, exactly matching the old per-pair _cosine length guard.
-        Zero vectors are normalized to zero rows so they score 0.0.
+        Only notes carrying the field and sharing its modal dimension are placed
+        in the matrix; a note missing the field (e.g. a legacy entry with no
+        title_vec) or off-dimension falls through to a 0.0 score, matching the
+        old per-pair _cosine length guard. Zero vectors normalize to zero rows.
+        """
+        vecs = {p: self._notes[p].get(vec_key) for p in self._notes}
+        paths = [p for p, v in vecs.items() if v]
+        if not paths:
+            return np.zeros((0, 0), dtype=np.float32), [], None
+        dim = len(vecs[paths[0]])
+        kept = [p for p in paths if len(vecs[p]) == dim]
+        mat = np.asarray([vecs[p] for p in kept], dtype=np.float32)
+        norms = np.linalg.norm(mat, axis=1, keepdims=True)
+        norms[norms == 0.0] = 1.0  # zero rows stay zero → 0.0 similarity
+        return mat / norms, kept, dim
+
+    def _ensure_matrix(self) -> None:
+        """Build the body + title search matrices from _notes (lazy, cached).
+
+        Both are built and invalidated together under one guard, so every
+        mutation that resets _mat also refreshes the title matrix.
         """
         if self._mat is not None:
             return
-        paths = list(self._notes.keys())
-        if not paths:
-            self._mat = np.zeros((0, 0), dtype=np.float32)
-            self._mat_paths = []
-            self._mat_dim = None
-            return
-        dim = len(self._notes[paths[0]]["vec"])
-        rows = [self._notes[p]["vec"] for p in paths if len(self._notes[p]["vec"]) == dim]
-        kept = [p for p in paths if len(self._notes[p]["vec"]) == dim]
-        mat = np.asarray(rows, dtype=np.float32)
-        norms = np.linalg.norm(mat, axis=1, keepdims=True)
-        norms[norms == 0.0] = 1.0  # zero rows stay zero → 0.0 similarity
-        self._mat = mat / norms
-        self._mat_paths = kept
-        self._mat_dim = dim
+        self._mat, self._mat_paths, self._mat_dim = self._build_matrix("vec")
+        self._tmat, self._tmat_paths, self._tmat_dim = self._build_matrix("title_vec")
+
+    def _search(
+        self,
+        mat: np.ndarray | None,
+        mat_paths: list[str],
+        mat_dim: int | None,
+        query_vec: list[float],
+        k: int,
+        exclude: set[str] | None,
+    ) -> list[dict[str, Any]]:
+        exclude = exclude or set()
+        # Every note defaults to 0.0 — matches _cosine's degenerate cases
+        # (zero query, zero vector, or dimension mismatch).
+        scores: dict[str, float] = {p: 0.0 for p in self._notes}
+        q = np.asarray(query_vec, dtype=np.float32)
+        q_norm = float(np.linalg.norm(q))
+        if q_norm != 0.0 and mat is not None and mat.size and mat_dim == q.shape[0]:
+            sims = mat @ (q / q_norm)
+            for path, sim in zip(mat_paths, sims.tolist()):
+                scores[path] = sim
+        results = [(s, p) for p, s in scores.items() if p not in exclude]
+        results.sort(reverse=True)  # by (score, path) desc — preserves tie-break
+        return [
+            {"path": path, "name": self._notes[path]["name"], "score": round(float(score), 4)}
+            for score, path in results[:k]
+        ]
 
     def cosine_top_k(
         self,
@@ -362,26 +398,25 @@ class EmbedStore:
         Search is a single normalized matrix-vector product (numpy/BLAS); this
         is the hot path for COLLISION and AUTOLINK on large vaults.
         """
-        exclude = exclude or set()
         self._ensure_matrix()
+        return self._search(self._mat, self._mat_paths, self._mat_dim, query_vec, k, exclude)
 
-        # Every note defaults to 0.0 — matches _cosine's degenerate cases
-        # (zero query, zero vector, or dimension mismatch).
-        scores: dict[str, float] = {p: 0.0 for p in self._notes}
+    def title_cosine_top_k(
+        self,
+        query_vec: list[float],
+        k: int = 5,
+        exclude: set[str] | None = None,
+    ) -> list[dict[str, Any]]:
+        """Top-k notes by TITLE-vector cosine (like-vs-like title identity).
 
-        q = np.asarray(query_vec, dtype=np.float32)
-        q_norm = float(np.linalg.norm(q))
-        if q_norm != 0.0 and self._mat is not None and self._mat.size and self._mat_dim == q.shape[0]:
-            sims = self._mat @ (q / q_norm)
-            for path, sim in zip(self._mat_paths, sims.tolist()):
-                scores[path] = sim
-
-        results = [(s, p) for p, s in scores.items() if p not in exclude]
-        results.sort(reverse=True)  # by (score, path) desc — preserves tie-break
-        return [
-            {"path": path, "name": self._notes[path]["name"], "score": round(float(score), 4)}
-            for score, path in results[:k]
-        ]
+        The novelty gate's order parameter: a short concept name embedded as a
+        title and scored against stored title vectors, never against full note
+        bodies — the body signal was measured not to separate captured from
+        novel concepts (their cosine distributions overlap). Notes predating the
+        title_vec feature score 0.0.
+        """
+        self._ensure_matrix()
+        return self._search(self._tmat, self._tmat_paths, self._tmat_dim, query_vec, k, exclude)
 
 
 # ---------------------------------------------------------------------------

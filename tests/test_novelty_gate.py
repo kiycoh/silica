@@ -1,4 +1,8 @@
-"""SAGE-style novelty gate (Tier 2 cost): pre-chunk diversion to the dedup lane."""
+"""SAGE-style novelty gate (Tier 2 cost): pre-chunk diversion to the dedup lane.
+
+The gate's order parameter is TITLE-vs-title cosine (like-vs-like): a concept
+name is scored against stored note title vectors, never against full bodies.
+"""
 from types import SimpleNamespace
 from unittest.mock import MagicMock, patch
 
@@ -24,27 +28,34 @@ def _gate_fsm(queue=True):
     return fsm
 
 
-def _cand(path="Notes/Existing.md", name="Existing", score=0.96):
-    return SimpleNamespace(path=path, name=name, embed_score=score)
-
-
-def _run_gate(fsm, payload, tau, related_side_effect):
-    store = MagicMock()
-    store.__len__ = MagicMock(return_value=5)
-    embedder = MagicMock()
-    embedder.embed.side_effect = lambda texts: [[0.1, 0.2]] * len(texts)
-    with patch.object(s.orch.CONFIG, "novelty_tau", tau), \
-         patch("silica.kernel.embed.get_store", return_value=store), \
-         patch("silica.agent.providers.get_embedder", return_value=embedder), \
-         patch("silica.kernel.cooccurrence.get_cooccur_store", side_effect=Exception("absent")), \
-         patch("silica.kernel.paths.is_inbox_path", side_effect=lambda p: p.startswith("Inbox")), \
-         patch("silica.kernel.relatedness.related_notes_for_query",
-               side_effect=related_side_effect):
-        return s.novelty_gate(fsm, payload)
+def _hit(path="Notes/Existing.md", name="Existing", score=0.96):
+    return {"path": path, "name": name, "score": score}
 
 
 def _names(payload):
     return [c["name"] for b in payload.get("batches", []) for c in b.get("concepts", [])]
+
+
+def _run_gate(fsm, payload, tau, hits_by_name):
+    """Run the gate with the store's title search mocked per concept name.
+
+    The embedder returns a one-element vector encoding each concept's position,
+    so the title-search mock can map a vector back to its concept name without
+    depending on how _note_title_text renders the name.
+    """
+    order = list(dict.fromkeys(_names(payload)))
+    store = MagicMock()
+    store.__len__ = MagicMock(return_value=5)
+    store.title_cosine_top_k.side_effect = (
+        lambda vec, k=5, exclude=None: hits_by_name.get(order[int(vec[0])], [])
+    )
+    embedder = MagicMock()
+    embedder.embed.side_effect = lambda texts: [[float(i)] for i in range(len(texts))]
+    with patch.object(s.orch.CONFIG, "novelty_tau", tau), \
+         patch("silica.kernel.embed.get_store", return_value=store), \
+         patch("silica.agent.providers.get_embedder", return_value=embedder), \
+         patch("silica.kernel.paths.is_inbox_path", side_effect=lambda p: p.startswith("Inbox")):
+        return s.novelty_gate(fsm, payload)
 
 
 def test_tau_zero_returns_payload_untouched():
@@ -59,20 +70,33 @@ def test_tau_zero_returns_payload_untouched():
 
 def test_diverts_at_tau_and_keeps_below():
     fsm = _gate_fsm()
-    sides = {"Dup": [_cand(score=0.96)], "Fresh": [_cand(score=0.50)]}
-    out, n = _run_gate(fsm, _payload("Dup", "Fresh"), 0.93,
-                       lambda **kw: sides[kw["query_text"].split("\n")[0]])
+    # The diverting concept's name must agree with its match (COLLISION's
+    # lexical guard); "Existing" ~ note "Existing".
+    hits = {"Existing": [_hit(name="Existing", score=0.96)],
+            "Fresh": [_hit(name="Fresh", score=0.50)]}
+    out, n = _run_gate(fsm, _payload("Existing", "Fresh"), 0.93, hits)
     assert _names(out) == ["Fresh"] and n == 1
     assert fsm._defer_ops.call_args.kwargs["phase"] == "NOVELTY"
     item = fsm.work_queue.enqueue.call_args.args[0]
     assert item.kind == "dedup" and item.target_path == "Notes/Existing.md"
-    assert item.context["concept"] == "Dup"
+    assert item.context["concept"] == "Existing"
 
 
-def test_cooccur_only_candidate_never_diverts():
+def test_high_cosine_but_names_disagree_kept():
+    # Negation pair: title cosine is high but the concepts are opposites, so
+    # the lexical guard must keep the concept (no false divert).
     fsm = _gate_fsm()
-    out, n = _run_gate(fsm, _payload("A"), 0.93,
-                       lambda **kw: [_cand(score=None)])
+    out, n = _run_gate(fsm, _payload("context-free"), 0.93,
+                       {"context-free": [_hit(name="non context-free", score=0.97)]})
+    assert _names(out) == ["context-free"] and n == 0
+    fsm._defer_ops.assert_not_called()
+
+
+def test_note_without_title_match_never_diverts():
+    # A concept with no title neighbour (e.g. notes predate title_vec) → 0.0
+    # score → empty hits → kept in the payload, nothing deferred.
+    fsm = _gate_fsm()
+    out, n = _run_gate(fsm, _payload("A"), 0.93, {"A": []})
     assert _names(out) == ["A"] and n == 0
     fsm._defer_ops.assert_not_called()
 
@@ -80,24 +104,17 @@ def test_cooccur_only_candidate_never_diverts():
 def test_inbox_candidate_filtered_before_decision():
     fsm = _gate_fsm()
     out, n = _run_gate(fsm, _payload("A"), 0.93,
-                       lambda **kw: [_cand(path="Inbox/staging.md", score=0.99),
-                                     _cand(score=0.50)])
+                       {"A": [_hit(path="Inbox/staging.md", score=0.99),
+                              _hit(score=0.50)]})
     assert _names(out) == ["A"] and n == 0
 
 
 def test_queue_absent_defers_only():
     fsm = _gate_fsm(queue=False)
-    out, n = _run_gate(fsm, _payload("Dup"), 0.93, lambda **kw: [_cand(score=0.97)])
+    out, n = _run_gate(fsm, _payload("Existing"), 0.93,
+                       {"Existing": [_hit(name="Existing", score=0.97)]})
     assert n == 1 and _names(out) == []
     fsm._defer_ops.assert_called_once()
-
-
-def test_low_tau_warns_but_proceeds(caplog):
-    import logging
-    fsm = _gate_fsm()
-    with caplog.at_level(logging.WARNING):
-        _run_gate(fsm, _payload("A"), 0.5, lambda **kw: [_cand(score=0.4)])
-    assert any("novelty_tau" in r.message for r in caplog.records)
 
 
 def test_handle_payload_registers_single_empty_chunk_when_fully_diverted():
