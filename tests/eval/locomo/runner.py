@@ -207,10 +207,16 @@ def _wipe_index_namespace() -> None:
 
 
 def _ingest_failed(result: dict) -> bool:
-    # ERROR-state runs carry context["error"]; "partial" means a chunk was
-    # rolled back (content lost). Both invalidate the conversation's memory.
-    # Deferred bundles are NOT failure: they are product state anneal recovers.
-    return bool(result.get("error")) or bool(result.get("has_partial_failure")) \
+    # Hard failure only: ERROR-state runs (context["error"]) or exceptions.
+    # "partial" is NOT failure: a contained chunk's ops land in the deferred
+    # store (write.py defers on lint/write rejection) and the anneal step
+    # recovers them — legitimate product state, recorded as partial_sessions
+    # in the marker and diagnosable via the report's anneal/still_deferred.
+    return bool(result.get("error"))
+
+
+def _ingest_partial(result: dict) -> bool:
+    return bool(result.get("has_partial_failure")) \
         or result.get("final_status") == "partial"
 
 
@@ -250,6 +256,7 @@ def fsm_ingest_conversation(vault: Path, inst: dict, *, reuse: bool,
 
     (vault / "inbox").mkdir(exist_ok=True)
     run_map: dict[str, str] = {}
+    partial_sids: list[str] = []
     for n, date_time, turns in sessions:
         sid = f"session_{n}"
         date = parse_date_time(date_time)
@@ -278,6 +285,8 @@ def fsm_ingest_conversation(vault: Path, inst: dict, *, reuse: bool,
             logger.error("conversation %s: session %s failed ingest twice — "
                          "conversation EXCLUDED from metrics", vault.name, sid)
             return None
+        if _ingest_partial(result):
+            partial_sids.append(sid)
         run_map[run_id] = sid
         runs_path.write_text(json.dumps(run_map, indent=2), encoding="utf-8")
 
@@ -289,6 +298,7 @@ def fsm_ingest_conversation(vault: Path, inst: dict, *, reuse: bool,
         "complete": True,
         "reused": False,
         "sessions": sids,
+        "partial_sessions": partial_sids,
         "date": datetime.date.today().isoformat(),
         "anneal": {k: anneal.get(k) for k in ("bundles", "written", "still_deferred")},
     }
@@ -683,8 +693,10 @@ def _run_conversations(data, rows, doc, *, run_root, model, judge_model, k,
             if marker is None:
                 doc["config"]["failed_conversations"].append(sample_id)
                 continue
-            doc["config"]["fsm"][sample_id] = {"anneal": marker.get("anneal"),
-                                               "runs": "fsm_runs.json"}
+            doc["config"]["fsm"][sample_id] = {
+                "anneal": marker.get("anneal"),
+                "partial_sessions": marker.get("partial_sessions"),
+                "runs": "fsm_runs.json"}
             session_map = _provenance_session_map(vault)
             run_sessions = json.loads((vault / "fsm_runs.json")
                                       .read_text(encoding="utf-8"))

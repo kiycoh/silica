@@ -128,14 +128,29 @@ def test_fsm_ingest_retry_once_then_fail_conversation(tmp_path, monkeypatch):
     _patch_fsm_seams(monkeypatch)
     vault = tmp_path / "conv-t"
     vault.mkdir()
-    # Session 1: first attempt errors, retry succeeds. Session 2: both fail.
+    # Session 1: first attempt errors, retry succeeds. Session 2: hard-fails twice.
     _StubCoordinator.results = [{"error": "boom"}, {},
-                                {"final_status": "partial"}, RuntimeError("crash")]
+                                {"error": "boom"}, RuntimeError("crash")]
     marker = runner.fsm_ingest_conversation(vault, _fsm_inst(), reuse=False,
                                             key_schema=False)
     assert marker is None
     assert len(_StubCoordinator.calls) == 4
     assert not (vault / "fsm_ingest.json").exists()
+
+
+def test_fsm_ingest_partial_is_product_state_not_failure(tmp_path, monkeypatch):
+    """A contained chunk (final_status=partial) defers its ops for anneal:
+    the session is accepted on the first attempt and recorded in the marker."""
+    _patch_fsm_seams(monkeypatch)
+    vault = tmp_path / "conv-t"
+    vault.mkdir()
+    _StubCoordinator.results = [
+        {"final_status": "partial", "has_partial_failure": True}, {}]
+    marker = runner.fsm_ingest_conversation(vault, _fsm_inst(), reuse=False,
+                                            key_schema=False)
+    assert marker["complete"] is True
+    assert len(_StubCoordinator.calls) == 2          # no retry on partial
+    assert marker["partial_sessions"] == ["session_1"]
 
 
 def test_provenance_session_map_and_recall(tmp_path):
