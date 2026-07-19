@@ -322,12 +322,16 @@ class ObsidianFSBackend(GraphIndexMixin):
         if matched:
             return self.vault_path / matched[0].path
             
-        # Check if the name/ref is actually a path pointing directly to an existing file
+        # Check if the name/ref is actually a path pointing directly to an
+        # existing FILE (CLI direct-path reads). is_file, never exists: a bare
+        # name colliding with a cwd DIRECTORY must not escape the vault
+        # (post-mortem 2026-07-19: hub "memory" resolved to the repo's
+        # ./memory/ dir and read_note crashed with IsADirectoryError).
         p = Path(name + ".md")
-        if p.exists():
+        if p.is_file():
             return p.resolve()
         p = Path(name)
-        if p.exists():
+        if p.is_file():
             return p.resolve()
             
         # Fallback for new files not yet in index
