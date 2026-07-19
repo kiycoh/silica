@@ -123,12 +123,19 @@ class BoundedSubAgent:
 
     def handle(self, item: WorkItem) -> dict[str, Any]:
         res = self._run_one(item)
-        # A capability may propose ONE follow-up (e.g. dedup's mechanical spoke
-        # → refine, ADR-0001). Dispatching here keeps capabilities peers (P9)
-        # and works on both consume() paths even after the run queue closed.
-        # One hop only: a follow-up's own follow-up is never dispatched.
-        followup = res.get("followup") if isinstance(res, dict) else None
-        if isinstance(followup, dict) and followup.get("kind") in self._capabilities:
+        # A capability may propose follow-ups (e.g. dedup's mechanical spoke →
+        # refine, ADR-0001): ``followup`` (single) or ``followups`` (one per
+        # member of a batch item). Dispatching here keeps capabilities peers
+        # (P9) and works on both consume() paths even after the run queue
+        # closed. One hop only: a follow-up's own follow-up is never dispatched.
+        if not isinstance(res, dict):
+            return res
+        single = res.get("followup")
+        proposed = res.get("followups") or ([single] if isinstance(single, dict) else [])
+        dispatched = []
+        for followup in proposed:
+            if not (isinstance(followup, dict) and followup.get("kind") in self._capabilities):
+                continue
             fu_item = WorkItem(
                 kind=followup["kind"],
                 target_path=followup.get("target_path", item.target_path),
@@ -137,7 +144,12 @@ class BoundedSubAgent:
                 cancel_token=item.cancel_token,
             )
             fu_res = self._run_one(fu_item)
-            res["followup"] = {**followup, "status": fu_res.get("status", "done")}
+            dispatched.append({**followup, "status": fu_res.get("status", "done")})
+        if dispatched:
+            if "followups" in res:
+                res["followups"] = dispatched
+            else:
+                res["followup"] = dispatched[0]
         return res
 
     def _run_one(self, item: WorkItem) -> dict[str, Any]:

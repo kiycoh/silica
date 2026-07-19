@@ -618,7 +618,8 @@ def collision_pass(fsm: "InjectorFSM", idx: int) -> None:
     # sub-agent's append-only patch never races the Injector's new-note writes;
     # the per-path lease covers the rare same-note overlap.
     if deferred_concepts and fsm.work_queue is not None:
-        from silica.kernel.workqueue import WorkItem
+        from silica.kernel.workqueue import WorkItem, batch_dedup_items
+        dedup_items = []
         for d in deferred_concepts:
             concept = d["concept"]
             match = d.get("top_match", {})
@@ -627,24 +628,27 @@ def collision_pass(fsm: "InjectorFSM", idx: int) -> None:
                 continue
             name = concept.get("name", "") if isinstance(concept, dict) else str(concept)
             excerpt = concept.get("excerpt", "") if isinstance(concept, dict) else ""
+            dedup_items.append(WorkItem(
+                kind="dedup",
+                target_path=candidate_path,
+                context={
+                    "concept": name,
+                    "excerpt": excerpt,
+                    "candidate": match.get("name", candidate_path),
+                    "score": d.get("score"),
+                    "inbox_file": d.get("inbox_file", fsm.inbox_file),
+                    "hub": fsm.hub,
+                    # C2 verdict routing: lets the dedup capability clean up
+                    # (or author the distinct spoke from) the twin bundle.
+                    "content_hash": fsm._current_content_hash,
+                    "target_dir": fsm.target_dir,
+                },
+                reason=f"borderline_similarity score={d.get('score', 0):.3f}",
+            ))
+        # Concepts hitting the same candidate note become ONE judge call.
+        for wi in batch_dedup_items(dedup_items):
             try:
-                fsm.work_queue.enqueue(WorkItem(
-                    kind="dedup",
-                    target_path=candidate_path,
-                    context={
-                        "concept": name,
-                        "excerpt": excerpt,
-                        "candidate": match.get("name", candidate_path),
-                        "score": d.get("score"),
-                        "inbox_file": d.get("inbox_file", fsm.inbox_file),
-                        "hub": fsm.hub,
-                        # C2 verdict routing: lets the dedup capability clean up
-                        # (or author the distinct spoke from) the twin bundle.
-                        "content_hash": fsm._current_content_hash,
-                        "target_dir": fsm.target_dir,
-                    },
-                    reason=f"borderline_similarity score={d.get('score', 0):.3f}",
-                ))
+                fsm.work_queue.enqueue(wi)
             except Exception as _qe:
                 logger.debug("COLLISION: failed to enqueue dedup item: %s", _qe)
 

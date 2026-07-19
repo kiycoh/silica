@@ -192,7 +192,10 @@ def _dedup_workitems(plan: CurationPlan) -> list[WorkItem]:
             },
             reason=it.reason or f"curate dedup score={it.score:.3f}",
         ))
-    return items
+    # Family members share target_path=canonical by construction → one judge
+    # call per family instead of one per member.
+    from silica.kernel.workqueue import batch_dedup_items
+    return batch_dedup_items(items)
 
 
 def _refine_workitems(plan: CurationPlan) -> list[WorkItem]:

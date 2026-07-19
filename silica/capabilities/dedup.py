@@ -37,6 +37,11 @@ class DedupDecision(BaseModel):
     body: str = ""
 
 
+class DedupBatchDecision(BaseModel):
+    """One verdict per incoming concept, same order as presented."""
+    decisions: list[DedupDecision] = []
+
+
 def run_dedup(item: WorkItem, config: Any) -> dict[str, Any]:
     ctx = item.context
     candidate_path = item.target_path
@@ -49,6 +54,9 @@ def run_dedup(item: WorkItem, config: Any) -> dict[str, Any]:
 
     if item.cancel_token.is_set():
         return {"status": "cancelled"}
+
+    if ctx.get("concepts"):
+        return _run_batch(item, ctx["concepts"], candidate_body[:budget], config)
 
     emit_feedback(item, "calling_llm")
     decision = _decide_dedup(
@@ -67,8 +75,53 @@ def run_dedup(item: WorkItem, config: Any) -> dict[str, Any]:
     if item.cancel_token.is_set():
         return {"status": "cancelled"}
 
+    return _route_verdict(item, ctx, decision, config)
+
+
+def _run_batch(
+    item: WorkItem, concepts: list[dict], candidate_body: str, config: Any
+) -> dict[str, Any]:
+    """Judge a family of concepts against one candidate in a single LLM call,
+    then route every verdict through the exact same code as a single item."""
+    ctx = item.context
+    emit_feedback(item, "calling_llm")
+    decisions = _decide_dedup_batch(
+        config,
+        concepts=concepts,
+        candidate_name=ctx.get("candidate", item.target_path),
+        candidate_body=candidate_body,
+        author_spoke=bool(ctx.get("target_dir")),
+        hub=ctx.get("hub"),
+    )
+    results: list[dict[str, Any]] = []
+    followups: list[dict[str, Any]] = []
+    for entry, decision in zip(concepts, decisions):
+        if item.cancel_token.is_set():
+            return {"status": "cancelled", "results": results}
+        sub_ctx = {k: v for k, v in ctx.items() if k != "concepts"} | entry
+        res = _route_verdict(item, sub_ctx, decision, config)
+        fu = res.pop("followup", None)
+        if isinstance(fu, dict):
+            followups.append(fu)
+        results.append({"concept": entry.get("concept", ""), **res})
+    statuses = {r.get("status") for r in results}
+    out: dict[str, Any] = {
+        "status": statuses.pop() if len(statuses) == 1 else "partial",
+        "batch": len(results),
+        "results": results,
+    }
+    if followups:
+        out["followups"] = followups
+    return out
+
+
+def _route_verdict(
+    item: WorkItem, ctx: dict, decision: DedupDecision, config: Any
+) -> dict[str, Any]:
+    candidate_path = item.target_path
+
     if decision.verdict == "distinct":
-        return _route_distinct(item, decision, config)
+        return _route_distinct(item, ctx, decision, config)
 
     if not decision.addition.strip():
         return {
@@ -117,7 +170,9 @@ def run_dedup(item: WorkItem, config: Any) -> dict[str, Any]:
     return result
 
 
-def _route_distinct(item: WorkItem, decision: DedupDecision, config: Any) -> dict[str, Any]:
+def _route_distinct(
+    item: WorkItem, ctx: dict, decision: DedupDecision, config: Any
+) -> dict[str, Any]:
     """Distinct verdict routing (C2): the borderline concept becomes a spoke.
 
     Pipeline items (context carries ``target_dir``) commit the spoke the judge
@@ -129,7 +184,6 @@ def _route_distinct(item: WorkItem, decision: DedupDecision, config: Any) -> dic
     Ad-hoc pairs (two existing notes, no ``target_dir``) keep the historical
     contract: distinct → no write.
     """
-    ctx = item.context
     target_dir = ctx.get("target_dir", "")
     no_merge = {"status": "no_merge", "verdict": "distinct", "rationale": decision.rationale}
     if not target_dir:
@@ -240,28 +294,7 @@ def _decide_dedup(
             "\nFor any other verdict leave \"title\" and \"body\" empty."
         )
 
-    # Build the score block shown to the model.
-    # When both metrics are available we surface them separately so the model
-    # can interpret the signal correctly: a high title score with a low body
-    # score means "topically related but distinct" — very different from a
-    # uniformly high score which strongly suggests a true duplicate.
-    if title_score > 0.0 and full_score > 0.0:
-        score_block = (
-            f"SEMANTIC CLOSENESS SCORE: {score:.3f} (effective = max of the two below)\n"
-            f"  • Full-note similarity (body + title):  {full_score:.3f}\n"
-            f"  • Title-only similarity:                {title_score:.3f}\n"
-            f"Interpretation:\n"
-            f"  - High full-note score (>0.80): bodies cover the same topic → likely duplicate.\n"
-            f"  - High title score with low body score: notes are topically related but\n"
-            f"    cover distinct aspects (e.g. 'ROS' vs 'JSON in ROS 2') → prefer linking\n"
-            f"    over merging; set is_duplicate=false unless content genuinely overlaps."
-        )
-    else:
-        score_block = (
-            f"SEMANTIC CLOSENESS SCORE: {score:.3f} (0.0 to 1.0, where 1.0 is identical)\n"
-            f"Use this metric as an indicator. High scores (>0.85) strongly suggest "
-            f"duplicates, while lower scores might represent related but distinct topics."
-        )
+    score_block = _score_block(score, full_score, title_score)
 
     user_message = (
         f"{prompt}\n\n"
@@ -296,3 +329,124 @@ def _decide_dedup(
         logger.debug("dedup decision parse failed: %s", e)
     # Conservative default: when in doubt, do not merge and do not contest.
     return DedupDecision(verdict="distinct", rationale="unparseable decision")
+
+
+def _score_block(score: float, full_score: float, title_score: float) -> str:
+    # When both metrics are available we surface them separately so the model
+    # can interpret the signal correctly: a high title score with a low body
+    # score means "topically related but distinct" — very different from a
+    # uniformly high score which strongly suggests a true duplicate.
+    if title_score > 0.0 and full_score > 0.0:
+        return (
+            f"SEMANTIC CLOSENESS SCORE: {score:.3f} (effective = max of the two below)\n"
+            f"  • Full-note similarity (body + title):  {full_score:.3f}\n"
+            f"  • Title-only similarity:                {title_score:.3f}\n"
+            f"Interpretation:\n"
+            f"  - High full-note score (>0.80): bodies cover the same topic → likely duplicate.\n"
+            f"  - High title score with low body score: notes are topically related but\n"
+            f"    cover distinct aspects (e.g. 'ROS' vs 'JSON in ROS 2') → prefer linking\n"
+            f"    over merging; set is_duplicate=false unless content genuinely overlaps."
+        )
+    return (
+        f"SEMANTIC CLOSENESS SCORE: {score:.3f} (0.0 to 1.0, where 1.0 is identical)\n"
+        f"Use this metric as an indicator. High scores (>0.85) strongly suggest "
+        f"duplicates, while lower scores might represent related but distinct topics."
+    )
+
+
+def _decide_dedup_batch(
+    config: Any,
+    *,
+    concepts: list[dict],
+    candidate_name: str,
+    candidate_body: str,
+    author_spoke: bool = False,
+    hub: str | None = None,
+) -> list[DedupDecision]:
+    """One LLM call judging every concept of a family against the candidate.
+
+    The single-verdict prompt is reused verbatim; batch mode only appends the
+    array contract and the numbered concept blocks, so the judging criteria
+    cannot drift between the per-item and the family path.
+    """
+    from silica.agent.providers import get_provider
+
+    prompt = load_prompt("dedup_prompt.txt")
+    n = len(concepts)
+    batch_note = (
+        f"\n\nBATCH MODE: below are {n} INCOMING CONCEPTS, all matched against the SAME"
+        " candidate note. Judge each one INDEPENDENTLY — verdicts within a batch may"
+        " differ. Respond with JSON: {\"decisions\": [...]} containing EXACTLY"
+        f" {n} entries, in the same order as the concepts, each with the single-verdict"
+        " schema (verdict, rationale, addition)."
+    )
+    if author_spoke:
+        hub_hint = f" and to the parent note [[{hub}]]" if hub else ""
+        batch_note += (
+            "\nFor every entry whose verdict is \"distinct\", ALSO author the new note"
+            " in that entry, adding \"title\" (clean note name, no extension) and"
+            " \"body\" (well-formed Obsidian Markdown grounded ONLY in that concept's"
+            " excerpt — never invent facts; no top-level heading; include a wikilink"
+            f" to [[{candidate_name}]]{hub_hint}). For any other verdict leave"
+            " \"title\" and \"body\" empty."
+        )
+    blocks = []
+    for i, c in enumerate(concepts, 1):
+        score = c.get("score") or 0.0
+        blocks.append(
+            f"---\nINCOMING CONCEPT {i}/{n}: {c.get('concept', '')}\n"
+            f"{_score_block(score, c.get('full_score') or score, c.get('title_score') or 0.0)}\n"
+            f"EXCERPT:\n{c.get('excerpt', '')}\n"
+        )
+    user_message = (
+        f"{prompt}{batch_note}\n\n"
+        f"---\nCANDIDATE NOTE ({candidate_name}):\n{candidate_body}\n\n"
+        + "\n".join(blocks)
+    )
+    provider = get_provider(config, role="worker")
+    response = provider.call_llm(
+        messages=[{"role": "user", "content": user_message}],
+        tools=None,
+        response_schema=DedupBatchDecision,
+        max_tokens=int(os.getenv("DEDUP_MAX_TOKENS", "2048")) * n,
+    )
+    return _parse_batch(response.text or "", n)
+
+
+def _parse_batch(raw: str, n: int) -> list[DedupDecision]:
+    """Positional decisions, padded/truncated to exactly n.
+
+    A missing or unparseable entry degrades to the same conservative default
+    as the single path (distinct, no authorship → mechanical spoke or
+    no_merge downstream) — never to a merge.
+    """
+    from silica.kernel.sanitize import parse_json
+
+    def fallback() -> DedupDecision:
+        return DedupDecision(verdict="distinct", rationale="missing from batch response")
+
+    decisions: list[DedupDecision] = []
+    try:
+        parsed, _ = parse_json(raw, strict=False)
+        entries = parsed.get("decisions") if isinstance(parsed, dict) else parsed
+        if isinstance(entries, list):
+            for e in entries[:n]:
+                if not isinstance(e, dict):
+                    decisions.append(fallback())
+                    continue
+                verdict = e.get("verdict")
+                if verdict not in ("duplicate", "distinct", "contradicts"):
+                    # Legacy binary schema, or anything unrecognised → conservative.
+                    verdict = "duplicate" if e.get("is_duplicate") is True else "distinct"
+                decisions.append(DedupDecision(
+                    verdict=verdict,
+                    rationale=str(e.get("rationale", "")),
+                    addition=str(e.get("addition", "")),
+                    title=str(e.get("title", "") or ""),
+                    body=str(e.get("body", "") or ""),
+                ))
+    except Exception as e:
+        logger.debug("dedup batch parse failed: %s", e)
+    while len(decisions) < n:
+        decisions.append(fallback())
+    return decisions

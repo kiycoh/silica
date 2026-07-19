@@ -214,3 +214,53 @@ class WorkQueue:
         except Exception:
             # Persistence is best-effort; never break the pipeline over it.
             pass
+
+
+_BATCH_CONCEPT_KEYS = ("concept", "excerpt", "score", "full_score", "title_score", "inbox_file")
+# ponytail: fixed cap bounds the batch prompt; raise if real families outgrow it
+_MAX_FAMILY_BATCH = 8
+
+
+def batch_dedup_items(items: list[WorkItem]) -> list[WorkItem]:
+    """Collapse dedup WorkItems that share a candidate note into family batches.
+
+    Grouping key is ``target_path``: COLLISION's borderline concepts and
+    /curate's union-find duplicate families both converge there by
+    construction. The candidate body is the bulk of the judge's prompt, so a
+    family of N concepts judged per-item repeats it N times; one batch item is
+    one judge call (the dedup capability fans the verdicts back out from
+    ``context["concepts"]``). Singletons and non-dedup items pass through
+    untouched, so callers can apply this unconditionally before dispatch.
+
+    Lives kernel-side (not in the dedup capability) so both producers — the
+    router's COLLISION state and /curate — reach it without importing the
+    capabilities package, which would cycle through the P9 peer boundary.
+    """
+    out: list[WorkItem] = []
+    groups: dict[str, list[WorkItem]] = {}
+    for it in items:
+        if it.kind == "dedup" and it.target_path and not it.context.get("concepts"):
+            groups.setdefault(it.target_path, []).append(it)
+        else:
+            out.append(it)
+    for path, group in groups.items():
+        for i in range(0, len(group), _MAX_FAMILY_BATCH):
+            chunk = group[i:i + _MAX_FAMILY_BATCH]
+            if len(chunk) == 1:
+                out.append(chunk[0])
+                continue
+            shared = {
+                k: v for k, v in chunk[0].context.items()
+                if k not in _BATCH_CONCEPT_KEYS
+            }
+            shared["concepts"] = [
+                {k: it.context[k] for k in _BATCH_CONCEPT_KEYS if k in it.context}
+                for it in chunk
+            ]
+            out.append(WorkItem(
+                kind="dedup",
+                target_path=path,
+                context=shared,
+                reason=f"dedup_family n={len(chunk)} → {path.rsplit('/', 1)[-1]}",
+            ))
+    return out

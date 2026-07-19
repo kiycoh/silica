@@ -38,14 +38,15 @@ def test_dedup_workitems_collapses_confirmed_family_to_largest(monkeypatch):
         CurationItem(kind="dedup", target="D", partner="E", score=0.70),  # borderline
     )
     items = curate._dedup_workitems(plan)
-    routed = {(w.target_path, w.context["concept"]) for w in items}
 
-    # A and C both merge INTO B (the largest of the confirmed component) — one survivor.
-    assert ("B", "A") in routed and ("B", "C") in routed
-    assert all(w.target_path == "B" for w in items if w.context["concept"] in ("A", "C"))
-    # Borderline D-E untouched by the closure: larger (D) is the target.
-    assert ("D", "E") in routed
-    assert len(items) == 3
+    # A and C both merge INTO B (the largest of the confirmed component) — one
+    # survivor, and the family ships as ONE batch item (one judge call).
+    family = next(w for w in items if w.target_path == "B")
+    assert {c["concept"] for c in family.context["concepts"]} == {"A", "C"}
+    # Borderline D-E untouched by the closure: larger (D) is the target, per-pair.
+    single = next(w for w in items if w.target_path == "D")
+    assert single.context["concept"] == "E"
+    assert len(items) == 2
 
 
 def _report(**overrides) -> VaultReport:
