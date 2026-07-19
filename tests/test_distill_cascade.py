@@ -100,6 +100,7 @@ def _delegate_fsm(chunk, steer=None):
     fsm.inbox_file = "in.md"
     fsm.target_dir = "Notes"
     fsm.hub = "[[Hub]]"
+    fsm.seen_override = None
     fsm.context = {"file_0_language": "English"}
     if steer:
         fsm.context["chunk_0_steer_context"] = steer
