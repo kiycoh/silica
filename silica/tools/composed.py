@@ -17,6 +17,7 @@ from __future__ import annotations
 
 from silica.tools.pipeline import (  # noqa: F401
     BulkWriteArgs,
+    AnnealArgs,
     DeferredRetryArgs,
     LintArgs,
     PayloadArgs,
@@ -24,6 +25,7 @@ from silica.tools.pipeline import (  # noqa: F401
     SanitizeArgs,
     ValidateOpsArgs,
     _same_note,
+    silica_anneal,
     silica_bulk_write,
     silica_deferred_retry,
     silica_lint,

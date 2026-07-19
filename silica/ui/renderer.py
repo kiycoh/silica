@@ -152,6 +152,7 @@ _TOOL_DESC: dict[str, tuple[str, str | None]] = {
     "silica_deferred_list": ("deferred list", None),
     "silica_deferred_flush": ("deferred flush", None),
     "silica_deferred_retry": ("deferred retry", None),
+    "silica_anneal": ("anneal", None),
     "silica_inbox_ls": ("inbox", None),
     "silica_recon": ("recon", "inbox_file"),
     "silica_payload": ("payload", "recon_report_path"),

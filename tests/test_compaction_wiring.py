@@ -130,6 +130,7 @@ def test_write_gate_tools_are_classified_eager():
         "silica_autolink", "silica_backlink", "silica_embed_refresh",
         "silica_cooccurrence_refresh", "silica_bulk_write",
         "silica_deferred_retry", "silica_deferred_flush", "silica_run_injector",
+        "silica_anneal",
     }
 
 

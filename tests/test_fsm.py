@@ -300,6 +300,9 @@ def test_fsm_gate_all_rejected_steers_then_defers(mock_validate):
     fsm = InjectorFSM("Inbox/test.md", "TargetDir")
     fsm._chunks = [{"schema_version": 1, "batches": []}]
     fsm._current_chunk_idx = 0
+    # Pin the historical two in-flight retries; the default is now 1 (the second
+    # recovery moved to the boundary anneal) — covered separately below.
+    fsm._recipe = {"gates": {"max_steer_attempts": 2}}
     fsm.context.setdefault("chunk", {})["sanitized"] = {"parsed": []}
     fsm.state = InjectorState.VALIDATE
 
@@ -320,6 +323,32 @@ def test_fsm_gate_all_rejected_steers_then_defers(mock_validate):
     fsm.context.setdefault("chunk", {})["sanitized"] = {"parsed": []}
     fsm.state = InjectorState.VALIDATE
     fsm.step()
+    assert fsm.state == InjectorState.CLEANUP
+    assert fsm.context.get("final_status") == "no_ops"
+
+
+@patch("silica.router.orchestrator.silica_validate_ops")
+def test_fsm_default_steer_is_one_then_defers(mock_validate):
+    # Default max_steer_attempts is now 1: one in-flight steer, then the ops are
+    # left for the boundary anneal instead of a second in-flight re-delegation.
+    mock_validate.return_value = {
+        "success": True, "rejection_rate": 1.0, "total": 1,
+        "validated_count": 0, "rejected_count": 1,
+        "rejected_ops": [{"reason": "bad path"}], "validated_ops": [],
+    }
+    fsm = InjectorFSM("Inbox/test.md", "TargetDir")
+    fsm._chunks = [{"schema_version": 1, "batches": []}]
+    fsm._current_chunk_idx = 0
+    fsm.context.setdefault("chunk", {})["sanitized"] = {"parsed": []}
+    fsm.state = InjectorState.VALIDATE
+
+    fsm.step()  # attempt 1 → DELEGATE
+    assert fsm.state == InjectorState.DELEGATE
+    assert fsm.context.get("chunk_0_steer_attempts") == 1
+
+    fsm.context.setdefault("chunk", {})["sanitized"] = {"parsed": []}
+    fsm.state = InjectorState.VALIDATE
+    fsm.step()  # budget (1) exhausted → CLEANUP
     assert fsm.state == InjectorState.CLEANUP
     assert fsm.context.get("final_status") == "no_ops"
 

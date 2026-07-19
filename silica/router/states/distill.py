@@ -612,11 +612,15 @@ def handle_validate(fsm: "InjectorFSM") -> None:
     from silica.kernel.prep_delegation import render_steer_feedback
 
     steer_attempts = fsm.context.get(f"chunk_{idx}_steer_attempts", 0)
-    _max_steer = fsm._get_recipe_gate("max_steer_attempts", 2)
+    # One in-flight steer by default: rejected ops are parked in the deferred
+    # store, and the second recovery pass now happens at the boundary via
+    # silica_anneal (batched, off the critical path). Raise the gate in a
+    # recipe if a lane wants the historical two in-flight retries.
+    _max_steer = fsm._get_recipe_gate("max_steer_attempts", 1)
 
     # Abort only when no validated ops remain — partial success is fine.
     if res.get("validated_count", 0) == 0:
-        # Phase 6 steering arc: re-delegate with per-op rejection feedback (max 2 attempts).
+        # Phase 6 steering arc: re-delegate with per-op rejection feedback.
         if steer_attempts < _max_steer:
             steer_attempts += 1
             fsm.context[f"chunk_{idx}_steer_attempts"] = steer_attempts

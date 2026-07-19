@@ -402,6 +402,7 @@ def silica_deferred_retry(content_hash: str) -> dict[str, Any]:
             rejection_reasons={
                 (r.op.path or r.op.heading or "?"): r.reason for r in still_rejected
             },
+            phase="RETRY",
         )
     else:
         store.remove(content_hash)
@@ -412,3 +413,130 @@ def silica_deferred_retry(content_hash: str) -> dict[str, Any]:
         "still_deferred": len(still_rejected),
         "bundle_cleared": len(still_rejected) == 0,
     }
+
+
+class AnnealArgs(BaseModel):
+    steer: bool = Field(
+        default=False,
+        description="After the mechanical pass, hand each bundle's still-failing ops to the escalation model (one call per bundle)",
+    )
+    limit: int = Field(default=0, description="Max bundles to process (0 = all)")
+
+@tool(AnnealArgs, cls="composed", collapse="eager")
+def silica_anneal(steer: bool = False, limit: int = 0) -> dict[str, Any]:
+    """Boundary annealing: sweep EVERY deferred bundle through the mechanical
+    retry (re-validate against the current vault, write what now passes), then
+    optionally hand each bundle's still-failing ops to the escalation model in
+    ONE call per bundle — the per-op ``rejection_reason`` stamps are the steer
+    feedback. Recovery work happens here, at the boundary, where defects are
+    segregated and batchable, instead of inflating the in-flight pipeline.
+    """
+    from silica.kernel.deferred import get_deferred_store
+
+    store = get_deferred_store()
+    bundles = store.list_all()
+    if limit:
+        bundles = bundles[:limit]
+    swept: list[dict[str, Any]] = []
+    for b in bundles:
+        h = b["content_hash"]
+        res = silica_deferred_retry(h)
+        row: dict[str, Any] = {
+            "content_hash": h[:8],
+            "written": res.get("written", 0),
+            "still_deferred": res.get("still_deferred", 0),
+            "cleared": res.get("bundle_cleared", False),
+        }
+        if res.get("error"):
+            row["error"] = res["error"]
+        if steer and row["still_deferred"]:
+            row["steer"] = _steer_bundle(h)
+        swept.append(row)
+    return {
+        "bundles": len(swept),
+        "written": sum(r["written"] for r in swept)
+        + sum(r.get("steer", {}).get("written", 0) for r in swept),
+        "still_deferred": sum(r["still_deferred"] for r in swept)
+        - sum(r.get("steer", {}).get("written", 0) for r in swept),
+        "results": swept,
+    }
+
+
+def _steer_bundle(content_hash: str) -> dict[str, Any]:
+    """One escalation-model call repairing a bundle's still-failing ops.
+
+    Each op is echoed with the exact rejection reason stamped at defer time
+    (PDDL-INSTRUCT: the verdict is the feedback). Corrected ops that now pass
+    validation are written; the bundle keeps whatever was not verifiably
+    written, so a bad fix is re-annealed later, never lost.
+    """
+    import os
+
+    import orjson as _orjson
+
+    from silica.agent.providers import get_provider
+    from silica.config import CONFIG
+    from silica.kernel.bulk import execute_operations
+    from silica.kernel.deferred import get_deferred_store
+    from silica.kernel.ops_io import parse_ops
+    from silica.kernel.sanitize import parse_json
+    from silica.kernel.validate import validate_operations
+    from silica.tools.wrapped import build_txn
+
+    store = get_deferred_store()
+    bundle = store.get(content_hash)
+    if not bundle:
+        return {"status": "gone"}
+    ops = [o for o in bundle.get("rejected_ops", []) if isinstance(o, dict)]
+    if not ops:
+        return {"status": "empty"}
+    target_dir = bundle.get("target_dir", "")
+    hub = bundle.get("hub")
+    file_reasons = bundle.get("rejection_reasons", {})
+    feedback = [
+        {
+            "op": o,
+            "rejected_because": o.get("rejection_reason")
+            or file_reasons.get(o.get("path") or o.get("heading") or "?", "unknown"),
+        }
+        for o in ops
+    ]
+    hub_line = f"\nHUB: {hub}" if hub else ""
+    prompt = (
+        "You are repairing note-write operations that a validation gate rejected.\n"
+        f"TARGET_DIR: {target_dir}{hub_line}\n"
+        "Each op below is echoed with the exact reason it was rejected. Fix ONLY\n"
+        "what the reason requires — keep the content otherwise identical — and\n"
+        "return the corrected ops as a JSON array in the same op schema. Omit an\n"
+        "op only if it is unfixable.\n\nREJECTED OPS:\n"
+        + _orjson.dumps(feedback, option=_orjson.OPT_INDENT_2).decode()
+    )
+    try:
+        provider = get_provider(CONFIG, role="escalation")
+        response = provider.call_llm(
+            messages=[{"role": "user", "content": prompt}],
+            tools=None,
+            max_tokens=int(os.getenv("ANNEAL_MAX_TOKENS", "8192")),
+        )
+        parsed, _ = parse_json(response.text or "", strict=False)
+    except Exception as e:
+        return {"status": "error", "error": str(e)[:200]}
+    fixed = parse_ops(parsed) if isinstance(parsed, (list, dict)) else []
+    fixed = [op for op in fixed if op.op != OpType.skip]
+    if not fixed:
+        return {"status": "no_fix"}
+    validated, still = validate_operations(fixed, [], target_dir, hub=hub)
+    if not validated:
+        return {"status": "no_fix", "still_rejected": len(still)}
+    txn = build_txn(validated)
+    result = execute_operations(validated)
+    if not result.ok:
+        from silica.tools.wrapped import silica_restore
+        silica_restore(txn_id=txn.id, inverses=[i.model_dump() for i in txn.inverses])
+        return {"status": "write_failed"}
+    # ponytail: written ops are dropped from the bundle by heading match only —
+    # an op the model renamed stays parked and re-anneals (writes are idempotent
+    # via block_present), which is the safe direction.
+    for op in validated:
+        store.remove_op(content_hash, op.heading)
+    return {"status": "committed", "written": len(validated), "still_rejected": len(still)}
