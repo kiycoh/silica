@@ -10,7 +10,7 @@ new dependency, no LLM.
     E = -w1 * Σ cohesion(c)      # enthalpy: bonds formed, intra-cluster density
         + w2 * orphans          # entropic cost: unlinked matter
         + w3 * dangling         # broken bonds (links to non-existent notes)
-        + w4 * Σ gap_score      # structural holes between well-formed areas
+        + w4 * Σ gap_density     # structural holes: absent-link fraction ∈ [0,1) per gap
         + w5 * Σ deficit.score  # concept-rich, weakly-linked notes (concepts/(1+degree))
         + w6 * contested        # unresolved polymorphs
 
@@ -71,7 +71,7 @@ def vault_energy(report: VaultReport, weights: Weights = Weights()) -> VaultEner
     cohesion = -weights.cohesion * sum(c.cohesion for c in report.clusters)
     orphans = weights.orphans * len(report.orphans)
     dangling = weights.dangling * len(report.dangling)
-    gaps = weights.gaps * sum(g.gap_score for g in report.structural_gaps)
+    gaps = weights.gaps * sum(g.gap_density for g in report.structural_gaps)
     deficits = weights.deficits * sum(d.score for d in report.integration_deficits)
     contested = weights.contested * len(report.contested)
     total = cohesion + orphans + dangling + gaps + deficits + contested

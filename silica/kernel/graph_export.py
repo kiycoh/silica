@@ -318,21 +318,27 @@ def detect_communities(
 
 def structural_gaps(
     nodes: list[dict], edges: list[dict], top_k: int = 10, min_size: int = 2
-) -> list[tuple[int, int, str, str, int, float]]:
+) -> list[tuple[int, int, str, str, int, float, float]]:
     """Community-pairs with the largest structural hole, score-descending.
 
     The mirror of the cross-cluster bridge signal: a bridge is a weak link that
     EXISTS between two areas; a structural gap is a pair of well-formed areas
     where the linking edges are ABSENT. Returns tuples
-    (cluster_a, cluster_b, hub_a, hub_b, inter_edges, gap_score) with
-    gap_score = size_a * size_b / (1 + inter_edges) — two large areas with no
-    connecting edge rank highest.
+    (cluster_a, cluster_b, hub_a, hub_b, inter_edges, gap_score, gap_density).
+
+    Two scores, two consumers:
+    * gap_score = size_a * size_b / (1 + inter_edges) — RANKS the report: big
+      disconnected areas surface first. Unbounded and size-scaling by design.
+    * gap_density = 1 - inter_edges / (size_a * size_b) — the fraction of the
+      possible inter-cluster edges that are ABSENT, in [0, 1). Bounded and
+      near-invariant to cluster growth, so E(vault) sums this instead of the
+      size-scaling gap_score (which made E reward fragmentation over growth).
 
     Reads node["group"] (set by detect_communities) and EXTRACTED edges, so it
     agrees node-for-node with the exported graph. Pure dict counting, no nx.
-    ponytail: in a sparse vault this mostly ranks by size-product — that IS the
-    signal (biggest disconnected areas). Upgrade to a modularity-gain score if
-    it ever reads noisy.
+    ponytail: in a sparse vault gap_score mostly ranks by size-product — that IS
+    the signal (biggest disconnected areas). Upgrade to a modularity-gain score
+    if it ever reads noisy.
     """
     group_of = {
         n["id"]: n["group"]
@@ -364,12 +370,14 @@ def structural_gaps(
             hub[g] = nid
 
     big = sorted(g for g, s in sizes.items() if s >= min_size)
-    gaps: list[tuple[int, int, str, str, int, float]] = []
+    gaps: list[tuple[int, int, str, str, int, float, float]] = []
     for i, ca in enumerate(big):
         for cb in big[i + 1:]:
             ie = inter.get((ca, cb), 0)
-            score = sizes[ca] * sizes[cb] / (1 + ie)
-            gaps.append((ca, cb, hub[ca], hub[cb], ie, round(score, 2)))
+            potential = sizes[ca] * sizes[cb]
+            score = potential / (1 + ie)
+            density = 1.0 - ie / potential   # absent fraction of possible links
+            gaps.append((ca, cb, hub[ca], hub[cb], ie, round(score, 2), round(density, 4)))
     gaps.sort(key=lambda t: (-t[5], t[0], t[1]))
     return gaps[:top_k]
 

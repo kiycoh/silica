@@ -44,7 +44,8 @@ class StructuralGap:        # mirror of BridgeStat — two well-formed areas wit
     hub_a: str             # highest-degree node of cluster_a (overlay endpoint)
     hub_b: str             # highest-degree node of cluster_b
     inter_edges: int       # EXTRACTED edges joining the two clusters (0 = a full structural hole)
-    gap_score: float       # size_a * size_b / (1 + inter_edges) — big disconnected areas rank highest
+    gap_score: float       # size_a * size_b / (1 + inter_edges) — big disconnected areas rank highest (report ranking)
+    gap_density: float = 0.0  # 1 - inter/(size_a*size_b): absent-link fraction ∈ [0,1); bounded term E(vault) sums
 
 
 @dataclass

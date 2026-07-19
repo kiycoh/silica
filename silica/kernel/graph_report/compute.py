@@ -303,9 +303,9 @@ def compute_report(
         structural_gaps_list = [
             StructuralGap(
                 cluster_a=ca, cluster_b=cb, hub_a=ha, hub_b=hb,
-                inter_edges=ie, gap_score=score,
+                inter_edges=ie, gap_score=score, gap_density=dens,
             )
-            for ca, cb, ha, hb, ie, score in structural_gaps(nodes, edges, top_k=top_k)
+            for ca, cb, ha, hb, ie, score, dens in structural_gaps(nodes, edges, top_k=top_k)
         ]
         discourse_state = _discourse_state(G_und, clusters)
 

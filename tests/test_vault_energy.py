@@ -29,7 +29,7 @@ def test_terms_sum_to_total():
         clusters=[ClusterStat(0, 3, "h", [], cohesion=0.5)],
         orphans=["a", "b"],
         dangling=[{"target": "x", "refs": 1}],
-        structural_gaps=[StructuralGap(0, 1, "a", "b", 0, gap_score=4.0)],
+        structural_gaps=[StructuralGap(0, 1, "a", "b", 0, gap_score=4.0, gap_density=0.75)],
         integration_deficits=[IntegrationDeficit("n", 6, 1, score=3.0)],
         contested=[ContestedNote("c", [])],
     )
@@ -37,7 +37,7 @@ def test_terms_sum_to_total():
     assert e.total == e.cohesion + e.orphans + e.dangling + e.gaps + e.deficits + e.contested
     assert e.cohesion == -0.5  # only negative term
     assert e.orphans == 2 and e.dangling == 1 and e.contested == 1
-    assert e.gaps == 4.0 and e.deficits == 3.0
+    assert e.gaps == 0.75 and e.deficits == 3.0  # gaps sums bounded density, not gap_score
 
 
 def test_cohesion_lowers_energy_others_raise_it():

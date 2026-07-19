@@ -2,7 +2,7 @@
   "generated_at": "2026-07-19",
   "tier": "cheap",
   "vault": {
-    "digest": "sha256:df097406caf3dec8af112db0253f88122f6b53659e5dc70978e4aa91176996ba",
+    "digest": "sha256:8700db2ddfbb514905d0fd4abd6ddacf2d9e193081491a12f8bee7ddbe196b1f",
     "notes": 716,
     "path": "/home/kiycoh/Documents/Obsidian/test"
   },
@@ -42,11 +42,11 @@
     "fusion.mrr": 0.4666,
     "fusion.pairs_evaluated": 492,
     "fusion.embed_coverage": 0.9942,
-    "energy.total": 33570.4678,
-    "energy.cohesion": -8.2822,
+    "energy.total": 2903.1912,
+    "energy.cohesion": -8.5586,
     "energy.orphans": 78.0,
     "energy.dangling": 511.0,
-    "energy.gaps": 30677.0,
+    "energy.gaps": 9.9998,
     "energy.deficits": 2312.75,
     "energy.contested": 0.0,
     "coherence_index": 0.6615

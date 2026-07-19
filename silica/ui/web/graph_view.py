@@ -746,7 +746,7 @@ def _gap_edges(nodes: list[dict], edges: list[dict], top_k: int = 5) -> list[dic
             "color": {"color": _EDGE_COLOR_GAP},
             "score": score,
         }
-        for i, (ca, cb, hub_a, hub_b, ie, score) in enumerate(
+        for i, (ca, cb, hub_a, hub_b, ie, score, _dens) in enumerate(
             structural_gaps(nodes, edges, top_k=top_k)
         )
     ]
