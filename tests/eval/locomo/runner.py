@@ -176,21 +176,38 @@ def _conv_now(index: dict[str, dict]) -> str:
 
 
 # --- Answer ------------------------------------------------------------------
+# Shared sentences between the one-shot and agent system prompts (e2e leg
+# comparability rule: the judge must see the same contract; only the memory
+# delivery sentence differs). Byte-stability asserted by the harness test.
+
+_CONTRACT_OPEN = (
+    "You are a helpful assistant answering questions from your memory of "
+    "past conversations between {a} and {b}. Today's "
+    "date is {now}. "
+)
+_ONESHOT_DELIVERY = (
+    "Use ONLY the memory provided. A 'Personal memory' "
+    "section, when present, lists dated facts distilled from those "
+    "conversations — treat them as reliable memory on par with the session "
+    "transcripts. "
+)
+_AGENT_DELIVERY = (
+    "Use your memory tools to recall those conversations before answering; "
+    "nothing is provided inline. "
+)
+_CONTRACT_CLOSE = (
+    "Answer concisely with only the information asked for. If "
+    "the memory does not contain the answer, reply that you do not have "
+    "that information — never guess."
+)
+
 
 def answer_question(model: str, question: str, now: str, context: str,
                     speakers: tuple[str, str]) -> str:
     from silica.agent.llm import call_llm
 
-    system = (
-        "You are a helpful assistant answering questions from your memory of "
-        f"past conversations between {speakers[0]} and {speakers[1]}. Today's "
-        f"date is {now}. Use ONLY the memory provided. A 'Personal memory' "
-        "section, when present, lists dated facts distilled from those "
-        "conversations — treat them as reliable memory on par with the session "
-        "transcripts. Answer concisely with only the information asked for. If "
-        "the memory does not contain the answer, reply that you do not have "
-        "that information — never guess."
-    )
+    system = (_CONTRACT_OPEN.format(a=speakers[0], b=speakers[1], now=now)
+              + _ONESHOT_DELIVERY + _CONTRACT_CLOSE)
     user = f"Memory:\n{context}\n\nQuestion: {question}"
     # temperature=0: same rationale as the LME harness — single-run A/Bs need
     # greedy decoding (a byte-identical prompt flipped verdicts otherwise).
