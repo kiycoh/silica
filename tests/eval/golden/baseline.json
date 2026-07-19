@@ -1,8 +1,8 @@
 {
-  "generated_at": "2026-07-17",
-  "tier": "all",
+  "generated_at": "2026-07-19",
+  "tier": "cheap",
   "vault": {
-    "digest": "sha256:652a925bbf60c123f2d86e92cd8cdd1f53f31ce2d1a5ac409ccc3a24270b5076",
+    "digest": "sha256:df097406caf3dec8af112db0253f88122f6b53659e5dc70978e4aa91176996ba",
     "notes": 716,
     "path": "/home/kiycoh/Documents/Obsidian/test"
   },
@@ -19,8 +19,8 @@
     "relatedness_legs": "embed+cooccur+edges"
   },
   "metrics": {
-    "classify.agreement": 0.3259,
-    "classify.uncategorized_rate": 0.5734,
+    "classify.agreement": 0.3301,
+    "classify.uncategorized_rate": 0.6028,
     "classify.notes": 715,
     "links.recall": 0.6545,
     "links.extra_per_note": 1.5399,
@@ -31,24 +31,25 @@
     "integrity.vault_structural_violations": 3191,
     "integrity.vault_style_flags": 688,
     "integrity.vault_notes_with_structural": 152,
-    "correlate.recall_expanded": 0.1391,
-    "correlate.recall_union": 0.1922,
-    "correlate.lift": 0.0531,
+    "correlate.recall_expanded": 0.1098,
+    "correlate.recall_union": 0.1626,
+    "correlate.lift": 0.0528,
     "correlate.lift_pairs": 26,
-    "correlate.pairs_evaluated": 489,
-    "correlate.edges": 189,
-    "correlate.edges_wikilinked_frac": 0.3333,
-    "fusion.recall_at_10": 0.8425,
-    "fusion.mrr": 0.4723,
-    "fusion.pairs_evaluated": 489,
-    "fusion.embed_coverage": 1.0,
-    "dedup.fp_auto_merge_rate": 0.0,
-    "dedup.fp_pairs_evaluated": 673,
-    "dedup.fp_patches": 0,
-    "dedup.route_defer": 337,
-    "dedup.route_keep": 336,
-    "dedup.tp_pairs_evaluated": 0,
-    "coherence_index": 0.6601
+    "correlate.pairs_evaluated": 492,
+    "correlate.edges": 215,
+    "correlate.edges_wikilinked_frac": 0.293,
+    "fusion.recall_at_10": 0.8272,
+    "fusion.mrr": 0.4666,
+    "fusion.pairs_evaluated": 492,
+    "fusion.embed_coverage": 0.9942,
+    "energy.total": 33570.4678,
+    "energy.cohesion": -8.2822,
+    "energy.orphans": 78.0,
+    "energy.dangling": 511.0,
+    "energy.gaps": 30677.0,
+    "energy.deficits": 2312.75,
+    "energy.contested": 0.0,
+    "coherence_index": 0.6615
   },
-  "frozen_at": "2026-07-17"
+  "frozen_at": "2026-07-19"
 }

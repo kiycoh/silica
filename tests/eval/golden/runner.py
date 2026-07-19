@@ -196,6 +196,27 @@ def collect(vault: Path, *, tier: str = "cheap", verbose: bool = False) -> dict:
         else:
             print("SKIP  dedup.*      — embed index absent (offline)")
 
+    # E(vault): lattice energy as one informational scalar + its six signed
+    # terms (docs IV.1). Same report depth every run — analytics (cohesion,
+    # gaps) + cooccurrence (integration deficits) — so E is comparable across
+    # runs; the frozen baseline gives ΔE per term for free in the table. Never
+    # gated: informational first (guardrail IV.5.1 — E is a thermometer, not an
+    # objective to descend). Reuses the already-open cooccur store.
+    # ponytail: on a byte-identical vault, energy.{orphans,dangling,deficits,
+    # contested} are exactly stable but energy.{gaps,cohesion} carry ~0.5%
+    # Louvain-order noise (seed is fixed; input edge order is not). Fine while
+    # informational; to gate ΔE, gate those two with a tolerance band, not exact.
+    # ponytail: analytics=True runs PageRank/betweenness; fine on the fixed
+    # test vault, and that scan is the known ceiling if the vault ever grows.
+    from silica.kernel.graph_report import compute_report
+    from silica.kernel.vault_energy import vault_energy
+
+    e = vault_energy(compute_report(
+        analytics=True, with_cooccurrence=True, _cooccur_store_override=store,
+    ))
+    for term, val in vars(e).items():
+        metrics[f"energy.{term}"] = round(val, 4)
+
     # arbitrary single trend number — labeled as such, never gated
     metrics["coherence_index"] = round(sum(metrics[k] for k in _PRIMARIES) / len(_PRIMARIES), 4)
 
