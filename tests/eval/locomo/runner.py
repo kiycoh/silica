@@ -175,6 +175,158 @@ def _conv_now(index: dict[str, dict]) -> str:
     return max((e["date"] for e in index.values() if e.get("date")), default="")
 
 
+# --- FSM ingest (e2e write path) --------------------------------------------
+# --ingest fsm: each session goes through the product Coordinator (collision,
+# dedup, deferred, anneal all live), sequentially in chronological order,
+# with seen_override carrying the session's historical date. Vault freeze:
+# ingest once, persist a marker, reuse only complete ingests.
+
+_INBOX_RE = re.compile(r"^session_(\d+)\.md$")
+
+
+def _clear_fsm_state() -> None:
+    """Vault-keyed singletons beyond bind_vault's: deferred store cache and
+    overlay/manifest caches (the FSM write path touches all of them)."""
+    import silica.kernel.deferred as deferred_mod
+    from silica.kernel.overlay import reset_overlay_cache
+    from silica.kernel.vault_manifest import reset_manifest_cache
+
+    deferred_mod._stores.clear()
+    reset_overlay_cache()
+    reset_manifest_cache()
+
+
+def _wipe_index_namespace() -> None:
+    """Drop this vault's ~/.silica/index/<digest>/ (embeddings, cooccur,
+    deferred bundles) so a from-scratch re-ingest starts clean."""
+    import shutil
+
+    from silica.kernel import paths as kpaths
+
+    shutil.rmtree(kpaths.index_dir(), ignore_errors=True)
+
+
+def _ingest_failed(result: dict) -> bool:
+    # ERROR-state runs carry context["error"]; "partial" means a chunk was
+    # rolled back (content lost). Both invalidate the conversation's memory.
+    # Deferred bundles are NOT failure: they are product state anneal recovers.
+    return bool(result.get("error")) or bool(result.get("has_partial_failure")) \
+        or result.get("final_status") == "partial"
+
+
+def fsm_ingest_conversation(vault: Path, inst: dict, *, reuse: bool,
+                            key_schema: bool) -> dict | None:
+    """Ingest every session through Coordinator, then anneal. Returns the
+    freeze marker (with ``reused`` flag), or None when the conversation failed
+    ingest twice and must be EXCLUDED from metrics (a declared hole beats a
+    false number). Assumes bind_vault(vault) was already called."""
+    from silica.router import coordinator as coord_mod
+
+    marker_path = vault / "fsm_ingest.json"
+    runs_path = vault / "fsm_runs.json"
+    sessions = conversation_sessions(inst["conversation"])
+    sids = [f"session_{n}" for n, _, _ in sessions]
+
+    if reuse and marker_path.is_file():
+        try:
+            marker = json.loads(marker_path.read_text(encoding="utf-8"))
+        except Exception:
+            marker = {}
+        if marker.get("complete") and marker.get("sessions") == sids:
+            marker["reused"] = True
+            return marker
+        logger.warning("fsm marker stale or partial for %s — re-ingesting from scratch",
+                       vault.name)
+
+    # Never reuse a partial ingest: wipe the vault and its index namespace.
+    import shutil
+    shutil.rmtree(vault, ignore_errors=True)
+    vault.mkdir(parents=True, exist_ok=True)
+    if key_schema:
+        (vault / "vault.yaml").write_text(
+            "conventions:\n  episodic_keys: {}\n", encoding="utf-8")
+    _wipe_index_namespace()
+    _clear_fsm_state()
+
+    (vault / "inbox").mkdir(exist_ok=True)
+    run_map: dict[str, str] = {}
+    for n, date_time, turns in sessions:
+        sid = f"session_{n}"
+        date = parse_date_time(date_time)
+        (vault / "inbox" / f"{sid}.md").write_text(
+            _note(sid, date, date_time, render_session(turns)), encoding="utf-8")
+        result: dict | None = None
+        run_id = ""
+        for attempt in (1, 2):
+            try:
+                coord = coord_mod.Coordinator(
+                    inbox_files=[f"inbox/{sid}.md"], target_dir="memory",
+                    seen_override=date or None)
+                run_id = coord.fsm.progress.run_id
+                result = coord.run()
+            except Exception as e:
+                logger.warning("Coordinator crashed on %s/%s (attempt %d): %s",
+                               vault.name, sid, attempt, e)
+                result = None
+            if result is not None and not _ingest_failed(result):
+                break
+            if result is not None:
+                logger.warning("Coordinator run failed on %s/%s (attempt %d): "
+                               "final_status=%s error=%s", vault.name, sid, attempt,
+                               result.get("final_status"), result.get("error"))
+        else:
+            logger.error("conversation %s: session %s failed ingest twice — "
+                         "conversation EXCLUDED from metrics", vault.name, sid)
+            return None
+        run_map[run_id] = sid
+        runs_path.write_text(json.dumps(run_map, indent=2), encoding="utf-8")
+
+    # Grain-boundary recovery is part of the mechanisms under measurement.
+    from silica.tools import pipeline as pipeline_mod
+    anneal = pipeline_mod.silica_anneal(steer=True)
+
+    marker = {
+        "complete": True,
+        "reused": False,
+        "sessions": sids,
+        "date": datetime.date.today().isoformat(),
+        "anneal": {k: anneal.get(k) for k in ("bundles", "written", "still_deferred")},
+    }
+    marker_path.write_text(json.dumps(marker, indent=2), encoding="utf-8")
+    return marker
+
+
+def _provenance_session_map(vault: Path) -> dict[str, set[str]]:
+    """note rel (no .md) -> contributing session ids, via provenance records
+    keyed by inbox basename session_<n>.md. A note merged from 3 sessions
+    counts for all 3; notes with no record count for no session."""
+    from silica.kernel.provenance import read_records
+
+    out: dict[str, set[str]] = {}
+    for rec in read_records(vault_path=str(vault)):
+        m = _INBOX_RE.match(rec.get("source") or "")
+        if not m:
+            continue
+        sid = f"session_{m.group(1)}"
+        for note in rec.get("notes") or []:
+            out.setdefault(note, set()).add(sid)
+    return out
+
+
+def _sessions_for(session_map: dict[str, set[str]], ref: str) -> set[str]:
+    """Sessions a retrieved ref counts for. Exact rel match first; wikilink
+    names (silica_read_note takes names, not paths) fall back to basename."""
+    hit = session_map.get(ref)
+    if hit is not None:
+        return hit
+    stem = ref.rsplit("/", 1)[-1].removesuffix(".md").casefold()
+    out: set[str] = set()
+    for rel, sids in session_map.items():
+        if rel.rsplit("/", 1)[-1].casefold() == stem:
+            out |= sids
+    return out
+
+
 # --- Answer ------------------------------------------------------------------
 # Shared sentences between the one-shot and agent system prompts (e2e leg
 # comparability rule: the judge must see the same contract; only the memory
@@ -224,7 +376,11 @@ def run_question(qa: dict, qid: str, index: dict[str, dict], *, model: str,
                  use_rerank: bool, retrieval_only: bool, distill: bool,
                  episodic_ttl: int, flat_context: bool, facts_last: bool,
                  windows: int | None, window_chars: int | None,
-                 now: str, speakers: tuple[str, str]) -> dict:
+                 now: str, speakers: tuple[str, str],
+                 answer_mode: str = "oneshot",
+                 session_map: dict[str, set[str]] | None = None,
+                 run_sessions: dict[str, str] | None = None,
+                 n_sessions: int | None = None) -> dict:
     cat = qa.get("category")
     qtype = _CATEGORY.get(cat, f"cat-{cat}")
     is_abs = cat == _ADVERSARIAL
@@ -246,7 +402,14 @@ def run_question(qa: dict, qid: str, index: dict[str, dict], *, model: str,
     gold_sessions = evidence_sessions(qa.get("evidence") or []) if not is_abs else set()
     ephemeral_hit: bool | None = None
     if distill and gold_sessions:
-        ephemeral_hit = _ephemeral_hit(p.fact_chains, gold_sessions)
+        if run_sessions:
+            # FSM mode: fact runs are Coordinator run_ids, mapped back to the
+            # session each run ingested (fsm_runs.json).
+            ephemeral_hit = any(run_sessions.get(r) in gold_sessions
+                                for chain in p.fact_chains
+                                for f in chain for r in f.runs)
+        else:
+            ephemeral_hit = _ephemeral_hit(p.fact_chains, gold_sessions)
 
     gold_in_ctx: bool | None = None
     if retrieval_only:
@@ -258,13 +421,18 @@ def run_question(qa: dict, qid: str, index: dict[str, dict], *, model: str,
         response = answer_question(model, qa["question"], now, context, speakers)
         correct = judge(judge_model, qtype, qa["question"], gold, response,
                         is_abs=is_abs)
-    retrieved_sessions = {index.get(r, {}).get("session_id") for r in rels}
+    retrieved_sessions: set[str] = set()
+    if session_map is not None:
+        for r in rels:
+            retrieved_sessions |= _sessions_for(session_map, r)
+    else:
+        retrieved_sessions = {index.get(r, {}).get("session_id") for r in rels}
     return {
         "question_id": qid,
         "question_type": qtype,
         "abstention": is_abs,
         "correct": correct,
-        "sessions": len(index),
+        "sessions": n_sessions if n_sessions is not None else len(index),
         "retrieved": len(rels),
         "session_recall": (len(gold_sessions & retrieved_sessions) / len(gold_sessions))
                           if gold_sessions and not stuff and not is_abs else None,
@@ -286,6 +454,7 @@ def run(data: list[dict], run_root: Path, *, model: str, judge_model: str, k: in
         facts_last: bool = False, windows: int | None = None,
         window_chars: int | None = None, key_schema: bool = False,
         categories: set[int] | None = None, limit: int | None = None,
+        ingest_mode: str = "distill", answer_mode: str = "oneshot",
         verbose: bool = False, out: Path | None = None) -> dict:
     from silica.config import CONFIG
     from silica.kernel import perception
@@ -305,6 +474,11 @@ def run(data: list[dict], run_root: Path, *, model: str, judge_model: str, k: in
                    "reuse": reuse,
                    "key_schema": key_schema,
                    "categories": sorted(categories) if categories else "all",
+                   "ingest_mode": ingest_mode,
+                   "answer_mode": answer_mode,
+                   "seen_override": "session-date" if ingest_mode == "fsm" else None,
+                   "fsm": {},
+                   "failed_conversations": [],
                    "context": "flat" if flat_context else "windowed",
                    "windows": windows if windows is not None else perception.DEFAULT_WINDOWS,
                    "window_chars": (window_chars if window_chars is not None
@@ -337,18 +511,43 @@ def run(data: list[dict], run_root: Path, *, model: str, judge_model: str, k: in
             (vault / "vault.yaml").write_text(
                 "conventions:\n  episodic_keys: {}\n", encoding="utf-8")
         bind_vault(vault)
-        index = load_conversation_vault(vault, inst, distill=distill, reuse=reuse)
+        session_map = run_sessions = None
+        if ingest_mode == "fsm":
+            _clear_fsm_state()
+            marker = fsm_ingest_conversation(vault, inst, reuse=reuse,
+                                             key_schema=key_schema)
+            if marker is None:
+                doc["config"]["failed_conversations"].append(sample_id)
+                continue
+            doc["config"]["fsm"][sample_id] = {"anneal": marker.get("anneal"),
+                                               "runs": "fsm_runs.json"}
+            session_map = _provenance_session_map(vault)
+            run_sessions = json.loads((vault / "fsm_runs.json")
+                                      .read_text(encoding="utf-8"))
+            sess = conversation_sessions(inst["conversation"])
+            index = {}
+            n_sessions = len(sess)
+            now = max((d for d in (parse_date_time(dt) for _, dt, _ in sess) if d),
+                      default="")
+            fsm_reused = bool(marker.get("reused"))
+        else:
+            index = load_conversation_vault(vault, inst, distill=distill, reuse=reuse)
+            n_sessions = len(index)
+            now = _conv_now(index)
+            fsm_reused = reuse
         if not stuff:
-            build_indexes(embed=use_embedder, force=not reuse)
-        now = _conv_now(index)
+            build_indexes(embed=use_embedder, force=not fsm_reused)
         for qi, qa in qa_list:
             row = run_question(qa, f"{sample_id}_q{qi}", index, model=model,
                                judge_model=judge_model, k=k, stuff=stuff,
                                use_embedder=use_embedder, use_rerank=use_rerank,
-                               retrieval_only=retrieval_only, distill=distill,
+                               retrieval_only=retrieval_only,
+                               distill=distill or ingest_mode == "fsm",
                                episodic_ttl=episodic_ttl, flat_context=flat_context,
                                facts_last=facts_last, windows=windows,
-                               window_chars=window_chars, now=now, speakers=speakers)
+                               window_chars=window_chars, now=now, speakers=speakers,
+                               answer_mode=answer_mode, session_map=session_map,
+                               run_sessions=run_sessions, n_sessions=n_sessions)
             rows.append(row)
             if verbose:
                 mark = (f"sr={row['session_recall']}" if retrieval_only
@@ -396,6 +595,13 @@ def main(argv=None) -> int:
     ap.add_argument("--distill", action="store_true",
                     help="distill each session via the Silica distiller before "
                          "indexing (mem0-comparable LLM ingest; default is verbatim)")
+    ap.add_argument("--ingest", choices=("distill", "fsm"), default="distill",
+                    help="write path: 'distill' = slice ingest (per --distill), "
+                         "'fsm' = full product Coordinator per session "
+                         "(collision/dedup/deferred/anneal live)")
+    ap.add_argument("--conversations", default="",
+                    help="comma-separated sample_ids to run "
+                         "(pilot: conv-26,conv-47,conv-49)")
     ap.add_argument("--episodic-ttl", type=int, default=0,
                     help="episodic fact TTL in days (default 0 = off, the "
                          "Mem0/Zep-comparable headline)")
@@ -428,6 +634,9 @@ def main(argv=None) -> int:
     ap.add_argument("--verbose", action="store_true")
     args = ap.parse_args(argv)
 
+    if args.ingest == "fsm" and (args.stuff or args.distill):
+        print("--ingest fsm distills inside the FSM; drop --stuff/--distill")
+        return 2
     if args.retrieval_only:
         args.stuff = False  # nothing to retrieve when every session is stuffed in
     elif not args.model:
@@ -436,6 +645,9 @@ def main(argv=None) -> int:
     categories = ({int(c) for c in args.categories.split(",") if c.strip()}
                   if args.categories else None)
     data = json.loads(Path(args.data).read_text(encoding="utf-8"))
+    if args.conversations:
+        wanted = {c.strip() for c in args.conversations.split(",") if c.strip()}
+        data = [inst for inst in data if inst.get("sample_id") in wanted]
     run_root = Path(args.run_root).expanduser().resolve()
     run_root.mkdir(parents=True, exist_ok=True)
 
@@ -448,7 +660,8 @@ def main(argv=None) -> int:
                   reuse=args.reuse_vaults, flat_context=args.flat_context,
                   facts_last=args.facts_last, windows=args.windows,
                   window_chars=args.window_chars, key_schema=args.key_schema,
-                  categories=categories, limit=args.limit, verbose=args.verbose,
+                  categories=categories, limit=args.limit,
+                  ingest_mode=args.ingest, verbose=args.verbose,
                   out=out)
     finally:
         import silica.driver
