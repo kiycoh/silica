@@ -8,9 +8,8 @@ layout, zero deps, offline).
 Seriation is the design: rows/columns are grouped by Louvain community over
 the concept graph, so topics read as diagonal blocks and hot cells OUTSIDE a
 block are cross-topic bridges — the one thing a matrix shows that the force
-graph cannot. Concept selection reuses the F4 concepts-view df window
-(min_df / df_cap over CORRELATE Concept sets) so both surfaces describe the
-same concept subset.
+graph cannot. Concept selection uses a df window (min_df / df_cap over
+CORRELATE Concept sets) to drop degenerate and hub concepts.
 """
 from __future__ import annotations
 
@@ -41,9 +40,8 @@ class HeatmapView:
 def build_heatmap(store, *, top_n: int = 40, min_df: int = 2,
                   df_cap: int | None = None, focus: str | None = None,
                   min_pct: int = 0, note: str | None = None) -> HeatmapView:
-    """Pure read over the store. Same df window as build_bipartite_data:
-    min_df drops degenerate single-note concepts, df_cap (default 5% of
-    notes, floor 3) drops hub concepts.
+    """Pure read over the store. df window: min_df drops degenerate single-note
+    concepts, df_cap (default 5% of notes, floor 3) drops hub concepts.
 
     `focus` asks a different question — "what does THIS word correlate
     with" — so it bypasses the df window entirely: the resolved concept plus
@@ -225,18 +223,29 @@ _GUT_T = 130   # top gutter: rotated column labels
 
 def render_heatmap_svg(view: HeatmapView, title: str = "Concept Heatmap") -> str:
     """Self-contained HTML page (no external refs). Cell color = community
-    color inside a block, gold across blocks; opacity encodes weight."""
+    color inside a block, gold across blocks; opacity encodes weight.
+
+    The focus HUD is kept for standalone open (`/heatmap` in a browser tab) but
+    hidden when embedded in an iframe (`body.embedded`, same idiom as the graph
+    viewer): inside the app the explore toolbar drives ?q=/?n=/?p=, and the
+    note-drawer preview wants no controls at all."""
     from silica.kernel.graph_export import _community_color
 
     # Focus search: plain GET form back onto /heatmap — the server reads ?q= / ?n=.
-    form = (f'<form id="hud"><input name="q" '
-            f'value="{html.escape(view.focus or "", quote=True)}" '
-            f'placeholder="focus a concept…" autocomplete="off"/>'
-            f'<input name="n" type="number" min="5" max="120" value="{view.cap}" '
-            f'title="max concepts"/>'
-            f'<input name="p" type="number" min="0" max="95" value="{view.min_pct}" '
-            f'title="min weight, % of strongest"/>'
-            f'<button>focus</button></form>')
+    # Each field carries its own visible caption (not just a hover title) so the
+    # unit — "min wt %" — reads at a glance instead of only on mouseover.
+    form = (
+        '<form id="hud">'
+        '<label class="hud-f"><span class="hud-lbl">concept</span>'
+        f'<input name="q" value="{html.escape(view.focus or "", quote=True)}" '
+        'placeholder="focus a concept…" autocomplete="off"/></label>'
+        '<label class="hud-f hud-narrow"><span class="hud-lbl">max concepts</span>'
+        f'<input name="n" type="number" min="5" max="120" value="{view.cap}"/></label>'
+        '<label class="hud-f hud-narrow"><span class="hud-lbl">min wt %</span>'
+        f'<input name="p" type="number" min="0" max="95" value="{view.min_pct}"/></label>'
+        '<button>focus</button>'
+        '</form>'
+    )
     overlay = (f'<div id="note">[ {html.escape(view.note)} ]</div>'
                if view.note else "")
 
@@ -295,8 +304,8 @@ def _page(title: str, body: str) -> str:
 <title>{html.escape(title)}</title>
 <style>
   :root{{
-    --void:#0A0A0A;--slate-2:#161616;--line:#262626;--line-2:#3A3A3A;
-    --frost:#EAEAEA;--ash:#8F8F8F;--ash-dim:#5C5C5C;
+    --void:#0A0D14;--slate-2:#161B27;--line:#232A3A;--line-2:#38425A;
+    --frost:#E8ECF5;--ash:#8B95AC;--ash-dim:#566076;
     --mono:ui-monospace,"Cascadia Code","SF Mono",Menlo,Consolas,"DejaVu Sans Mono",monospace;
   }}
   *{{box-sizing:border-box}}
@@ -308,21 +317,30 @@ def _page(title: str, body: str) -> str:
   .diag{{fill:var(--line);fill-opacity:.6}}
   .sep{{stroke:var(--line-2);stroke-width:1}}
   #empty{{font-family:var(--mono);color:var(--ash-dim);padding:2rem;font-size:13px;letter-spacing:.06em}}
-  #hud{{position:fixed;top:14px;right:14px;display:flex;gap:0;z-index:2}}
-  #hud input{{background:var(--slate-2);border:1px solid var(--line-2);color:var(--frost);
-              padding:6px 8px;font-family:var(--mono);font-size:12px;width:190px}}
+  #hud{{position:fixed;top:14px;right:14px;z-index:2}}
+  #hud form{{display:flex;align-items:flex-end;gap:0}}
+  .hud-f{{display:flex;flex-direction:column;gap:3px}}
+  .hud-lbl{{font-family:var(--mono);font-size:9px;color:var(--ash-dim);text-transform:uppercase;
+            letter-spacing:.06em;padding-left:1px}}
+  #hud input{{background:var(--slate-2);border:1px solid var(--line-2);border-right:none;color:var(--frost);
+              padding:6px 8px;font-family:var(--mono);font-size:12px;width:190px;height:29px}}
   #hud input:focus{{outline:none;border-color:var(--frost)}}
   #hud input::placeholder{{color:var(--ash-dim)}}
-  #hud button{{background:var(--slate-2);border:1px solid var(--line-2);border-left:none;
-               color:var(--ash);padding:6px 10px;font-family:var(--mono);font-size:11px;
-               cursor:pointer;text-transform:uppercase;letter-spacing:.06em}}
-  #hud input[type=number]{{width:58px;border-left:none}}
+  #hud button{{background:var(--slate-2);border:1px solid var(--line-2);
+               color:var(--ash);padding:0 10px;height:29px;font-family:var(--mono);font-size:11px;
+               cursor:pointer;text-transform:uppercase;letter-spacing:.06em;align-self:flex-end}}
+  #hud input[type=number]{{width:66px}}
   #hud button:hover{{color:var(--frost)}}
-  #note{{position:fixed;top:14px;left:14px;z-index:2;background:rgba(22,22,22,.82);
+  /* Embedded in the app iframe: the explore toolbar owns ?q=/?n=/?p=, and the
+     note-drawer preview wants no controls — hide the in-page HUD either way.
+     Kept visible for a standalone /heatmap open. */
+  body.embedded #hud{{display:none}}
+  #note{{position:fixed;top:14px;left:14px;z-index:2;background:rgba(22,27,39,.82);
          border:1px solid var(--line-2);color:var(--ash);padding:7px 11px;
          font-family:var(--mono);font-size:12px;letter-spacing:.04em}}
 </style></head><body>
 {body}
+<script>if(window.parent!==window)document.body.classList.add("embedded");</script>
 </body></html>
 """
 
@@ -331,12 +349,16 @@ def heatmap_page(focus: str | None = None, top_n: int = 40, min_pct: int = 0,
                  note: str | None = None, title: str = "Concept Heatmap") -> str:
     """Resolve the active vault's cooccurrence store and render the page.
     Lives here (allowlisted store access) so the UI layer never touches
-    kernel.cooccurrence directly — same seam as bipartite_for_active_vault.
-    top_n/min_pct come from the page's own form — clamp, don't trust."""
+    kernel.cooccurrence directly. top_n/min_pct come from the page's own
+    form — clamp, don't trust.
+
+    A `note`-scoped call is the drawer's preview: a glance at what this note's
+    concepts correlate with, not a browsing tool, so it defaults small (5). The
+    in-page HUD hides itself when embedded (see render_heatmap_svg)."""
     from silica.config import CONFIG
     from silica.kernel import cooccurrence
 
-    top_n = max(5, min(120, top_n or 40))
+    top_n = max(5, min(120, top_n or (5 if note else 40)))
     min_pct = max(0, min(95, min_pct))
     lang = cooccurrence.frozen_lang(getattr(CONFIG, "vault_path", "") or "")
     store = cooccurrence.get_cooccur_store(lang or "english")

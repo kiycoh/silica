@@ -697,25 +697,44 @@ def test_chat_done_html_linkifies_a_cited_note(client, tmp_vault, monkeypatch):
     assert 'data-path="Foo.md"' in done["html"]
 
 
-def test_graph_route_threads_mode_to_export(client, monkeypatch):
-    """F4: GET /graph?mode=concepts reaches export_graph(mode="concepts");
-    the default stays "links" (bit-identical)."""
+def test_graph_route_builds_unified_export(client, monkeypatch):
+    """GET /graph builds the one unified graph via export_graph (no mode param)."""
     import silica.ui.web.graph_view as gv
 
     tc, _server = client
     seen = {}
 
-    def spy(output_path, folder="", title="Vault Graph", mode="links"):
-        seen["mode"] = mode
+    def spy(output_path, folder="", title="Vault Graph", knn_k=6):
+        seen["called"] = True
         Path(output_path).write_text("<html>stub</html>", encoding="utf-8")
         return {"success": True, "path": output_path, "nodes": 0, "edges": 0,
-                "communities": 0, "unresolved": 0, "gaps": 0, "concepts": 0}
+                "similar": 0, "communities": 0, "unresolved": 0, "gaps": 0}
 
     monkeypatch.setattr(gv, "export_graph", spy)
-    assert tc.get("/graph?mode=concepts").status_code == 200
-    assert seen["mode"] == "concepts"
-    tc.get("/graph")
-    assert seen["mode"] == "links"
+    assert tc.get("/graph").status_code == 200
+    assert seen["called"] is True
+
+
+def test_top_hubs_ranks_by_resolved_degree():
+    """The map landing picker ranks notes by resolved-link degree, skips ghost
+    and unlinked nodes, and caps the list."""
+    from silica.ui.web.server import _top_hubs
+
+    nodes = [
+        {"id": "a", "path": "a.md", "label": "A", "type": "note"},
+        {"id": "b", "path": "b.md", "label": "B", "type": "note"},
+        {"id": "c", "path": "c.md", "label": "C", "type": "note"},   # unlinked
+        {"id": "g", "path": "", "label": "ghost", "type": "ghost"},  # skipped
+    ]
+    edges = [
+        {"from": "a", "to": "b", "type": "EXTRACTED"},
+        {"from": "a", "to": "g", "type": "EXTRACTED"},   # a has degree 2
+        {"from": "a", "to": "b", "type": "AMBIGUOUS"},   # unresolved: ignored
+    ]
+    hubs = _top_hubs(nodes, edges, top_n=10)
+    assert [h["path"] for h in hubs] == ["a.md", "b.md"]  # a(2) > b(1); c(0) dropped
+    assert hubs[0]["degree"] == 2 and hubs[0]["name"] == "A"
+    assert _top_hubs(nodes, edges, top_n=1) == hubs[:1]   # cap honored
 
 
 def test_heatmap_route_serves_kernel_page(client, monkeypatch):

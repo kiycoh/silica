@@ -124,7 +124,18 @@ def render_html(
     n_extracted  = sum(1 for e in edges if e.get("type") == "EXTRACTED")
     n_ambiguous  = sum(1 for e in edges if e.get("type") == "AMBIGUOUS")
     n_gaps       = sum(1 for e in edges if e.get("type") == "GAP")
+    n_similar    = sum(1 for e in edges if e.get("type") == "SIMILAR")
     n_communities = len(communities)
+    # Semantic-map edges: only surface the row when present (the links view
+    # have none, so the row would just read 0 and confuse).
+    similar_row = (
+        f'<label class="filter-row" style="margin-top:4px" title="Embedding k-NN — notes pulled together by semantic similarity">'
+        f'<input type="checkbox" id="cb-similar" checked onchange="updateEdgeFilter()">'
+        f'<div class="dot-edge" style="background:#00a5e1"></div>Similar'
+        f'<span style="color:#5c5c5c;font-size:11px;margin-left:auto">{n_similar}</span>'
+        f'</label>'
+    ) if n_similar else ""
+
     discourse_badge = (
         f'<div style="font-size:11px;color:#8f8f8f;letter-spacing:.04em;margin-bottom:6px">'
         f'discourse: <span style="color:#c9a227;font-weight:600">{html.escape(discourse)}</span></div>'
@@ -296,6 +307,7 @@ def render_html(
         Structural gaps
         <span style="color:#5c5c5c;font-size:11px;margin-left:auto">{n_gaps}</span>
       </label>
+      {similar_row}
     </div>
 
     <div>
@@ -404,6 +416,7 @@ let activeCommunity = -2;
 let showExtracted = true;
 let showAmbiguous = false;
 let showGaps = true;
+let showSimilar = true;
 
 // --- Node color = its community color, flat -------------------------------
 // One hue per community: every node in a community shares the exact color,
@@ -413,7 +426,6 @@ function nodeColor(n) {{
   // verification shows 3d-force-graph honours per-node alpha.
   if (n._dim) return '#1c1c1c';
   if (n.type === 'ghost') return '#4a4a4a';   // muted gray — dimmed, never black
-  if (n.type === 'concept') return '#8f7fa3'; // concepts view: neutral violet, no community
   return (n.color && n.color.background) || '#566076';
 }}
 
@@ -453,11 +465,9 @@ const Graph = new ForceGraph3D(document.getElementById("graph"))
   .nodeVisibility(n => !n._hidden)
   .linkVisibility(l => !l._hidden);
 
-// Slider multipliers persist per view — links and concepts have different
-// densities, so a manual correction for one shouldn't leak into the other.
-// The baseline is never persisted: it is recomputed from the current graph.
-const FORCES_KEY = "silica-graph-forces-" +
-  (RAW_NODES.some(n => n.type === "concept") ? "concepts" : "links");
+// Slider multipliers persist across sessions; the baseline is never persisted
+// (recomputed from the current graph each load).
+const FORCES_KEY = "silica-graph-forces";
 let forceMul = {{ repel: 1, dist: 1, center: 1 }};
 try {{
   Object.assign(forceMul, JSON.parse(localStorage.getItem(FORCES_KEY)) || {{}});
@@ -513,7 +523,8 @@ function applyFilters() {{
   RAW_EDGES.forEach(e => {{
     e._hidden = (e.type === "EXTRACTED" && !showExtracted) ||
                 (e.type === "AMBIGUOUS" && !showAmbiguous) ||
-                (e.type === "GAP" && !showGaps);
+                (e.type === "GAP" && !showGaps) ||
+                (e.type === "SIMILAR" && !showSimilar);
   }});
   // Re-pass the current accessor to force a visibility refresh without resetting the physics layout
   Graph.nodeVisibility(Graph.nodeVisibility());
@@ -524,6 +535,8 @@ function updateEdgeFilter() {{
   showExtracted = document.getElementById("cb-extracted").checked;
   showAmbiguous = document.getElementById("cb-ambiguous").checked;
   showGaps = document.getElementById("cb-gaps").checked;
+  const cbSim = document.getElementById("cb-similar");
+  if (cbSim) showSimilar = cbSim.checked;
   applyFilters();
 }}
 
@@ -684,6 +697,13 @@ window.addEventListener("message", e => {{
   if (e.data && e.data.type === "silica-focus-path") {{
     applyFocus(NODE_BY_ID[e.data.path] ? e.data.path : null);
   }}
+  // The explore toolbar's note search asks us to *locate* a note: fly the
+  // camera to it and dim to its neighbourhood, without opening the drawer
+  // (selectNode would) — the user is searching the cloud, not inspecting yet.
+  if (e.data && e.data.type === "silica-goto-path") {{
+    const n = NODE_BY_ID[e.data.path];
+    if (n) {{ focusNode(n); applyFocus(n.id); }}
+  }}
 }});
 
 function closeDrawer() {{
@@ -736,77 +756,77 @@ def export_graph(
     output_path: str,
     folder: str = "",
     title: str = "Vault Graph",
-    mode: str = "links",
+    knn_k: int = 6,
 ) -> dict:
-    """Build and write the graph HTML to output_path.
+    """Build and write the unified vault-graph HTML to output_path.
+
+    One build, two edge layers on a shared force layout:
+      - the wikilink graph (EXTRACTED/AMBIGUOUS) — the explicit structure;
+      - the embedding k-NN overlay (SIMILAR) — meaning-space proximity.
+    Communities are Louvain on the WIKILINKS; the SIMILAR layer is a toggleable
+    HUD overlay whose forces pull link-orphans (e.g. book extracts with no
+    wikilinks) next to their semantic neighbours instead of leaving them
+    floating. Structural-gap particles ride the wikilink layer.
 
     Reads the vendored JS first (fail fast on a packaging bug) and always inlines
     it, so the emitted file is self-contained/offline. Returns dict with keys:
-    success, path, nodes, edges, communities, unresolved.
-
-    mode="concepts" (F4): merges the note->Concept-set bipartite expansion
-    (kernel.graph_export.build_bipartite_data) into the dataset — the on-disk
-    incidence IS a hypergraph (a note is a hyperedge over its concepts).
-    Structural-gap particles stay off in this mode (different question).
+    success, path, nodes, edges (wikilinks), similar (k-NN), communities,
+    unresolved, gaps.
     """
-    from silica.kernel.graph_export import build_graph_data, detect_communities
-
-    from silica.kernel.graph_export import canvas_metrics, discourse_shape
+    from silica.kernel.graph_export import (
+        build_graph_data,
+        canvas_metrics,
+        detect_communities,
+        discourse_shape,
+        knn_edges,
+    )
 
     lib_js = _vendored_lib_js()  # fail fast before the graph build
-    nodes, edges = build_graph_data(folder=folder)
-    communities = detect_communities(nodes, edges)
-
-    n_concepts = 0
-    if mode == "concepts":
-        from silica.kernel.graph_export import bipartite_for_active_vault
-
-        cnodes, cedges = bipartite_for_active_vault(nodes)
-        n_concepts = len(cnodes)
-        nodes = nodes + cnodes
-        edges = edges + cedges
+    nodes, edges = build_graph_data(folder=folder)   # wikilink edges (the structure)
+    sim = knn_edges(nodes, k=knn_k)                   # embedding k-NN overlay
+    communities = detect_communities(nodes, edges)   # Louvain on the wikilinks
 
     # Betweenness → node size (bottleneck nodes swell) + discourse-shape badge,
-    # from one shared nx build. Base size 16 stays for ordinary nodes.
+    # from one shared nx build over the wikilinks. Base size 16 for ordinary nodes.
     bet, giant = canvas_metrics(nodes, edges)
     if bet:
         for n in nodes:
-            if n.get("type") not in ("ghost", "concept"):
+            if n.get("type") != "ghost":
                 b = round(bet.get(n["id"], 0.0), 4)
                 n["betweenness"] = b
                 n["size"] = round(16 + 40 * b, 2)
     discourse = discourse_shape(
-        sum(1 for n in nodes if n.get("type") not in ("ghost", "concept")),
+        sum(1 for n in nodes if n.get("type") != "ghost"),
         giant, [c.size for c in communities],
     )
 
-    # Gap particles answer a linking question; the concepts view asks an
-    # incidence one — keep them apart.
-    gaps = [] if mode == "concepts" else _gap_edges(nodes, edges)
+    # Gap particles ride the wikilink layer (they answer a linking question).
+    gaps = _gap_edges(nodes, edges)
     html_out = render_html(
-        nodes, edges + gaps, communities, title=title, lib_js=lib_js, discourse=discourse
+        nodes, edges + sim + gaps, communities, title=title, lib_js=lib_js, discourse=discourse
     )
 
     out = Path(output_path)
     out.parent.mkdir(parents=True, exist_ok=True)
     out.write_text(html_out, encoding="utf-8")
 
-    n_notes       = sum(1 for n in nodes if n.get("type") not in ("ghost", "concept"))
+    n_notes       = sum(1 for n in nodes if n.get("type") != "ghost")
     n_ghost       = sum(1 for n in nodes if n.get("type") == "ghost")
-    n_extracted   = sum(1 for e in edges if e.get("type") == "EXTRACTED")
+    n_links       = sum(1 for e in edges if e.get("type") == "EXTRACTED")
+    n_similar     = len(sim)
     n_communities = len(communities)
 
     logger.info(
-        "graph_export: wrote %s — %d notes, %d links, %d clusters, %d unresolved",
-        out, n_notes, n_extracted, n_communities, n_ghost,
+        "graph_export: wrote %s — %d notes, %d links, %d similar, %d clusters, %d unresolved",
+        out, n_notes, n_links, n_similar, n_communities, n_ghost,
     )
     return {
         "success":     True,
         "path":        str(out.resolve()),
         "nodes":       n_notes,
-        "edges":       n_extracted,
+        "edges":       n_links,
+        "similar":     n_similar,
         "communities": n_communities,
         "unresolved":  n_ghost,
         "gaps":        len(gaps),
-        "concepts":    n_concepts,
     }

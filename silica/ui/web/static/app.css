@@ -123,6 +123,11 @@ header {
   gap: 0;
   border-bottom: 1px solid var(--line-2);
   background: var(--slate);
+  transition: padding-right .14s linear; /* match drawer animation */
+}
+
+body.note-open header {
+  padding-right: var(--note-w, 630px);
 }
 
 header>* {
@@ -131,11 +136,14 @@ header>* {
 }
 
 .brand {
+  font-family: var(--sans);
   font-weight: 800;
   letter-spacing: 0.28em;
   font-size: 13px;
   padding: 0 1rem;
+  border: none;
   border-right: 1px solid var(--line);
+  cursor: pointer;
   /* the single meaningful gradient: iridescence on the wordmark, slowly panning */
   background: var(--grad);
   background-size: 300% 100%;
@@ -210,8 +218,7 @@ header>* {
 .commands button:active,
 .linklike:active,
 #send:active,
-#dock-send:active,
-#tree-toggle:active {
+#dock-send:active {
   transform: translateY(1px);
 }
 
@@ -221,8 +228,7 @@ header>* {
 .commands button:focus-visible,
 .linklike:focus-visible,
 #send:focus-visible,
-#dock-send:focus-visible,
-#tree-toggle:focus-visible {
+#dock-send:focus-visible {
   outline: 1px solid var(--accent);
   outline-offset: -1px;
 }
@@ -232,26 +238,25 @@ header>* {
   font-size: 13px;
 }
 
-#new-chat {
-  border-left: 1px solid var(--line);
-}
-
 /* reopen-last-note — the one header button that names content, so it keeps the
    note's own casing and clips like a title instead of shouting uppercase */
 #note-last {
-  display: block; /* text-overflow needs a block box, not the header's flex */
+  display: flex; /* text-overflow + SVG needs flex */
+  align-items: center;
   border-left: 1px solid var(--line);
   text-transform: none;
   letter-spacing: 0.02em;
-  max-width: 220px;
+}
+
+#note-last > span {
   overflow: hidden;
   text-overflow: ellipsis;
   white-space: nowrap;
+  max-width: 25ch; /* adattarsi alla lunghezza del nome della nota fino ad un certo numero di caratteri */
 }
 
-#note-last::before {
-  content: "// ";
-  color: var(--accent);
+#note-last > span:not(:empty) {
+  margin-left: 6px;
 }
 
 #stop {
@@ -335,27 +340,6 @@ details.side-section>summary.side-title::after {
 
 details.side-section[open]>summary.side-title::after {
   content: " ▾";
-}
-
-#tree-toggle {
-  float: right;
-  margin-top: -2px;
-  padding: 2px 6px;
-  font-family: var(--sans);
-  font-size: 9px;
-  line-height: 1;
-  letter-spacing: 0.1em;
-  text-transform: uppercase;
-  color: var(--ash);
-  background: var(--slate-2);
-  border: 1px solid var(--line-2);
-  cursor: pointer;
-  transition: color .1s linear, border-color .1s linear;
-}
-
-#tree-toggle:hover {
-  color: var(--frost);
-  border-color: var(--ash-dim);
 }
 
 details.side-section[open]>summary.side-title {
@@ -966,32 +950,54 @@ details.side-section:hover>summary.side-title {
 }
 
 .commands {
-  display: flex;
-  gap: 1px;
-  padding: 0.5rem 1rem 0;
-  flex-wrap: wrap;
-}
-
-.commands button {
+  position: absolute;
+  bottom: 100%;
+  left: 0;
+  width: 100%;
+  max-height: 250px;
+  overflow-y: auto;
+  background: var(--slate);
   border: 1px solid var(--line);
-  padding: 0.3rem 0.6rem;
-  font-size: 11px;
-  text-transform: none;
+  border-radius: 0;
+  box-shadow: 0 -4px 12px rgba(0,0,0,0.2);
+  display: flex;
+  flex-direction: column;
+  padding: 4px;
+  margin-bottom: 8px;
+  z-index: 100;
 }
-
-.commands button::before {
-  content: "[ ";
-  color: var(--ash-dim);
+.commands[hidden] {
+  display: none !important;
 }
-
-.commands button::after {
-  content: " ]";
-  color: var(--ash-dim);
+.cmd-item {
+  display: flex;
+  align-items: baseline;
+  gap: 12px;
+  padding: 8px 12px;
+  cursor: pointer;
+  border-radius: 0;
+  color: var(--ash);
+  text-align: left;
+  border: none;
+  background: transparent;
+  font-family: var(--font-mono);
+  font-size: 13px;
 }
-
-.commands button:hover {
-  border-color: var(--line-2);
+.cmd-item:hover, .cmd-item.sel {
   background: var(--slate-2);
+  color: var(--frost);
+}
+.cmd-item .cmd-name {
+  color: var(--accent);
+  font-weight: bold;
+  white-space: nowrap;
+}
+.cmd-item .cmd-summary {
+  font-size: 12px;
+  color: var(--ash-dim);
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
 }
 
 #composer,
@@ -1000,6 +1006,7 @@ details.side-section:hover>summary.side-title {
   gap: 0;
   padding: 0.7rem 1rem 0.9rem;
   border-top: 1px solid var(--line-2);
+  position: relative;
 }
 
 #input,
@@ -1121,8 +1128,7 @@ details.side-section:hover>summary.side-title {
   background: var(--void);
 }
 
-#view-graph,
-#view-map {
+#view-graph {
   position: relative;
 }
 
@@ -1159,28 +1165,32 @@ details.side-section:hover>summary.side-title {
   }
 }
 
-#map-bar {
-  display: flex;
-  gap: 0;
-  padding: 0.6rem 1rem;
-  border-bottom: 1px solid var(--line);
-  position: relative;
-  z-index: 3;
-  background: var(--void);
-}
-
-/* graph view-mode toggle: links | concepts | heat (stays above #graph-loading) */
+/* explore toolbar: the head itself is invisible — mode buttons + the active
+   mode's controls float over the graph as chips, not a full-width banner.
+   pointer-events:none lets the transparent gaps pass clicks to the graph. */
 #graph-bar {
   display: flex;
-  gap: 0;
-  padding: 0.6rem 1rem;
-  border-bottom: 1px solid var(--line);
-  position: relative;
+  align-items: flex-end;
+  gap: 0.6rem;
+  padding: 0.6rem;
+  position: absolute;
+  top: 0;
+  left: 0;
   z-index: 3;
-  background: var(--void);
+  pointer-events: none;
 }
 
-#graph-bar button {
+#graph-bar > * {
+  pointer-events: auto;
+}
+
+.gmode-tabs {
+  display: flex;
+  gap: 0;
+  flex-shrink: 0;
+}
+
+.gmode-tabs button {
   background: var(--slate-2);
   color: var(--ash);
   border: 1px solid var(--line-2);
@@ -1193,49 +1203,89 @@ details.side-section:hover>summary.side-title {
   font-size: 11px;
 }
 
-#graph-bar button:last-child {
+.gmode-tabs button:last-child {
   border-right: 1px solid var(--line-2);
 }
 
-#graph-bar button:hover {
+.gmode-tabs button:hover {
   color: var(--frost);
 }
 
-#graph-bar button.active {
+.gmode-tabs button.active {
   background: var(--accent);
   border-color: var(--accent);
   color: var(--void);
   font-weight: 700;
 }
 
-/* stay above #map-loading overlay */
-#map-note {
-  flex: 1;
+/* per-mode control cluster (heatmap fields / note search), pushed to the right */
+.gbar-controls {
+  display: flex;
+  align-items: flex-end;
+  gap: 0;
+  flex: 0 0 auto;
+  min-width: 0;
+  position: relative;
+}
+
+/* a captioned field: tiny mono label stacked over its input, so the unit
+   ("min wt %") reads at a glance instead of only on hover */
+.gbar-f {
+  display: flex;
+  flex-direction: column;
+  gap: 3px;
+  min-width: 0;
+}
+
+.gbar-f.gbar-grow {
+  flex: 0 0 240px;
+}
+
+.gbar-lbl {
+  font-family: var(--mono);
+  font-size: 9px;
+  color: var(--ash-dim);
+  text-transform: uppercase;
+  letter-spacing: 0.06em;
+  padding-left: 1px;
+}
+
+#graph-bar input {
   font-family: var(--sans);
   font-size: 13px;
   background: var(--slate-2);
   color: var(--frost);
   border: 1px solid var(--line-2);
   border-right: none;
-  padding: 0.55rem 0.6rem;
+  padding: 0.45rem 0.6rem;
+  height: 31px;
+  width: 100%;
   transition: border-color .1s linear;
 }
 
-#map-note:focus {
-  outline: none;
-  border-color: var(--frost);
+.gbar-narrow input {
+  width: 78px;
 }
 
-#map-note::placeholder {
+#graph-bar input:focus {
+  outline: none;
+  border-color: var(--frost);
+  position: relative;
+  z-index: 1;
+}
+
+#graph-bar input::placeholder {
   color: var(--ash-dim);
 }
 
-#map-bar button {
+#heat-controls button {
+  align-self: flex-end;
   background: var(--accent);
   color: var(--void);
   font-weight: 700;
   border: 1px solid var(--accent);
   padding: 0 1.1rem;
+  height: 31px;
   cursor: pointer;
   font-family: var(--sans);
   text-transform: uppercase;
@@ -1243,9 +1293,150 @@ details.side-section:hover>summary.side-title {
   font-size: 11px;
 }
 
-#map-bar button:hover {
+#heat-controls button:hover {
   background: var(--frost);
   border-color: var(--frost);
+}
+
+/* note-search ranked dropdown — drops below the toolbar, same idiom as the
+   graph viewer's internal search results */
+#node-results {
+  position: absolute;
+  top: 100%;
+  left: 0;
+  right: 0;
+  margin-top: 4px;
+  z-index: 6;
+  display: flex;
+  flex-direction: column;
+  max-height: 320px;
+  overflow-y: auto;
+  background: var(--slate-2);
+  border: 1px solid var(--line-2);
+  scrollbar-width: thin;
+}
+
+.node-result {
+  display: flex;
+  flex-direction: column;
+  gap: 1px;
+  padding: 0.4rem 0.6rem;
+  cursor: pointer;
+  border-left: 2px solid transparent;
+}
+
+.node-result:hover,
+.node-result.sel {
+  background: var(--slate);
+  border-left-color: var(--accent);
+}
+
+.node-result .nr-name {
+  font-size: 12px;
+  color: var(--frost);
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+}
+
+.node-result .nr-path {
+  font-size: 10px;
+  color: var(--ash-dim);
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+}
+
+/* map landing (hub picker) — fills the frame area until a note is rooted */
+#map-picker {
+  position: absolute;
+  inset: 0;
+  z-index: 2;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  background: var(--void);
+  overflow-y: auto;
+}
+
+#map-picker[hidden] {
+  display: none;
+}
+
+.map-picker-inner {
+  width: min(560px, 90%);
+  padding: 1.5rem 0;
+}
+
+.map-picker-title {
+  font-size: 13px;
+  font-weight: 700;
+  letter-spacing: 0.06em;
+  text-transform: uppercase;
+  color: var(--frost);
+}
+
+.map-picker-title::before {
+  content: "// ";
+  color: var(--accent);
+}
+
+.map-picker-hint {
+  font-size: 11px;
+  color: var(--ash-dim);
+  margin: 0.3rem 0 0.9rem;
+}
+
+#map-picker-list {
+  display: grid;
+  grid-template-columns: 1fr 1fr;
+  gap: 1px;
+  background: var(--line);
+  border: 1px solid var(--line);
+}
+
+#map-picker-list:empty::after {
+  content: "no linked notes yet — pick one from FILES in the sidebar";
+  grid-column: 1 / -1;
+  background: var(--slate-2);
+  color: var(--ash-dim);
+  font-size: 11px;
+  padding: 0.8rem;
+}
+
+.hub-row {
+  display: flex;
+  align-items: baseline;
+  justify-content: space-between;
+  gap: 0.6rem;
+  background: var(--slate-2);
+  padding: 0.5rem 0.7rem;
+  cursor: pointer;
+  border-left: 2px solid transparent;
+}
+
+.hub-row:hover {
+  background: var(--slate);
+  border-left-color: var(--accent);
+}
+
+.hub-name {
+  font-size: 12px;
+  color: var(--frost);
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+}
+
+.hub-deg {
+  font-size: 10px;
+  color: var(--ash-dim);
+  font-variant-numeric: tabular-nums;
+  flex-shrink: 0;
+}
+
+.hub-deg::after {
+  content: " links";
 }
 
 #drop-hint {
@@ -1361,7 +1552,7 @@ body.dragging #drop-hint {
   top: 0;
   right: 0;
   z-index: 50;
-  width: 420px;
+  width: 630px;
   min-width: 280px;
   max-width: 90vw;
   height: 100%;
@@ -1407,8 +1598,8 @@ body.dragging #drop-hint {
 }
 
 /* header actions (summarize/explain/quiz/map/close) read as real buttons:
-   outlined chips matching #tree-toggle, recessed one step darker than the
-   header. Still tight enough that title + all actions hold one line. */
+   outlined chips recessed one step darker than the header. Still tight
+   enough that title + all actions hold one line. */
 #note-panel > header .ghost {
   padding: 0.35rem 0.5rem;
   font-size: 10px;
@@ -1576,7 +1767,7 @@ body.sidebar-collapsed #dock {
 }
 
 body.note-open #dock {
-  right: var(--note-w, 420px);
+  right: var(--note-w, 630px);
 }
 
 #peek {

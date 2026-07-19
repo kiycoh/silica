@@ -18,35 +18,42 @@ import sys
 import pytest
 
 
-def test_export_graph_concepts_mode_inlines_bipartite(monkeypatch, tmp_path):
-    """F4: mode="concepts" merges the Concept-set bipartite expansion into the
-    exported dataset; default mode stays bit-identical (no concept nodes)."""
+def test_export_graph_unifies_wikilinks_and_similar(monkeypatch, tmp_path):
+    """One build carries BOTH the wikilink edges and the embedding k-NN overlay;
+    communities are Louvain on the WIKILINKS, and the SIMILAR filter row renders."""
     import silica.kernel.graph_export as ge
     import silica.ui.web.graph_view as gv
 
     monkeypatch.setattr(gv, "_vendored_lib_js", lambda: "/*JS*/")
     monkeypatch.setattr(ge, "build_graph_data", lambda folder="": (
         [{"id": "a.md", "label": "a", "type": "note", "group": -1,
-          "color": {"background": "#4d5575"}, "path": "a.md", "size": 16}],
-        [],
+          "color": {"background": "#4d5575"}, "path": "a.md", "size": 16},
+         {"id": "b.md", "label": "b", "type": "note", "group": -1,
+          "color": {"background": "#4d5575"}, "path": "b.md", "size": 16}],
+        [{"id": "e0", "from": "a.md", "to": "b.md", "type": "EXTRACTED",
+          "color": {"color": "#8f8f8f"}}],
     ))
-    monkeypatch.setattr(ge, "detect_communities", lambda nodes, edges: [])
-    monkeypatch.setattr(ge, "build_bipartite_data", lambda nodes, store, **kw: (
-        [{"id": "concept:ml", "label": "ml", "type": "concept", "df": 2,
-          "group": -1, "size": 10}],
-        [{"from": "a.md", "to": "concept:ml", "type": "CONCEPT"}],
-    ))
+    seen = {}
+
+    def fake_detect(nodes, edges, edge_type="EXTRACTED"):
+        # Louvain must see only the wikilink layer, never the k-NN overlay.
+        seen["edge_types"] = {e.get("type") for e in edges}
+        return []
+
+    monkeypatch.setattr(ge, "detect_communities", fake_detect)
+    monkeypatch.setattr(ge, "knn_edges", lambda nodes, k=6: [
+        {"id": "s0", "from": "a.md", "to": "b.md", "type": "SIMILAR",
+         "color": {"color": "#00a5e1", "opacity": 0.35}, "width": 2.0, "score": 0.9},
+    ])
 
     out = tmp_path / "g.html"
-    res = gv.export_graph(output_path=str(out), mode="concepts")
+    res = gv.export_graph(output_path=str(out))
     html = out.read_text(encoding="utf-8")
-    assert "concept:ml" in html
-    assert "CONCEPT" in html
-    assert res["concepts"] == 1
 
-    out2 = tmp_path / "g2.html"
-    gv.export_graph(output_path=str(out2))
-    assert "concept:ml" not in out2.read_text(encoding="utf-8")
+    assert "SIMILAR" in html and "EXTRACTED" in html   # both layers in one build
+    assert 'id="cb-similar"' in html                    # semantic-overlay filter row
+    assert seen["edge_types"] == {"EXTRACTED"}          # k-NN kept out of Louvain
+    assert res["edges"] == 1 and res["similar"] == 1
 
 
 def test_export_graph_inlines_vendored_bundle_no_cdn(monkeypatch, tmp_path):
@@ -61,6 +68,7 @@ def test_export_graph_inlines_vendored_bundle_no_cdn(monkeypatch, tmp_path):
         [],
     ))
     monkeypatch.setattr(ge, "detect_communities", lambda nodes, edges: [])
+    monkeypatch.setattr(ge, "knn_edges", lambda nodes, k=6: [])
 
     out = tmp_path / "g.html"
     res = gv.export_graph(output_path=str(out))
@@ -75,7 +83,7 @@ def test_export_graph_inlines_vendored_bundle_no_cdn(monkeypatch, tmp_path):
 def test_export_graph_has_density_forces_panel(monkeypatch, tmp_path):
     """Density-aware layout: the emitted HTML carries the auto-scaling baseline
     (FORCE_SCALE from avg degree) and the live Forces sliders that multiply it.
-    Same template serves both views, so one export covers links and concepts."""
+    Same template serves both views, so one export covers links and semantic."""
     import silica.kernel.graph_export as ge
     import silica.ui.web.graph_view as gv
 
@@ -86,6 +94,7 @@ def test_export_graph_has_density_forces_panel(monkeypatch, tmp_path):
         [],
     ))
     monkeypatch.setattr(ge, "detect_communities", lambda nodes, edges: [])
+    monkeypatch.setattr(ge, "knn_edges", lambda nodes, k=6: [])
 
     out = tmp_path / "g.html"
     gv.export_graph(output_path=str(out))
@@ -95,7 +104,7 @@ def test_export_graph_has_density_forces_panel(monkeypatch, tmp_path):
     for sid in ("sl-repel", "sl-dist", "sl-center"):
         assert f'id="{sid}"' in html        # the three live sliders
     assert "d3ReheatSimulation" in html     # sliders reheat, never rebuild
-    assert "silica-graph-forces-" in html   # per-view persistence key
+    assert "silica-graph-forces" in html    # slider persistence key
 
 
 def test_export_graph_raises_when_vendored_asset_missing(monkeypatch, tmp_path):

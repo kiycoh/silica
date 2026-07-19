@@ -42,20 +42,23 @@ class GraphExportArgs(BaseModel):
         default="Vault Graph",
         description="Title shown in the visualization header",
     )
-    mode: str = Field(
-        default="links",
-        description="'links' = wikilink graph; 'concepts' = adds the "
-                    "note->Concept-set bipartite expansion (hypergraph view)",
+    knn_k: int = Field(
+        default=6,
+        description="semantic overlay: nearest neighbours per note (SIMILAR edge density)",
     )
 
 @tool(GraphExportArgs, cls="composed")
 def silica_graph_export(output_path: str = "graph.html", folder: str = "",
-                        title: str = "Vault Graph", mode: str = "links") -> dict[str, Any]:
-    """Generates a self-contained interactive HTML graph of the vault's wikilink structure.
+                        title: str = "Vault Graph", knn_k: int = 6) -> dict[str, Any]:
+    """Generates a self-contained interactive HTML graph of the vault's structure.
 
-    Runs Louvain community detection to cluster notes by topic; ghost nodes mark
-    unresolved wikilinks. The output opens directly in any browser.
-    Visualization only — for an actionable structural audit use silica_vault_report.
+    One unified build: the wikilink graph (Louvain-clustered by topic; ghost
+    nodes mark unresolved links) with an embedding k-NN overlay (SIMILAR edges)
+    laid out on the same canvas. The overlay pulls link-orphans next to their
+    semantic neighbours and is toggleable in the viewer's HUD, so notes that
+    aren't explicitly linked still find their place. The output opens directly in
+    any browser. Visualization only — for an actionable structural audit use
+    silica_vault_report.
     """
     from silica.ui.web.graph_view import export_graph
 
@@ -68,7 +71,7 @@ def silica_graph_export(output_path: str = "graph.html", folder: str = "",
     except Exception as exc:
         logger.warning("silica_graph_export: cooccurrence refresh skipped (%s)", exc)
 
-    return export_graph(output_path=output_path, folder=folder, title=title, mode=mode)
+    return export_graph(output_path=output_path, folder=folder, title=title, knn_k=knn_k)
 
 
 class MindmapArgs(BaseModel):

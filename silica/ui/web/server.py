@@ -42,12 +42,11 @@ _busy = False  # one turn at a time; a second /chat is refused with 409
 current_session_id: str | None = None  # file backing the live conversation, if saved
 SESSIONS_DIR = Path.home() / ".silica" / "web_sessions"  # persisted chat transcripts
 
-# Direct-tool buttons the REPL handles console-side; the GUI routes them through
-# the agent (the tools are non-internal, so the agent may call them).
-# ponytail: bare command only — button-sent, ignores folder/--force args.
-_WEB_EXPANSIONS = {
-    "/embed": "Refresh the embedding index: call `silica_embed_refresh` and report how many notes were indexed.",
-    "/cooccur": "Refresh the co-occurrence index: call `silica_cooccurrence_refresh` and report how many notes were indexed.",
+# Direct-tool commands the REPL handles console-side; the GUI now runs them
+# synchronously without an LLM round-trip, yielding a fast Markdown response.
+_WEB_DIRECT_COMMANDS = {
+    "/embed", "/cooccur", "/status", "/undo", "/dedup", "/curate", 
+    "/refine", "/enrich", "/stale", "/impact", "/plans", "/path", "/contested", "/revert", "/review"
 }
 
 
@@ -166,7 +165,7 @@ def _agent_message_for(text: str) -> str | None:
     expanded = _expand_workflow_shortcut(text)
     if expanded is not None:
         return expanded or None
-    return _WEB_EXPANSIONS.get(text.split()[0].lower() if text.split() else "")
+    return None  # direct web commands are intercepted before this now
 
 
 import html as _html
@@ -532,6 +531,36 @@ async def run_turn(text: str) -> AsyncIterator[dict]:
 
     try:
         agent_msg = _agent_message_for(text)
+        
+        # Intercept direct REPL tools for synchronous, LLM-free execution
+        if text.strip().split() and text.strip().split()[0].lower() in _WEB_DIRECT_COMMANDS:
+            from silica.cli import _handle_direct_shortcut
+            from silica.ui.console import CONSOLE
+            
+            messages.append({"role": "user", "content": text, "origin": "cli"})
+            
+            def _run_direct():
+                with CONSOLE.capture() as capture:
+                    handled = _handle_direct_shortcut(text, messages)
+                return handled, capture.get()
+
+            handled, captured_out = await asyncio.to_thread(_run_direct)
+                
+            if handled:
+                out = captured_out.strip()
+                answer = f"```text\n{out}\n```" if out else "```text\n(done)\n```"
+                messages.append({"role": "assistant", "content": answer})
+                
+                # Yield a fake agent turn with the direct result
+                yield {
+                    "type": "done",
+                    "answer": answer,
+                    "html": _linkify(answer, note_resolver()),
+                    "context_tokens": CONFIG.context_tokens,
+                    "max_context_tokens": CONFIG.max_context_tokens,
+                }
+                return
+
         if agent_msg is None:
             yield {"type": "error", "error": f"'{text}' not available in this session"}
             return
@@ -629,6 +658,13 @@ def supported_types():
     return {"extensions": supported_nucleate_extensions()}
 
 
+@app.get("/commands")
+def list_commands():
+    """List of all REPL commands for the web GUI's fuzzy picker."""
+    from silica.ui.commands import COMMANDS
+    return [{"name": c.name, "summary": c.summary, "usage": c.usage} for c in COMMANDS]
+
+
 async def _stage_uploads(files: list[UploadFile]) -> tuple[list[str], list[str]]:
     """Write uploads to Inbox and mechanically stage them, mirroring the inline
     half of `/nucleate` (silica/cli.py): PDFs convert to markdown, code/notebooks
@@ -702,14 +738,14 @@ async def nucleate(files: list[UploadFile] = File(...), text: str = Form("")):
 
 
 @app.get("/graph")
-def graph(mode: str = "links"):
+def graph():
     import tempfile
 
     from silica.tools import TOOLS
 
     out = Path(tempfile.gettempdir()) / "silica_web_graph.html"  # regenerated each request
     try:
-        TOOLS["silica_graph_export"].run(output_path=str(out), folder="", mode=mode)
+        TOOLS["silica_graph_export"].run(output_path=str(out), folder="")
         return HTMLResponse(out.read_text(encoding="utf-8"))
     except Exception as exc:
         return HTMLResponse(f"<p style='font-family:monospace'>graph unavailable: {exc}</p>")
@@ -864,7 +900,29 @@ def vault_info():
         "clusters": len(communities),
         "unresolved": sum(1 for n in nodes if n.get("type") == "ghost"),
         "tree": render_tree(nodes),
+        "hubs": _top_hubs(nodes, edges),
     }
+
+
+def _top_hubs(nodes: list[dict], edges: list[dict], top_n: int = 24) -> list[dict]:
+    """Best-connected notes by resolved-link degree — the map view's landing
+    picker (a radial map must be rooted on one note, so 'most central' is the
+    sensible entry point). Ghost/unlinked nodes are skipped."""
+    from collections import Counter
+
+    deg: Counter = Counter()
+    for e in edges:
+        if e.get("type") == "EXTRACTED":
+            deg[e.get("from")] += 1
+            deg[e.get("to")] += 1
+    hubs = [
+        {"name": n.get("label") or (n.get("path") or "").rsplit("/", 1)[-1],
+         "path": n["path"], "degree": deg[n["id"]]}
+        for n in nodes
+        if n.get("type") != "ghost" and n.get("path") and deg[n["id"]] > 0
+    ]
+    hubs.sort(key=lambda h: (-h["degree"], h["name"].lower()))
+    return hubs[:top_n]
 
 
 @app.get("/messages")

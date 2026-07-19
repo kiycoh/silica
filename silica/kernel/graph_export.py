@@ -47,6 +47,7 @@ def _community_color(i: int) -> str:
 
 _EDGE_COLOR_EXTRACTED = "#8f8f8f"   # phosphor gray — resolved links
 _EDGE_COLOR_AMBIGUOUS = "#ff2a2a"   # hazard red — unresolved (warning semantics)
+_EDGE_COLOR_SIMILAR   = "#00a5e1"   # brand azure — embedding k-NN (semantic map)
 _NODE_DEFAULT_COLOR = {"background": "#5c5c5c", "border": "#8f8f8f",
                        "highlight": {"background": "#8f8f8f", "border": "#eaeaea"}}
 _NODE_GHOST_COLOR   = {"background": "#161616", "border": "#5c5c5c",
@@ -192,10 +193,65 @@ def build_graph_data(folder: str = "") -> tuple[list[dict], list[dict]]:
     return nodes, edges
 
 
-def detect_communities(nodes: list[dict], edges: list[dict]) -> list[Community]:
-    """Louvain community detection on EXTRACTED edges, in-place.
+def knn_edges(nodes: list[dict], k: int = 6) -> list[dict]:
+    """Cosine k-NN edges over the embed store — the "semantic map" edge set.
+
+    One undirected edge per note-pair to each note's k nearest neighbours by
+    embedding cosine. Rendered like links (schema-compatible) but typed SIMILAR;
+    the client force-layout positions notes by semantic proximity instead of by
+    explicit wikilinks. Notes without a stored vector simply get no edges.
+
+    Deterministic, offline (stored vectors + a single BLAS matvec per note, via
+    EmbedStore.cosine_top_k). Empty list when the embed index is absent.
+    """
+    from silica.kernel.cooccurrence import cooccur_key
+    from silica.kernel.embed import get_store
+
+    store = get_store()
+    if len(store) == 0:
+        return []
+
+    # Store keyspace is stripped-.md/posix/case-preserved (cooccur_key); node ids
+    # carry '.md'. Map both through cooccur_key so a store hit resolves to its node.
+    id_by_key = {cooccur_key(n["id"]): n["id"] for n in nodes if n.get("type") != "ghost"}
+
+    edges: list[dict] = []
+    seen: set[tuple[str, str]] = set()
+    idx = 0
+    for key, nid in id_by_key.items():
+        vec = store.get_vec(key)
+        if vec is None:
+            continue
+        for cand in store.cosine_top_k(vec, k=k, exclude={key}):
+            tid = id_by_key.get(cooccur_key(cand["path"]))
+            if tid is None or tid == nid:
+                continue
+            p = (nid, tid) if nid < tid else (tid, nid)
+            if p in seen:
+                continue
+            seen.add(p)
+            score = float(cand["score"])
+            edges.append({
+                "id":    f"s{idx}",
+                "from":  p[0],
+                "to":    p[1],
+                "type":  "SIMILAR",
+                "color": {"color": _EDGE_COLOR_SIMILAR, "opacity": 0.35},
+                "width": round(1.0 + 2.0 * score, 2),
+                "score": round(score, 4),
+            })
+            idx += 1
+    return edges
+
+
+def detect_communities(
+    nodes: list[dict], edges: list[dict], edge_type: str = "EXTRACTED"
+) -> list[Community]:
+    """Louvain community detection on `edge_type` edges, in-place.
 
     Assigns node["group"] (int) and node["color"]. Ghost nodes keep group == -1.
+    `edge_type` selects which edge kind carries the topology: EXTRACTED (wikilinks,
+    the default and every existing caller) or SIMILAR (the semantic-map k-NN).
 
     Returns a list of Community objects with topic labels where available.
     """
@@ -206,11 +262,11 @@ def detect_communities(nodes: list[dict], edges: list[dict]) -> list[Community]:
     G = nx.Graph()
     G.add_nodes_from(real_ids)
     for e in edges:
-        if e.get("type") == "EXTRACTED" and e["from"] in real_ids and e["to"] in real_ids:
+        if e.get("type") == edge_type and e["from"] in real_ids and e["to"] in real_ids:
             G.add_edge(e["from"], e["to"])
 
     if G.number_of_edges() == 0:
-        logger.info("graph_export: no EXTRACTED edges — community detection skipped.")
+        logger.info("graph_export: no %s edges — community detection skipped.", edge_type)
         return []
 
     try:
@@ -450,64 +506,6 @@ def cluster_hub_of(ctx: dict, path: str) -> str | None:
     if not hub:
         return None
     return hub.rsplit("/", 1)[-1].removesuffix(".md")
-
-
-def build_bipartite_data(nodes: list[dict], store,
-                         *, min_df: int = 2,
-                         df_cap: int | None = None) -> tuple[list[dict], list[dict]]:
-    """Note -> Concept-set incidence as a bipartite expansion (concepts view).
-
-    The unit is the CORRELATE Concept set (`correlate.topk_set`, the glossary
-    term), so the view explains the same arcs retrieval actually uses — never
-    the full stem contribution (length bias, documented rejected). `min_df`
-    drops degenerate single-note concepts; `df_cap` (default 5% of notes,
-    floor 3) suppresses hub concepts, mirroring the facade's IDF
-    hub-suppression. Ghost nodes and unindexed notes contribute nothing.
-    """
-    import math
-
-    from silica.kernel.correlate import topk_set
-
-    incidence: dict[str, list[str]] = {}
-    n_notes = 0
-    for n in nodes:
-        nid = n.get("id")
-        if not nid or n.get("type") == "ghost":
-            continue
-        n_notes += 1
-        for stem in topk_set(store.note_nodes(nid)):
-            incidence.setdefault(stem, []).append(nid)
-    if df_cap is None:
-        df_cap = max(3, math.ceil(0.05 * n_notes))
-    cnodes: list[dict] = []
-    cedges: list[dict] = []
-    for stem, paths in sorted(incidence.items()):
-        df = len(paths)
-        if df < min_df or df > df_cap:
-            continue
-        cnodes.append({"id": f"concept:{stem}", "label": store.node_label(stem),
-                       "type": "concept", "df": df, "group": -1,
-                       "size": round(6 + 2 * df, 2)})
-        cedges.extend({"from": p, "to": f"concept:{stem}", "type": "CONCEPT"}
-                      for p in paths)
-    return cnodes, cedges
-
-
-def bipartite_for_active_vault(nodes: list[dict]) -> tuple[list[dict], list[dict]]:
-    """Resolve the active vault's co-occurrence store and build the concepts
-    view expansion. Lives here (allowlisted store access) so the UI layer
-    never touches kernel.cooccurrence directly; an empty or absent index
-    degrades to ([], []) — the plain graph, never an error."""
-    from silica.config import CONFIG
-    from silica.kernel import cooccurrence
-
-    try:
-        lang = cooccurrence.frozen_lang(getattr(CONFIG, "vault_path", "") or "")
-        store = cooccurrence.get_cooccur_store(lang or "english")
-        return build_bipartite_data(nodes, store)
-    except Exception as e:
-        logger.warning("concepts view: bipartite build failed (%s)", e)
-        return [], []
 
 
 def canvas_metrics(nodes: list[dict], edges: list[dict], k: int = 400) -> tuple[dict[str, float], int]:

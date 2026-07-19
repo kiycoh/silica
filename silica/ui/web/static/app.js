@@ -315,11 +315,106 @@ $("#composer").addEventListener("submit", (e) => {
   if (staged.length) nucleateStaged(t); // files attached: upload + act on them together
   else send(t);
 });
-input.addEventListener("input", () => autoGrow(input));
+let allCommands = [];
+let filteredCommands = [];
+let cmdSelIdx = -1;
+
+fetch("/commands").then(r => r.json()).then(data => allCommands = data || []).catch(() => {});
+
+function renderCommands(q) {
+  const box = $("#commands");
+  if (!q.startsWith("/")) {
+    box.hidden = true;
+    return;
+  }
+  const search = q.substring(1).toLowerCase();
+  
+  filteredCommands = allCommands.map(cmd => {
+    let score = 0;
+    const name = cmd.name.substring(1).toLowerCase();
+    if (name === search) score = 10;
+    else if (name.startsWith(search)) score = 5;
+    else if (name.includes(search)) score = 3;
+    else {
+      let i = 0;
+      let matched = true;
+      for (const c of search) {
+        i = name.indexOf(c, i);
+        if (i === -1) { matched = false; break; }
+        i++;
+      }
+      if (matched && search.length > 0) score = 1;
+    }
+    return { cmd, score };
+  }).filter(x => x.score > 0).sort((a, b) => b.score - a.score || a.cmd.name.localeCompare(b.cmd.name)).map(x => x.cmd);
+
+  if (!filteredCommands.length) {
+    box.hidden = true;
+    return;
+  }
+  
+  cmdSelIdx = 0;
+  box.innerHTML = "";
+  filteredCommands.forEach((c, i) => {
+    const el = document.createElement("button");
+    el.className = "cmd-item" + (i === cmdSelIdx ? " sel" : "");
+    el.type = "button";
+    el.innerHTML = `<span class="cmd-name">${c.name}</span> <span class="cmd-summary">${escapeHtml(c.usage ? c.usage + " — " + c.summary : c.summary)}</span>`;
+    el.addEventListener("click", () => pickCommand(c));
+    box.appendChild(el);
+  });
+  box.hidden = false;
+}
+
+function updateCmdSel() {
+  const box = $("#commands");
+  Array.from(box.children).forEach((el, i) => {
+    el.classList.toggle("sel", i === cmdSelIdx);
+    if (i === cmdSelIdx) el.scrollIntoView({ block: "nearest" });
+  });
+}
+
+function pickCommand(c) {
+  input.value = c.name + (c.usage ? " " : "");
+  input.focus();
+  renderCommands(input.value);
+}
+
+input.addEventListener("input", () => {
+  autoGrow(input);
+  renderCommands(input.value);
+});
+
 input.addEventListener("keydown", (e) => {
+  const box = $("#commands");
+  if (!box.hidden && filteredCommands.length > 0) {
+    if (e.key === "ArrowDown") {
+      e.preventDefault();
+      cmdSelIdx = (cmdSelIdx + 1) % filteredCommands.length;
+      updateCmdSel();
+      return;
+    } else if (e.key === "ArrowUp") {
+      e.preventDefault();
+      cmdSelIdx = (cmdSelIdx - 1 + filteredCommands.length) % filteredCommands.length;
+      updateCmdSel();
+      return;
+    } else if (e.key === "Enter" && !e.shiftKey) {
+      e.preventDefault();
+      if (cmdSelIdx >= 0 && cmdSelIdx < filteredCommands.length) {
+        pickCommand(filteredCommands[cmdSelIdx]);
+      }
+      return;
+    } else if (e.key === "Escape") {
+      e.preventDefault();
+      box.hidden = true;
+      return;
+    }
+  }
+
   if (e.key === "Enter" && !e.shiftKey) {
     e.preventDefault();
     $("#composer").requestSubmit();
+    box.hidden = true;
   }
 });
 
@@ -343,19 +438,14 @@ dockInput.addEventListener("keydown", (e) => {
     $("#dock-composer").requestSubmit();
   }
 });
-$("#commands").addEventListener("click", (e) => {
-  const cmd = e.target.dataset.cmd;
-  if (!cmd) return;
-  if (cmd === "/find") { input.value = "/find "; input.focus(); return; } // needs a query, don't send bare
-  send(cmd);
-});
 stopBtn.addEventListener("click", () => fetch("/stop", { method: "POST" }));
 // Optimistic: clear the transcript at once (the reset itself is a cached-seed
 // copy server-side, but never make the click wait on the network).
-$("#new-chat").addEventListener("click", async () => {
+$("#brand-logo").addEventListener("click", async () => {
   if (streaming) return;
   log.innerHTML = "";
   await fetch("/reset", { method: "POST" });
+  document.querySelector('.tab[data-tab="chat"]').click(); // surface the loaded chat
   loadVault();
   loadSessions();
 });
@@ -379,43 +469,21 @@ async function loadVaultInfo() {
     $("#stat-clusters").textContent = data.clusters;
     $("#stat-unresolved").textContent = data.unresolved;
     $("#tree").innerHTML = data.tree || "";
+    renderMapPicker(data.hubs || []); // map landing: best-connected notes
+    buildNoteIndex();                 // explore note search reads the fresh tree
     applySidebarFilter();
-    syncTreeToggle();
   } catch (_) {}
 }
 
-// Collapse/expand-all: 0 folders open → expand all, otherwise collapse all.
-// Label + action both read live state, so it stays in sync when folders are
-// toggled by hand (the toggle event doesn't bubble, so listen in capture).
-function syncTreeToggle() {
-  const folders = $("#tree").querySelectorAll("details");
-  const open = Array.from(folders).some((d) => d.open);
-  const btn = $("#tree-toggle");
-  btn.hidden = folders.length === 0;
-  btn.textContent = open ? "collapse" : "expand";
-}
-$("#tree-toggle").addEventListener("click", (e) => {
-  e.preventDefault(); // don't toggle the Files section itself
-  const folders = $("#tree").querySelectorAll("details");
-  const expand = !Array.from(folders).some((d) => d.open);
-  folders.forEach((d) => (d.open = expand));
-  syncTreeToggle();
-});
-$("#tree").addEventListener("toggle", syncTreeToggle, true);
-
-// Tree click routing follows the active tab: map roots the radial map on the
-// note; chat/graph open the note drawer (which also mirrors focus into the
-// graph iframe via focusGraphNode).
+// Tree click routing follows the active view: in explore's map mode a click
+// roots the radial map on the note; otherwise it opens the note drawer (which
+// also mirrors focus into the graph iframe via focusGraphNode).
 $("#tree").addEventListener("click", (e) => {
   const leaf = e.target.closest(".tree-note");
   if (!leaf) return;
   const path = leaf.dataset.id;
-  if (activeTab === "map") {
-    $("#map-note").value = path;
-    $("#map-bar").requestSubmit();
-  } else {
-    openNote(path);
-  }
+  if (activeTab === "graph" && graphMode === "map") rootMap(path);
+  else openNote(path);
 });
 
 // One search box filters both the file tree and the chat history.
@@ -500,45 +568,186 @@ $(".tabs").addEventListener("click", (e) => {
   document.querySelectorAll(".tab").forEach((b) => b.classList.toggle("active", b.dataset.tab === tab));
   $("#view-chat").classList.toggle("active", tab === "chat");
   $("#view-graph").classList.toggle("active", tab === "graph");
-  $("#view-map").classList.toggle("active", tab === "map");
-  if (tab === "graph" && graphStale) {
-    $("#graph-loading").hidden = false;
-    $("#graph-frame").src = graphURL();
-    graphStale = false;
-  }
-  if (tab === "map") $("#map-note").focus();
+  if (tab === "graph") setGraphMode(graphMode); // load the active mode's content
 });
 
-// --- graph view mode: links | concepts | heat --------------------------------
-// links/concepts are the same 3d renderer (/graph?mode=…); heat is a separate
-// server-rendered matrix page (/heatmap) loaded into the same iframe.
-let graphMode = "links";
+// --- explore tab: network graph | concept heatmap | radial map ---------------
+// Three modes in one view, one toolbar. "graph" is one build (wikilink structure
+// + semantic k-NN overlay, layers toggled in the frame's HUD); "heat" is a
+// server-rendered co-occurrence matrix (/heatmap) — not a network graph, hence
+// its own label; "map" is a radial map rooted on one note (/map), which needs a
+// root, so it opens on a hub-picker landing. network + heatmap share one iframe
+// (src-swapped); map has its own so switching back doesn't rebuild the graph.
+let graphMode = "graph";
+let loadedMode = null;    // which page (/graph or /heatmap) #graph-frame holds
+let mapRootedPath = null; // note the radial map is rooted on, or null → picker
+
 function graphURL() {
-  return graphMode === "heat"
-    ? "/heatmap?t=" + Date.now()
-    : "/graph?mode=" + graphMode + "&t=" + Date.now();
+  return graphMode === "heat" ? "/heatmap?t=" + Date.now() : "/graph?t=" + Date.now();
 }
-$("#graph-bar").addEventListener("click", (e) => {
-  const m = e.target.dataset.gmode;
-  if (!m || m === graphMode) return;
+
+// Show one mode: toggle its controls + which frame/picker is visible, and load
+// the graph/heatmap page only when it isn't the one already sitting in the frame
+// (or the vault changed under us). Also the entry point when switching INTO the
+// explore tab, so it must be idempotent.
+function setGraphMode(m) {
   graphMode = m;
-  document.querySelectorAll("#graph-bar button").forEach((b) => b.classList.toggle("active", b.dataset.gmode === m));
-  $("#graph-loading").hidden = false;
-  $("#graph-frame").src = graphURL();
+  document.querySelectorAll(".gmode-tabs button").forEach((b) => b.classList.toggle("active", b.dataset.gmode === m));
+  const isMap = m === "map", isHeat = m === "heat";
+  $("#heat-controls").hidden = !isHeat;
+  $("#node-search-wrap").hidden = isHeat;       // note search: network + map only
+  $("#graph-frame").hidden = isMap;
+  $("#map-frame").hidden = !isMap || !mapRootedPath;
+  $("#map-picker").hidden = !isMap || !!mapRootedPath;
+  closeNodeResults();
+  if (isMap) {
+    $("#graph-loading").hidden = true;
+    if (mapRootedPath) $("#map-loading").hidden = true;
+    $("#node-search").focus();
+  } else {
+    $("#map-loading").hidden = true;
+    if (graphStale || loadedMode !== m) {
+      $("#graph-loading").hidden = false;
+      $("#graph-frame").src = graphURL();
+      loadedMode = m;
+      graphStale = false;
+    }
+  }
+}
+
+$("#graph-bar").addEventListener("click", (e) => {
+  const m = e.target.dataset.gmode; // only the mode buttons carry it; inputs don't
+  if (!m || m === graphMode) return;
+  setGraphMode(m);
 });
-// iframe finishes loading only once the server is done building the graph — drop the loader then
+
+// #graph-frame finishes loading only once the server is done building — drop the
+// loader then and re-sync the focus dim state after a (re)load.
 $("#graph-frame").addEventListener("load", () => {
   $("#graph-loading").hidden = true;
-  if (lastNotePath) focusGraphNode(lastNotePath); // re-sync dim state after a (re)load
-});
-
-// --- mindmap: root on a named note, render its precomputed positions ---------
-$("#map-bar").addEventListener("submit", (e) => {
-  e.preventDefault();
-  const note = $("#map-note").value.trim();
-  if (note) { $("#map-loading").hidden = false; $("#map-frame").src = "/map?note=" + encodeURIComponent(note) + "&t=" + Date.now(); }
+  if (lastNotePath) focusGraphNode(lastNotePath);
 });
 $("#map-frame").addEventListener("load", () => { $("#map-loading").hidden = true; });
+
+// heatmap mode: the concept focus fields drive /heatmap's own query params (its
+// in-page HUD hides when embedded, so these are the live controls).
+$("#heat-controls").addEventListener("submit", (e) => {
+  e.preventDefault();
+  const q = $("#heat-q").value.trim();
+  const n = $("#heat-n").value || 40;
+  const p = $("#heat-p").value || 0;
+  $("#graph-loading").hidden = false;
+  loadedMode = "heat";
+  $("#graph-frame").src = "/heatmap?q=" + encodeURIComponent(q) +
+    "&n=" + encodeURIComponent(n) + "&p=" + encodeURIComponent(p) + "&t=" + Date.now();
+});
+
+// --- map landing: root the radial map on a note; hub-picker until one is set --
+function rootMap(path) {
+  mapRootedPath = path;
+  if (graphMode !== "map") setGraphMode("map");
+  $("#map-picker").hidden = true;
+  $("#map-frame").hidden = false;
+  $("#map-loading").hidden = false;
+  $("#map-frame").src = "/map?note=" + encodeURIComponent(path) + "&t=" + Date.now();
+  closeNodeResults();
+}
+
+function renderMapPicker(hubs) {
+  const box = $("#map-picker-list");
+  box.innerHTML = "";
+  for (const h of hubs) {
+    const row = document.createElement("div");
+    row.className = "hub-row";
+    row.dataset.path = h.path;
+    row.innerHTML = '<span class="hub-name"></span><span class="hub-deg"></span>';
+    row.querySelector(".hub-name").textContent = h.name;
+    row.querySelector(".hub-deg").textContent = h.degree;
+    box.appendChild(row);
+  }
+}
+$("#map-picker-list").addEventListener("click", (e) => {
+  const row = e.target.closest(".hub-row");
+  if (row) rootMap(row.dataset.path);
+});
+
+// --- explore note search (network: fly the camera · map: root the map) --------
+// A fuzzy ranked picker over the vault's notes, indexed from the sidebar tree —
+// same title→prefix→substring→path ranking the graph viewer's own search uses.
+let noteIdx = [];      // [{name, path, ln, lp}]
+let nodeResults = [];  // current ranked matches
+let nodeSel = -1;
+
+function buildNoteIndex() {
+  noteIdx = Array.from($("#tree").querySelectorAll(".tree-note")).map((el) => {
+    const name = el.textContent, path = el.dataset.id || "";
+    return { name, path, ln: name.toLowerCase(), lp: path.toLowerCase() };
+  });
+}
+
+function scoreNote(n, q) {
+  if (n.ln === q) return 5;
+  if (n.ln.startsWith(q)) return 4;
+  if (n.ln.includes(q)) return 3;
+  if (n.lp.includes(q)) return 2;
+  return 0;
+}
+
+function renderNodeResults(raw) {
+  const q = raw.trim().toLowerCase();
+  const box = $("#node-results");
+  if (!q) { closeNodeResults(); return; }
+  nodeResults = noteIdx
+    .map((n) => [scoreNote(n, q), n])
+    .filter((p) => p[0] > 0)
+    .sort((a, b) => b[0] - a[0] || a[1].name.localeCompare(b[1].name))
+    .slice(0, 12)
+    .map((p) => p[1]);
+  nodeSel = nodeResults.length ? 0 : -1;
+  box.innerHTML = "";
+  nodeResults.forEach((n, i) => {
+    const el = document.createElement("div");
+    el.className = "node-result" + (i === nodeSel ? " sel" : "");
+    el.innerHTML = '<span class="nr-name"></span><span class="nr-path"></span>';
+    el.querySelector(".nr-name").textContent = n.name;
+    el.querySelector(".nr-path").textContent = n.path;
+    el.addEventListener("click", () => pickNote(n.path));
+    box.appendChild(el);
+  });
+  box.hidden = nodeResults.length === 0;
+}
+
+function closeNodeResults() {
+  $("#node-results").hidden = true;
+  nodeResults = [];
+  nodeSel = -1;
+}
+
+function moveNodeSel(d) {
+  nodeSel = (nodeSel + d + nodeResults.length) % nodeResults.length;
+  document.querySelectorAll("#node-results .node-result").forEach((el, i) => el.classList.toggle("sel", i === nodeSel));
+}
+
+function pickNote(path) {
+  if (graphMode === "map") {
+    rootMap(path);
+  } else { // network: locate the note and fly the graph camera to it
+    const f = $("#graph-frame");
+    if (f.contentWindow) f.contentWindow.postMessage({ type: "silica-goto-path", path }, "*");
+  }
+  $("#node-search").value = "";
+  closeNodeResults();
+}
+
+$("#node-search").addEventListener("input", (e) => renderNodeResults(e.target.value));
+$("#node-search").addEventListener("keydown", (e) => {
+  if (!nodeResults.length) return;
+  if (e.key === "ArrowDown") { e.preventDefault(); moveNodeSel(1); }
+  else if (e.key === "ArrowUp") { e.preventDefault(); moveNodeSel(-1); }
+  else if (e.key === "Enter") { e.preventDefault(); if (nodeSel >= 0) pickNote(nodeResults[nodeSel].path); }
+  else if (e.key === "Escape") { $("#node-search").value = ""; closeNodeResults(); }
+});
+
 
 // --- attachments: drop / "+" accumulate files as chips above the input; they
 // are NOT nucleated on drop. The next composer submit uploads them together with
@@ -668,8 +877,7 @@ async function openNote(path) {
     notePanel.setAttribute("aria-hidden", "false");
     document.body.classList.add("note-open"); // dock insets to the drawer's edge
     const btn = $("#note-last");
-    btn.textContent = data.title || path;
-    btn.hidden = false;
+    btn.querySelector("span").textContent = data.title || path;
   } catch (_) {}
 }
 function closeNote() {
@@ -699,17 +907,17 @@ $("#note-heatmap").addEventListener("toggle", function () {
   }
 });
 
-// "map" button in the drawer header — jump to the full map tab, rooted here.
-// Capture the path FIRST: the programmatic tab .click() bubbles to the
-// document outside-click handler, which closes the drawer and nulls
-// lastNotePath synchronously before the src line runs (else note=null).
+// "map" button in the drawer header — jump to explore's map mode, rooted here.
+// Capture the path FIRST: the programmatic tab .click() bubbles to the document
+// outside-click handler, which closes the drawer and nulls lastNotePath
+// synchronously before rootMap runs (else note=null). Pre-set graphMode so the
+// tab-enter goes straight to map instead of loading the graph first.
 $("#note-map").addEventListener("click", () => {
   const note = lastNotePath;
   if (!note) return;
-  document.querySelector('.tab[data-tab="map"]').click();
-  $("#map-note").value = note;
-  $("#map-loading").hidden = false;
-  $("#map-frame").src = "/map?note=" + encodeURIComponent(note) + "&t=" + Date.now();
+  graphMode = "map";
+  document.querySelector('.tab[data-tab="graph"]').click();
+  rootMap(note);
 });
 
 // summarize / explain / quiz — dispatch the reader slash-command for the open
@@ -815,6 +1023,9 @@ $("#note-resize").addEventListener("mousedown", (e) => {
 // (its own listener would immediately fight the close).
 document.addEventListener("click", (e) => {
   if (resizingNote) return;
+  // dismiss the explore note-search dropdown on any click outside it (a result
+  // click runs its own handler first, so pickNote still fires)
+  if (!e.target.closest("#node-search-wrap")) closeNodeResults();
   const link = e.target.closest(".note-link");
   if (link) { e.preventDefault(); openNote(link.dataset.path); return; }
   if (notePanel.classList.contains("open") &&

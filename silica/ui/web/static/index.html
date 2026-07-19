@@ -11,16 +11,17 @@
 
   <header>
     <button id="sidebar-toggle" class="ghost" title="toggle sidebar">&#9776;</button>
-    <div class="brand">SILICA</div>
+    <button class="brand" id="brand-logo">SILICA</button>
     <nav class="tabs">
       <button class="tab active" data-tab="chat">chat</button>
-      <button class="tab" data-tab="graph">graph</button>
-      <button class="tab" data-tab="map">map</button>
+      <button class="tab" data-tab="graph">explore</button>
     </nav>
     <div class="spacer"></div>
-    <button id="note-last" class="ghost" hidden title="reopen last note"></button>
     <div class="ctx-tokens" id="ctx-tokens" title="context window usage"></div>
-    <button id="new-chat" class="ghost">+ new chat</button>
+    <button id="note-last" class="ghost" title="reopen last note">
+      <svg width="13" height="13" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" style="flex-shrink:0; color:var(--accent);"><path d="M14 2H6a2 2 0 0 0-2 2v16a2 2 0 0 0 2 2h12a2 2 0 0 0 2-2V8z"></path><polyline points="14 2 14 8 20 8"></polyline><line x1="16" y1="13" x2="8" y2="13"></line><line x1="16" y1="17" x2="8" y2="17"></line><polyline points="10 9 9 9 8 9"></polyline></svg>
+      <span></span>
+    </button>
     <button id="stop" class="ghost" hidden>&#9632; stop</button>
   </header>
 
@@ -42,7 +43,7 @@
       </div>
 
       <details class="side-section" id="side-files" open>
-        <summary class="side-title">Files<button id="tree-toggle" type="button" title="expand/collapse all folders"></button></summary>
+        <summary class="side-title">Files</summary>
         <div id="tree"></div>
       </details>
 
@@ -97,15 +98,9 @@
                       ░░    ░░▒░▒░░░
                               ░░░░   ░░░
                                     ░▒▒░"></div>
-      <div class="commands" id="commands">
-        <button data-cmd="/report">/report</button>
-        <button data-cmd="/organize">/organize</button>
-        <button data-cmd="/cooccur">/cooccur</button>
-        <button data-cmd="/embed">/embed</button>
-        <button data-cmd="/find">/find</button>
-      </div>
       <div id="attachments" hidden></div>
       <form id="composer">
+        <div class="commands" id="commands" hidden></div>
         <input id="nucleate-file" type="file" multiple hidden />
         <button type="button" id="attach" title="attach files (pdf, code, notes…)">+</button>
         <textarea id="input" rows="1" placeholder="message silica…  (⏎ send, ⇧⏎ newline)"></textarea>
@@ -115,27 +110,54 @@
 
     <section id="view-graph" class="view">
       <div id="graph-bar">
-        <button type="button" class="active" data-gmode="links" title="wikilink graph">links</button>
-        <button type="button" data-gmode="concepts" title="note–concept bipartite expansion">concepts</button>
-        <button type="button" data-gmode="heat" title="concept co-occurrence matrix">heat</button>
+        <div class="gmode-tabs">
+          <button type="button" class="active" data-gmode="graph" title="wikilink structure + semantic k-NN overlay — toggle the layers in the HUD">network</button>
+          <button type="button" data-gmode="heat" title="concept co-occurrence matrix — not a network graph, a heat matrix">heatmap</button>
+          <button type="button" data-gmode="map" title="radial map rooted on one note">map</button>
+        </div>
+
+        <!-- heatmap mode: concept focus controls (the /heatmap page's own HUD
+             hides itself when embedded, so these are the only visible copy) -->
+        <form id="heat-controls" class="gbar-controls" hidden>
+          <label class="gbar-f gbar-grow"><span class="gbar-lbl">concept</span>
+            <input id="heat-q" type="text" placeholder="focus a concept…" autocomplete="off" /></label>
+          <label class="gbar-f gbar-narrow"><span class="gbar-lbl">max concepts</span>
+            <input id="heat-n" type="number" min="5" max="120" value="40" /></label>
+          <label class="gbar-f gbar-narrow"><span class="gbar-lbl">min wt %</span>
+            <input id="heat-p" type="number" min="0" max="95" value="0" /></label>
+          <button type="submit">focus</button>
+        </form>
+
+        <!-- network + map modes: fuzzy note search. Pick → fly the graph camera
+             (network) or root the radial map (map). Index built from the tree. -->
+        <div id="node-search-wrap" class="gbar-controls" hidden>
+          <label class="gbar-f gbar-grow"><span class="gbar-lbl">find a note</span>
+            <input id="node-search" type="text" placeholder="type a note name…" autocomplete="off" /></label>
+          <div id="node-results" hidden></div>
+        </div>
       </div>
+
       <div id="graph-loading" class="frame-loading" hidden>
         <div class="spinner"></div>
         <div>[ BUILDING GRAPH&hellip; LARGE VAULTS TAKE A MOMENT ]</div>
       </div>
-      <iframe id="graph-frame" title="vault graph"></iframe>
-    </section>
-
-    <section id="view-map" class="view">
-      <form id="map-bar">
-        <input id="map-note" type="text" placeholder="note to map — type a name, or pick one from FILES in the sidebar…" autocomplete="off" />
-        <button type="submit">map</button>
-      </form>
       <div id="map-loading" class="frame-loading" hidden>
         <div class="spinner"></div>
         <div>[ BUILDING MAP&hellip; ]</div>
       </div>
-      <iframe id="map-frame" title="radial map"></iframe>
+
+      <!-- map landing: a radial map needs a root, so before one is picked we
+           show the vault's best-connected notes as a launch pad -->
+      <div id="map-picker" hidden>
+        <div class="map-picker-inner">
+          <div class="map-picker-title">Pick a note to map</div>
+          <div class="map-picker-hint">its most-connected notes — or search above, or pick any note from FILES</div>
+          <div id="map-picker-list"></div>
+        </div>
+      </div>
+
+      <iframe id="graph-frame" title="vault graph"></iframe>
+      <iframe id="map-frame" title="radial map" hidden></iframe>
     </section>
   </main>
 
@@ -143,11 +165,21 @@
     <div id="note-resize" title="drag to resize"></div>
     <header>
       <span id="note-title"></span>
-      <button id="note-summarize" class="ghost" title="summarize this note in chat">summarize</button>
-      <button id="note-explain" class="ghost" title="explain this note's topic, grounded in the vault">explain</button>
-      <button id="note-quiz" class="ghost" title="quiz yourself on this note">quiz</button>
-      <button id="note-relate" class="ghost" title="map how this note relates to its neighbors">relate</button>
-      <button id="note-map" class="ghost" title="open in map view">map</button>
+      <button id="note-summarize" class="ghost" title="summarize this note in chat">
+        <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><line x1="21" y1="10" x2="3" y2="10"></line><line x1="21" y1="6" x2="3" y2="6"></line><line x1="21" y1="14" x2="3" y2="14"></line><line x1="21" y1="18" x2="3" y2="18"></line></svg>
+      </button>
+      <button id="note-explain" class="ghost" title="explain this note's topic, grounded in the vault">
+        <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><circle cx="12" cy="12" r="10"></circle><path d="M9.09 9a3 3 0 0 1 5.83 1c0 2-3 3-3 3"></path><line x1="12" y1="17" x2="12.01" y2="17"></line></svg>
+      </button>
+      <button id="note-quiz" class="ghost" title="quiz yourself on this note">
+        <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><circle cx="12" cy="12" r="10"></circle><circle cx="12" cy="12" r="6"></circle><circle cx="12" cy="12" r="2"></circle></svg>
+      </button>
+      <button id="note-relate" class="ghost" title="map how this note relates to its neighbors">
+        <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><circle cx="18" cy="5" r="3"></circle><circle cx="6" cy="12" r="3"></circle><circle cx="18" cy="19" r="3"></circle><line x1="8.59" y1="13.51" x2="15.42" y2="17.49"></line><line x1="15.41" y1="6.51" x2="8.59" y2="10.49"></line></svg>
+      </button>
+      <button id="note-map" class="ghost" title="open in map view">
+        <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><polygon points="3 6 9 3 15 6 21 3 21 18 15 21 9 18 3 21"></polygon><line x1="9" y1="3" x2="9" y2="18"></line><line x1="15" y1="6" x2="15" y2="21"></line></svg>
+      </button>
       <button id="note-close" class="ghost" title="close">&#10005;</button>
     </header>
     <details id="note-mini-map">

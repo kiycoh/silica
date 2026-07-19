@@ -460,8 +460,8 @@ def render_map_svg(mv: MapView, title: str = "Mindmap") -> str:
 <title>{html.escape(title)}</title>
 <style>
   :root{{
-    --void:#0A0A0A;--slate-2:#161616;--line:#262626;--line-2:#3A3A3A;
-    --frost:#EAEAEA;--ash:#8F8F8F;--ash-dim:#5C5C5C;--cyan:#EAEAEA;
+    --void:#0A0D14;--slate-2:#161B27;--line:#232A3A;--line-2:#38425A;
+    --frost:#E8ECF5;--ash:#8B95AC;--ash-dim:#566076;--cyan:#00A5E1;
     --mono:ui-monospace,"Cascadia Code","SF Mono",Menlo,Consolas,"DejaVu Sans Mono",monospace;
   }}
   *{{box-sizing:border-box}}
