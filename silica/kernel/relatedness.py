@@ -333,6 +333,7 @@ def _fuse(
     edges_rank: list[tuple[str, float]] | None = None,
     mem_embed_rank: list[tuple[str, str, float]] | None = None,
     mem_cooc_rank: list[tuple[str, float]] | None = None,
+    recall_rank: list[tuple[str, float]] | None = None,
 ) -> list[RelatedNote]:
     """RRF-fuse the per-leg rankings into RelatedNotes with provenance.
 
@@ -347,6 +348,10 @@ def _fuse(
     same fusion, key-namespaced under `_MEM` so a memory note never collides
     with (or masquerades as) an active-vault note. Its results come out with
     origin="memory" and `memory:`-prefixed evidence.
+
+    `recall_rank` (phase 1 of `improve`, LoCoMo eval-only): notes previously
+    confirmed helpful for this vault/conversation, best-first by weight. None
+    abstains — every caller except the LoCoMo runner leaves this unset.
     """
     rankings: list[list[tuple[str, float]]] = []
     embed_scores: dict[str, float] = {}
@@ -375,6 +380,11 @@ def _fuse(
         rankings.append(list(edges_rank))
         edge_scores = dict(edges_rank)
 
+    recall_scores: dict[str, float] = {}
+    if recall_rank is not None:
+        rankings.append(list(recall_rank))
+        recall_scores = dict(recall_rank)
+
     fused = _rrf_fuse(rankings)
     # Vault-root artifacts (log.md, GRAPH_REPORT.md) are excluded at index-build,
     # but a stale vector embedded before that exclusion outlives it: the store is
@@ -399,6 +409,9 @@ def _fuse(
             evidence.append(f"cooccur:w{int(round(cooc_weight))}")
         if edge_score is not None:
             evidence.append(f"edge:{edge_score:.2f}")
+        recall_weight = recall_scores.get(path)
+        if recall_weight is not None:
+            evidence.append(f"recall:{int(recall_weight)}")
         origin = "vault"
         if path.startswith(_MEM):
             origin = "memory"
@@ -507,6 +520,7 @@ def related_notes_for_query(
     scope: str | None = None,
     exclude: set[str] | None = None,
     expand: bool = False,
+    recall_rank: list[tuple[str, float]] | None = None,
 ) -> list[RelatedNote]:
     """Return the top-k notes related to a FRESH query (not an indexed note).
 
@@ -556,4 +570,5 @@ def related_notes_for_query(
         k=k,
         mem_embed_rank=mem_embed_rank,
         mem_cooc_rank=mem_cooc_rank,
+        recall_rank=recall_rank,
     )

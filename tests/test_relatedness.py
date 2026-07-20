@@ -378,3 +378,28 @@ def test_for_query_both_absent_returns_empty(tmp_path):
 # Boundary / robustness contract
 # ---------------------------------------------------------------------------
 
+# --- recall-outcome leg (phase 1 of `improve`) ------------------------------
+
+def test_fuse_recall_rank_none_is_identical_to_before():
+    from silica.kernel.relatedness import _fuse
+    embed = [("A", "A", 0.9), ("B", "B", 0.5)]
+    cooc = [("B", 4.0), ("C", 1.0)]
+    with_none = _fuse(embed, cooc, k=5, recall_rank=None)
+    without_param = _fuse(embed, cooc, k=5)
+    assert with_none == without_param
+
+
+def test_fuse_includes_recall_leg_in_evidence():
+    from silica.kernel.relatedness import _fuse
+    out = _fuse(None, None, recall_rank=[("B", 3.0)], k=5)
+    assert out and out[0].path == "B"
+    assert "recall:3" in out[0].evidence
+
+
+def test_fuse_recall_leg_proposes_notes_absent_from_semantic_legs():
+    from silica.kernel.relatedness import _fuse
+    embed = [("A", "A", 0.9), ("B", "B", 0.8)]
+    out_without = _fuse(embed, None, k=10)
+    assert "Z" not in [r.path for r in out_without]
+    out_with = _fuse(embed, None, k=10, recall_rank=[("Z", 3.0)])
+    assert "Z" in [r.path for r in out_with]
