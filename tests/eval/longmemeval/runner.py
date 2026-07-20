@@ -87,13 +87,26 @@ _JUDGE_PREFERENCE = (
     "all points in the rubric. The response is correct as long as it recalls and "
     "utilizes the user's personal information correctly."
 )
+# Deliberate deviation from LongMemEval's rubric (the rest of the block is
+# faithful). LoCoMo category-5 traps are false-premise/misattribution questions,
+# not pure "never mentioned" cases: the ideal answer flags the wrong premise and
+# names the trap fact to explain why it does not apply. The original phrasing's
+# context-blind "any other made-up information" clause made the judge score those
+# correct rejections as failures (it cannot verify the naming is correct, so it
+# defaults to no). Anchor the "no" strictly on asserting the incorrect answer AS
+# the answer; credit premise-correction and related context. Verify with
+# tests/eval/probe_abstention_rubric.py before trusting the number.
 _JUDGE_ABSTENTION = (
-    "I will give you an unanswerable question, an incorrect answer, and a response "
-    "from a model. Please answer yes if the model correctly identifies the question "
-    "as unanswerable. The model could say that the information is incomplete, or "
-    "some other information is given but the asked-for information is not. Answer no "
-    "if the model attempts to answer the question with the incorrect answer or any "
-    "other made-up information."
+    "I will give you an unanswerable question, an incorrect answer that a naive "
+    "model might give, and a response from a model. Answer yes if the model "
+    "correctly indicates that the specific information asked for is not available: "
+    "it may say the information is incomplete or missing, or that the question's "
+    "premise is mistaken (for example it attributes an action or event to the "
+    "wrong person) and so the asked-for information does not exist. Providing "
+    "correct related context, or naming the incorrect answer only to explain why "
+    "it does not apply, still counts as yes. Answer no only if the model asserts "
+    "the incorrect answer (or another unsupported claim) as if it were the answer "
+    "to the question."
 )
 
 
