@@ -38,11 +38,12 @@ def check_chat_model(config: SilicaConfig) -> CheckResult:
             "SILICA_MODEL is not set",
             "run `silica init`",
         )
-    if config.provider == "openrouter" and not os.getenv("OPENROUTER_API_KEY"):
+    key_env = {"openrouter": "OPENROUTER_API_KEY", "gemini": "GEMINI_API_KEY"}.get(config.provider)
+    if key_env and not os.getenv(key_env):
         return CheckResult(
             "chat model", "fail",
-            f"{config.model} — provider openrouter but OPENROUTER_API_KEY is unset",
-            "export OPENROUTER_API_KEY or run `silica init`",
+            f"{config.model} — provider {config.provider} but {key_env} is unset",
+            f"export {key_env} or run `silica init`",
         )
     return CheckResult("chat model", "ok", f"{config.model} via {config.provider}")
 

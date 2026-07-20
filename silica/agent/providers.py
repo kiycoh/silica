@@ -29,6 +29,13 @@ PROVIDER_PRESETS = {
     "openrouter": {
         "base_url": "https://openrouter.ai/api/v1",
         "api_key_env": "OPENROUTER_API_KEY"
+    },
+    # Google Gemini via its OpenAI-compatible endpoint (constrained-decoding /
+    # distiller path). The interactive loop routes gemini/* through litellm
+    # natively; both read the same GEMINI_API_KEY.
+    "gemini": {
+        "base_url": "https://generativelanguage.googleapis.com/v1beta/openai/",
+        "api_key_env": "GEMINI_API_KEY"
     }
 }
 

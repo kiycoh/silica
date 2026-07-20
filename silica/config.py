@@ -66,7 +66,7 @@ class SilicaConfig:
             return self._provider
         if self.model and "/" in self.model:
             prefix = self.model.split("/", 1)[0]
-            if prefix in ("openrouter", "lmstudio", "ollama"):
+            if prefix in ("openrouter", "lmstudio", "ollama", "gemini"):
                 return prefix
         return "lmstudio"
 
@@ -86,7 +86,7 @@ class SilicaConfig:
             return None
         if "/" in m:
             prefix = m.split("/", 1)[0]
-            if prefix in ("openrouter", "lmstudio", "ollama"):
+            if prefix in ("openrouter", "lmstudio", "ollama", "gemini"):
                 return prefix
         return "lmstudio"
 
@@ -360,6 +360,16 @@ class SilicaConfig:
     def verbose(self, v: bool) -> None:
         self.debug_logging = v
 
+    def __post_init__(self):
+        def _ensure_prefix(model: str | None, provider: str | None) -> str | None:
+            if model and provider and not model.startswith(f"{provider}/"):
+                if provider in ("openrouter", "gemini", "ollama", "lmstudio"):
+                    return f"{provider}/{model}"
+            return model
+
+        self.model = _ensure_prefix(self.model, self._provider) or self.model
+        self.worker_model = _ensure_prefix(self.worker_model, self.worker_provider) or self.worker_model
+        self.distill_escalation_model = _ensure_prefix(self.distill_escalation_model, self._distill_escalation_provider) or self.distill_escalation_model
 
 
 CONFIG = SilicaConfig()

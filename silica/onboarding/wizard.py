@@ -176,26 +176,28 @@ def _run_wizard_inner(
                     encoding="utf-8",
                 )
 
-    # 2. Chat provider — only the two PROVIDER_PRESETS entries exist.
+    # 2. Chat provider — the hosted PROVIDER_PRESETS entries that need a key.
     _section("model", "Chat provider", 2)
+    # (provider, key env var, default model, key prompt) for the two hosted presets.
+    _HOSTED = {
+        "openrouter": ("OPENROUTER_API_KEY", "openrouter/anthropic/claude-sonnet-5", "OpenRouter API key"),
+        "gemini": ("GEMINI_API_KEY", "gemini/gemini-2.5-flash", "Google Gemini API key"),
+    }
     provider = ""
-    while provider not in ("lmstudio", "openrouter"):
+    while provider not in ("lmstudio", *_HOSTED):
         provider = _ask(
             input_fn,
-            "Chat provider — lmstudio (local, no key) or openrouter (hosted)",
+            "Chat provider — lmstudio (local, no key), openrouter or gemini (hosted)",
             "lmstudio",
         )
     updates["SILICA_PROVIDER"] = provider
-    if provider == "openrouter":
-        model = _ask(input_fn, "Model id", "openrouter/anthropic/claude-sonnet-5")
+    if provider in _HOSTED:
+        key_env, default_model, key_prompt = _HOSTED[provider]
+        model = _ask(input_fn, "Model id", default_model)
         key = ""
         while not key:
-            key = _ask(
-                input_fn, "OpenRouter API key",
-                os.getenv("OPENROUTER_API_KEY", ""),
-                secret=True,
-            )
-        updates["OPENROUTER_API_KEY"] = key
+            key = _ask(input_fn, key_prompt, os.getenv(key_env, ""), secret=True)
+        updates[key_env] = key
     else:
         model = ""
         while not model:
