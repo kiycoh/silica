@@ -46,3 +46,73 @@ def fill_budget(
         else:
             dropped.append(u.path)
     return kept, Truncation(kept=len(kept), dropped=dropped)
+
+
+import re
+
+_ATX = re.compile(r"^(#{1,6})(\s)", re.MULTILINE)
+
+
+@dataclass
+class AssembledBlock:
+    """One rendered block: a squashed hub group, or a lone (breadcrumbed) seed."""
+    hub: str | None
+    breadcrumb: str
+    text: str
+    members: list[str] = field(default_factory=list)
+
+
+def relevel_headers(body: str, shift: int) -> str:
+    """Deepen every ATX heading by `shift` levels (capped at H6)."""
+    if shift <= 0:
+        return body
+
+    def _bump(m: re.Match) -> str:
+        level = min(len(m.group(1)) + shift, 6)
+        return "#" * level + m.group(2)
+
+    return _ATX.sub(_bump, body)
+
+
+def squash(
+    units: list[Unit],
+    hub_of: dict[str, str | None],
+    breadcrumb_of: dict[str, str],
+) -> list[AssembledBlock]:
+    """Group co-hub units into single ordered blocks; lone units stay separate.
+
+    A hub with >= 2 members: one block, "# Hub" header + each member re-leveled
+    one level down, in rank order, breadcrumbed. A lone member (or hub=None): its
+    own block, breadcrumb-prefixed, text unchanged (the degenerate case — spec
+    1.3 "a single seed means no squash").
+    """
+    by_hub: dict[str | None, list[Unit]] = {}
+    for u in sorted(units, key=lambda x: x.rank):
+        by_hub.setdefault(hub_of.get(u.path), []).append(u)
+
+    blocks: list[AssembledBlock] = []
+    for hub, members in by_hub.items():
+        if hub is not None and len(members) >= 2:
+            crumb = breadcrumb_of.get(members[0].path, hub)
+            parts = [f"# {hub}"]
+            for m in members:
+                parts.append(relevel_headers(m.text, 1))
+            blocks.append(AssembledBlock(
+                hub=hub,
+                breadcrumb=crumb,
+                text=(f"{crumb}\n\n" if crumb else "") + "\n\n".join(parts),
+                members=[m.path for m in members],
+            ))
+        else:
+            for m in members:
+                crumb = breadcrumb_of.get(m.path, "")
+                blocks.append(AssembledBlock(
+                    hub=None,
+                    breadcrumb=crumb,
+                    text=(f"{crumb}\n\n" if crumb else "") + m.text,
+                    members=[m.path],
+                ))
+    # Stable order: by the best (lowest) member rank so ranking intent survives.
+    rank_of = {u.path: u.rank for u in units}
+    blocks.sort(key=lambda b: min(rank_of[p] for p in b.members))
+    return blocks
