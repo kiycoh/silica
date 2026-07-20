@@ -209,7 +209,7 @@ def collect(vault: Path, *, tier: str = "cheap", verbose: bool = False) -> dict:
     # ponytail: analytics=True runs PageRank/betweenness; fine on the fixed
     # test vault, and that scan is the known ceiling if the vault ever grows.
     from silica.kernel.graph_report import compute_report
-    from silica.kernel.vault_energy import vault_energy
+    from tests.eval.vault_energy import vault_energy
 
     e = vault_energy(compute_report(
         analytics=True, with_cooccurrence=True, _cooccur_store_override=store,
