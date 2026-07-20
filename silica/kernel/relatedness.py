@@ -532,6 +532,11 @@ def related_notes_for_query(
     `memory_*_store` are the personal-memory lane (ADR-0019); see
     `related_notes`. The memory co-occurrence leg seeds from `query_text`
     using the MEMORY store's frozen language.
+
+    `recall_rank` (phase 1 of `improve`, LoCoMo eval-only): a best-first
+    `(key, weight)` list of notes previously confirmed helpful, folded into
+    fusion as an extra abstaining leg. None (the default) leaves every caller
+    but the LoCoMo runner unaffected.
     """
     blocked = set(exclude or ())
     pool = max(k * 3, _POOL_MIN)

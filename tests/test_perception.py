@@ -266,6 +266,7 @@ def test_use_recall_weights_false_ignores_populated_store(tmp_path, monkeypatch)
 
 
 def test_use_recall_weights_true_resurfaces_bumped_note(tmp_path, monkeypatch):
+    """Flag on: a bumped note surfaces with recall: evidence via the RRF leg."""
     _bind(tmp_path / "v", monkeypatch)
     _write("sessions/a.md", "2026-01-01", "short note about cooking pasta")
     _write("sessions/b.md", "2026-02-02", "short note about hiking trails")

@@ -82,6 +82,11 @@ def facade_retrieve(query: str, *, k: int, use_embedder: bool = True,
     no hits), or None when no leg is available at all (no query embedding AND
     no co-occurrence index in either lane). query_vec is surfaced for reuse —
     episodic fact recall scores against the same vector.
+
+    ``use_recall_weights`` (phase 1 of `improve`, LoCoMo eval-only): when True,
+    folds the vault's recall-outcome weights in as an extra fusion leg. False
+    (the default) leaves the retrieval path byte-identical for every other
+    caller.
     """
     from silica.agent.providers import get_embedder, get_reranker
     from silica.config import CONFIG
@@ -207,7 +212,9 @@ def perceive(query: str, *, now: str, k: int = DEFAULT_K,
     ``paths`` skips retrieval and assembles the given notes in order (the eval
     adapter's --stuff arm, or a caller that already holds a shortlist);
     unreadable paths are skipped and ranks stay dense. ``episodic_ttl_days``:
-    None = CONFIG default, 0 = never expire.
+    None = CONFIG default, 0 = never expire. ``use_recall_weights`` (phase 1 of
+    `improve`, eval-only, default off) is forwarded to `facade_retrieve`; it
+    has no effect when ``paths`` is set, since that bypasses retrieval.
     """
     from silica.kernel.rerank import best_windows
 
