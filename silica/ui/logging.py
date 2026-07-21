@@ -29,6 +29,21 @@ class LiveAwareStreamHandler(logging.StreamHandler):
     def stream(self, _value):
         pass  # always dynamic — ignore the value StreamHandler.__init__ assigns
 
+    def emit(self, record: logging.LogRecord) -> None:
+        # Serialize the stderr write against CONSOLE's stdout flush. Without this,
+        # a background-thread log (e.g. websocket keepalive) can land mid-way
+        # through a main-thread `CONSOLE.print` and split the LLM answer panel.
+        # rich holds `_lock` (an RLock) around its own buffer flush, so grabbing
+        # the same lock forces our line fully before or after — never inside.
+        # ponytail: couples to rich's private _lock; if rich drops it, fall back
+        # to unsynchronized emit (the pre-existing race), never crash logging.
+        lock = getattr(CONSOLE, "_lock", None)
+        if lock is None:
+            super().emit(record)
+            return
+        with lock:
+            super().emit(record)
+
 
 class HumanFriendlyFormatter(logging.Formatter):
     """Log formatter: timestamp + level icon in Rich markup, long messages truncated."""

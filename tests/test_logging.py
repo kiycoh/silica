@@ -1,8 +1,12 @@
 import logging
+import re
 import pytest
+
+_ANSI = re.compile(r"\x1b\[[0-9;]*m")
 from silica.ui.logging import (
     AnsiHumanFriendlyFormatter,
     HumanFriendlyFormatter,
+    LiveAwareStreamHandler,
 )
 
 def test_human_friendly_formatter_debug():
@@ -134,7 +138,8 @@ def test_ansi_formatter_consumes_markup_and_rewords():
     to stderr, which prints the literal rich tags.)
     """
     out = AnsiHumanFriendlyFormatter().format(_dedup_record())
-    assert "Restored note.md to version 2" in out
+    # Strip ANSI: repr-highlighting wraps the "2" in colour codes on a terminal.
+    assert "Restored note.md to version 2" in _ANSI.sub("", out)
     assert "[muted]" not in out and "[/muted]" not in out and "[/]" not in out
 
 
@@ -187,6 +192,30 @@ def test_ansi_formatter_applies_repr_highlighting(monkeypatch):
     # ReprHighlighter colours the quoted string green (32) and numbers cyan (36);
     # without it only the dim timestamp/icon spans exist.
     assert "\x1b[32m" in out and "\x1b[1;36m" in out
+
+
+def test_bg_handler_serializes_with_console_lock():
+    """A background emit must block while the main thread holds CONSOLE's lock,
+    so a keepalive line can't split a main-thread CONSOLE.print (the LLM answer).
+    """
+    import threading
+    from silica.ui.console import CONSOLE
+
+    handler = LiveAwareStreamHandler()
+    handler.setFormatter(logging.Formatter("%(message)s"))
+    emitted = threading.Event()
+
+    def _bg():
+        handler.emit(logging.LogRecord("t", logging.INFO, "", 0, "hi", (), None))
+        emitted.set()
+
+    with CONSOLE._lock:  # stand in for a main-thread print holding the flush lock
+        t = threading.Thread(target=_bg)
+        t.start()
+        # While we hold the lock the emit is blocked — it must not complete.
+        assert not emitted.wait(0.25)
+    t.join(timeout=1)
+    assert emitted.is_set()  # released → emit proceeds
 
 
 def test_no_root_handler_caches_real_stderr(monkeypatch):

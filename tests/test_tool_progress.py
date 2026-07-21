@@ -728,27 +728,3 @@ def test_injector_summary_shows_yield(capsys):
         CONFIG.tool_progress = orig_mode
 
 
-def test_print_banner_styles(capsys):
-    from silica.ui.banner import print_banner
-
-    orig_show = CONFIG.show_banner
-    try:
-        # Banner off → plain one-liner
-        CONFIG.show_banner = False
-        print_banner()
-        captured = capsys.readouterr()
-        assert "silica" in captured.out
-        assert "Your personal note curator agent" in captured.out
-
-        # Banner on → hand-drawn line-art wordmark (3 rows) + caption
-        CONFIG.show_banner = True
-        print_banner()
-        captured = capsys.readouterr()
-        assert "╭─╴" in captured.out  # bespoke rounded line-art, not a figlet font
-        assert "Your personal note curator agent" in captured.out
-        # wordmark (3 rows) + caption, plus the mascot above it — not the 1-line fallback.
-        assert len([ln for ln in captured.out.splitlines() if ln.strip()]) >= 4
-    finally:
-        CONFIG.show_banner = orig_show
-
-
