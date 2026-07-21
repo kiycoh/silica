@@ -651,6 +651,12 @@ class InjectorFSM(BaseFSM[InjectorState]):
                 get_cooccur_store().save()
             except Exception as e:
                 logger.debug("flush: cooccur index save skipped (%s)", e)
+        if ctx.get("_lexical_dirty"):
+            try:
+                from silica.kernel.lexical import get_lexical_store
+                get_lexical_store().save()
+            except Exception as e:
+                logger.debug("flush: lexical index save skipped (%s)", e)
 
     def _on_sequence_end(self) -> None:
         self._eval_loop_or_done()

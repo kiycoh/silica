@@ -332,6 +332,27 @@ def handle_write(fsm: "InjectorFSM") -> None:
         )
         if _n_cooccur:
             fsm.context["_cooccur_dirty"] = True
+
+        # Best-effort incremental lexical (BM25) refresh — opt-in by index
+        # presence, so vaults without a lexical index stay byte-identical.
+        try:
+            from silica.kernel import paths as _paths
+            if (_paths.index_dir() / "lexical.json").is_file():
+                from silica.kernel.lexical import get_lexical_store
+                lex = get_lexical_store()
+                for op in ops:
+                    path = op.touched_ref()
+                    if op.op not in (OpType.write, OpType.patch) or not path:
+                        continue
+                    if path not in committed_paths:
+                        continue
+                    idx_path = path.removesuffix(".md")
+                    stem = os.path.splitext(os.path.basename(path))[0]
+                    body = orch.DRIVER.read_note(path).content or ""
+                    lex.upsert(idx_path, stem, body)
+                fsm.context["_lexical_dirty"] = True
+        except Exception as _le:
+            logger.debug("WRITE: lexical refresh skipped (%s)", _le)
     except Exception as _me:
         logger.debug("WRITE: manifest update failed (non-fatal): %s", _me)
 
