@@ -27,7 +27,6 @@ from silica.kernel.ops import OpType
 
 
 def handle_lint(fsm: "InjectorFSM") -> None:
-    idx = fsm._current_chunk_idx
     fsm._progress_note(fsm._chunk_task_id("lint"), "lint", "running")
     try:
         ops = orch.load_ops(fsm._chunk_ctx["ops_path"])
@@ -83,19 +82,27 @@ def handle_lint(fsm: "InjectorFSM") -> None:
             from silica.kernel.graph_diff import check_graph_regression
             
             created_paths = fsm._txn.created_paths if fsm._txn else []
-            deferred_stems = set(fsm._chunk_ctx.get("deferred_stems", []))
+            # Fold only chunks appended since the last LINT into the run-scoped stem
+            # union (B8: was an O(chunks × concepts) rescan on every LINT). A chunk
+            # collision-collapses after it is first folded, but its pre-collapse stems
+            # only widen the allowed set — never manufacture a false regression.
             try:
                 from silica.kernel.templates import slugify
-                for chunk in getattr(fsm, "_chunks", []):
+                chunks = getattr(fsm, "_chunks", [])
+                for chunk in chunks[fsm._run_concept_stems_n:]:
                     for batch in chunk.get("batches", []):
                         for concept in batch.get("concepts", []):
                             name = concept.get("name")
                             if name:
                                 stem = os.path.splitext(os.path.basename(name))[0].lower()
-                                deferred_stems.add(stem)
-                                deferred_stems.add(slugify(stem))
+                                fsm._run_concept_stems.add(stem)
+                                fsm._run_concept_stems.add(slugify(stem))
+                fsm._run_concept_stems_n = len(chunks)
             except Exception as _ce:
                 logger.debug("Failed to extract run concept stems for graph check: %s", _ce)
+
+            deferred_stems = set(fsm._chunk_ctx.get("deferred_stems", []))
+            deferred_stems |= fsm._run_concept_stems
 
             success, errors = check_graph_regression(
                 fsm._pre_graph, post_graph, created_paths, frozenset(deferred_stems)

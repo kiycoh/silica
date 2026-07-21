@@ -312,6 +312,11 @@ class InjectorFSM(BaseFSM[InjectorState]):
 
         # Iterative chunk processing state fields
         self._chunks: list[dict] = []
+        # Monotonic union of every chunk's concept stems, for the LINT graph-diff
+        # gate. Folded incrementally (only chunks appended since the last LINT) to
+        # avoid an O(chunks × concepts) rescan on every chunk's LINT.
+        self._run_concept_stems: set[str] = set()
+        self._run_concept_stems_n: int = 0
         self._current_chunk_idx: int = 0
         # Per-file pipeline: setup states (RECON→SALIENCE) run one file at a
         # time; the FSM loops back to RECON for the next file after the current
@@ -557,8 +562,9 @@ class InjectorFSM(BaseFSM[InjectorState]):
         # Compute per-file canonicals and content hashes; track committed status
         self._file_canonicals = []
         self._file_content_hashes = []
-        all_committed = True
-        for inbox_file in self.inbox_files:
+        # One is_committed() lookup per file: accumulate the committed indices here
+        # and derive all_committed from the set (was a second pass of lookups).
+        for i, inbox_file in enumerate(self.inbox_files):
             canonical = self._source_canonical_for(inbox_file)
             self._file_canonicals.append(canonical)
             try:
@@ -571,14 +577,10 @@ class InjectorFSM(BaseFSM[InjectorState]):
                 except OSError:
                     content_hash = ""
             self._file_content_hashes.append(content_hash)
-            if not ledger.is_committed(canonical, content_hash=content_hash):
-                all_committed = False
+            if ledger.is_committed(canonical, content_hash=content_hash):
+                self._committed_file_indices.add(i)
 
-        # Build set of already-committed file indices so chunk-advance logic can skip them
-        self._committed_file_indices = {
-            i for i, (canonical, h) in enumerate(zip(self._file_canonicals, self._file_content_hashes))
-            if ledger.is_committed(canonical, content_hash=h)
-        }
+        all_committed = len(self._committed_file_indices) == len(self.inbox_files)
 
         # Compat keys for first file (used by single-file code paths and RECON)
         self.context["source_canonical"] = self._file_canonicals[0] if self._file_canonicals else ""
@@ -659,6 +661,9 @@ class InjectorFSM(BaseFSM[InjectorState]):
                 logger.debug("flush: lexical index save skipped (%s)", e)
 
     def _on_sequence_end(self) -> None:
+        # ponytail: defensive. BaseFSM only calls this when the last sequence phase
+        # has no "cleanup" successor; injector.yaml always ends in cleanup, so this
+        # is dead for the shipped recipe — kept as the fallback if an overlay drops it.
         self._eval_loop_or_done()
 
     def _on_cleanup_done(self) -> None:
@@ -826,6 +831,10 @@ class InjectorFSM(BaseFSM[InjectorState]):
         self.context.pop("chunk", None)
         self._txn = None
         self._pre_graph = None
+        # WRITE appends this chunk's op inverses to _run_inverses; CLEANUP clears it.
+        # A rolled-back chunk never reaches CLEANUP, so drop its now-stale inverses
+        # here or the next chunk's CLEANUP journals them (corrupting /revert replay).
+        self._run_inverses.clear()
 
         # Record that at least one chunk failed (used by cleanup to set "partial")
         self.context["has_partial_failure"] = True
@@ -860,6 +869,9 @@ class InjectorFSM(BaseFSM[InjectorState]):
             fi, _ = self._chunk_flat_to_fi_ci.get(idx, (0, 0))
             if fi not in committed:
                 return idx
+            # ponytail: defensive. Committed files are pruned before PAYLOAD (the sole
+            # writer of _chunks), so their chunks never enter this list and this skip
+            # rarely fires — kept as a guard against that invariant drifting.
             logger.info("Skipping already-committed file %d chunk %d", fi, idx)
             idx += 1
         return idx
