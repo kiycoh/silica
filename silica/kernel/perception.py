@@ -70,7 +70,8 @@ class Perception:
 
 
 def facade_retrieve(query: str, *, k: int, use_embedder: bool = True,
-                    use_rerank: bool = True, use_recall_weights: bool = False):
+                    use_rerank: bool = True, use_recall_weights: bool = False,
+                    use_lexical: bool = False):
     """Fused first-stage retrieval + cross-encoder rerank for a fresh text query.
 
     The single retrieval path shared by the chat tools
@@ -87,6 +88,10 @@ def facade_retrieve(query: str, *, k: int, use_embedder: bool = True,
     folds the vault's recall-outcome weights in as an extra fusion leg. False
     (the default) leaves the retrieval path byte-identical for every other
     caller.
+
+    ``use_lexical`` (default off, opt-in like ``use_recall_weights``): when
+    True, folds the hand-written BM25/fuzzy leg into fusion as an extra leg.
+    Abstains when the lexical index is absent or empty.
     """
     from silica.agent.providers import get_embedder, get_reranker
     from silica.config import CONFIG
@@ -121,6 +126,12 @@ def facade_retrieve(query: str, *, k: int, use_embedder: bool = True,
 
         recall_rank = ranking()
 
+    lexical_rank = None
+    if use_lexical:
+        from silica.kernel.lexical import get_lexical_store
+
+        lexical_rank = get_lexical_store().rank(query, k=k) or None
+
     results = related_notes_for_query(
         query_vec=query_vec,
         query_text=query,
@@ -130,6 +141,7 @@ def facade_retrieve(query: str, *, k: int, use_embedder: bool = True,
         memory_cooccur_store=mem_cooccur,
         k=k,
         recall_rank=recall_rank,
+        lexical_rank=lexical_rank,
     ) or []
     reranker = get_reranker(CONFIG) if use_rerank else None
     if reranker:

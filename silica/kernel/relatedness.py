@@ -334,6 +334,7 @@ def _fuse(
     mem_embed_rank: list[tuple[str, str, float]] | None = None,
     mem_cooc_rank: list[tuple[str, float]] | None = None,
     recall_rank: list[tuple[str, float]] | None = None,
+    lexical_rank: list[tuple[str, float]] | None = None,
 ) -> list[RelatedNote]:
     """RRF-fuse the per-leg rankings into RelatedNotes with provenance.
 
@@ -352,6 +353,10 @@ def _fuse(
     `recall_rank` (phase 1 of `improve`, LoCoMo eval-only): notes previously
     confirmed helpful for this vault/conversation, best-first by weight. None
     abstains — every caller except the LoCoMo runner leaves this unset.
+
+    `lexical_rank`: the hand-written BM25/fuzzy leg (opt-in via `use_lexical`
+    on `facade_retrieve`), vault-only. None abstains — every caller except
+    that opt-in path leaves this unset.
     """
     rankings: list[list[tuple[str, float]]] = []
     embed_scores: dict[str, float] = {}
@@ -385,6 +390,11 @@ def _fuse(
         rankings.append(list(recall_rank))
         recall_scores = dict(recall_rank)
 
+    lexical_scores: dict[str, float] = {}
+    if lexical_rank is not None:
+        rankings.append(list(lexical_rank))
+        lexical_scores = dict(lexical_rank)
+
     fused = _rrf_fuse(rankings)
     # Vault-root artifacts (log.md, GRAPH_REPORT.md) are excluded at index-build,
     # but a stale vector embedded before that exclusion outlives it: the store is
@@ -412,6 +422,9 @@ def _fuse(
         recall_weight = recall_scores.get(path)
         if recall_weight is not None:
             evidence.append(f"recall:{int(recall_weight)}")
+        lexical_weight = lexical_scores.get(path)
+        if lexical_weight is not None:
+            evidence.append(f"lex:{lexical_weight:.2f}")
         origin = "vault"
         if path.startswith(_MEM):
             origin = "memory"
@@ -521,6 +534,7 @@ def related_notes_for_query(
     exclude: set[str] | None = None,
     expand: bool = False,
     recall_rank: list[tuple[str, float]] | None = None,
+    lexical_rank: list[tuple[str, float]] | None = None,
 ) -> list[RelatedNote]:
     """Return the top-k notes related to a FRESH query (not an indexed note).
 
@@ -537,6 +551,10 @@ def related_notes_for_query(
     `(key, weight)` list of notes previously confirmed helpful, folded into
     fusion as an extra abstaining leg. None (the default) leaves every caller
     but the LoCoMo runner unaffected.
+
+    `lexical_rank`: the hand-written BM25/fuzzy leg (opt-in via `use_lexical`
+    on `facade_retrieve`), folded into fusion as an extra abstaining leg. None
+    (the default) leaves every caller but that opt-in path unaffected.
     """
     blocked = set(exclude or ())
     pool = max(k * 3, _POOL_MIN)
@@ -576,4 +594,5 @@ def related_notes_for_query(
         mem_embed_rank=mem_embed_rank,
         mem_cooc_rank=mem_cooc_rank,
         recall_rank=recall_rank,
+        lexical_rank=lexical_rank,
     )
