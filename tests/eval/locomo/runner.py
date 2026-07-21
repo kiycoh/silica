@@ -805,19 +805,23 @@ def _run_conversations(data, rows, doc, *, run_root, model, judge_model, k,
         # only variable that differs from the R baseline (--timeline off).
         timeline_seed = (build_timeline_seed(vault)
                          if timeline and answer_mode == "agent" else None)
-        for qi, qa in qa_list:
-            row = run_question(qa, f"{sample_id}_q{qi}", index, model=model,
-                               judge_model=judge_model, k=k, stuff=stuff,
-                               use_embedder=use_embedder, use_rerank=use_rerank,
-                               retrieval_only=retrieval_only,
-                               distill=distill or ingest_mode == "fsm",
-                               episodic_ttl=episodic_ttl, flat_context=flat_context,
-                               facts_last=facts_last, windows=windows,
-                               window_chars=window_chars, now=now, speakers=speakers,
-                               answer_mode=answer_mode, session_map=session_map,
-                               run_sessions=run_sessions, n_sessions=n_sessions,
-                               timeline_seed=timeline_seed, improve=improve,
-                               assemble=assemble, lexical=lexical)
+        def _answer_one(qi, qa):
+            return run_question(qa, f"{sample_id}_q{qi}", index, model=model,
+                                judge_model=judge_model, k=k, stuff=stuff,
+                                use_embedder=use_embedder, use_rerank=use_rerank,
+                                retrieval_only=retrieval_only,
+                                distill=distill or ingest_mode == "fsm",
+                                episodic_ttl=episodic_ttl, flat_context=flat_context,
+                                facts_last=facts_last, windows=windows,
+                                window_chars=window_chars, now=now, speakers=speakers,
+                                answer_mode=answer_mode, session_map=session_map,
+                                run_sessions=run_sessions, n_sessions=n_sessions,
+                                timeline_seed=timeline_seed, improve=improve,
+                                assemble=assemble, lexical=lexical)
+
+        def _record(row):
+            # Main-thread only (called from the serial loop / as_completed drain),
+            # so rows/doc need no lock.
             rows.append(row)
             if verbose:
                 mark = (f"sr={row['session_recall']}" if retrieval_only
@@ -832,6 +836,29 @@ def _run_conversations(data, rows, doc, *, run_root, model, judge_model, k,
                 doc["metrics"] = metrics(rows)
                 out.write_text(json.dumps(doc, indent=2, ensure_ascii=False) + "\n",
                                encoding="utf-8")
+
+        # Questions are independent (run_question is read-only on the bound vault +
+        # isolated remote answer/judge calls), so answer them concurrently — the
+        # dominant cost is serial remote-LLM latency, not compute. --improve is the
+        # one exception: its recall-weight bump feeds the next question's retrieval,
+        # so it must stay serial. LOCOMO_WORKERS=1 forces serial for either.
+        workers = 1 if improve else int(os.getenv("LOCOMO_WORKERS", "8"))
+        start = len(rows)
+        if workers <= 1:
+            for qi, qa in qa_list:
+                _record(_answer_one(qi, qa))
+        else:
+            from concurrent.futures import ThreadPoolExecutor, as_completed
+            with ThreadPoolExecutor(max_workers=workers) as ex:
+                futs = [ex.submit(_answer_one, qi, qa) for qi, qa in qa_list]
+                for fut in as_completed(futs):
+                    _record(fut.result())
+        # as_completed drains in completion order; restore input (question) order
+        # so the output json is deterministic. Intermediate checkpoints stay in
+        # completion order (crash snapshots, marked partial) — only the final
+        # in-memory doc, which main() writes, needs to be stable.
+        rows[start:] = sorted(rows[start:],
+                              key=lambda r: int(r["question_id"].rsplit("_q", 1)[1]))
         if digest_before is not None and _vault_digest(vault) != digest_before:
             # Read-only invariant: belt beyond the toolset braces.
             logger.error("vault %s mutated during agent answering — RUN TAINTED",

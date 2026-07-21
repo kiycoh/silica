@@ -153,14 +153,15 @@ def test_facade_pipeline_session_recall(tmp_path, monkeypatch):
     doc = runner.run([_conv_inst()], tmp_path / "run", model="stub",
                      judge_model="stub", k=1, stuff=False, use_embedder=False,
                      use_rerank=False)
-    row = doc["questions"][0]
+    by_type = {r["question_type"]: r for r in doc["questions"]}
+    row = by_type["single-hop"]
     # k=1 on 3 sessions: only the shared rare token can rank the gold first.
     assert row["session_recall"] == 1.0
     assert row["correct"] is True
     assert row["gold_in_context"] is True
     assert doc["metrics"]["overall_accuracy"] == 1.0
     # Adversarial row: no evidence, recall undefined, not a 0.0 miss.
-    assert doc["questions"][1]["session_recall"] is None
+    assert by_type["adversarial"]["session_recall"] is None
 
 
 def test_categories_filter_and_limit(tmp_path, monkeypatch):
