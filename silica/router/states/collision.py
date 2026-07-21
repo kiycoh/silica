@@ -120,7 +120,7 @@ def _deferred_op_dict(fsm: "InjectorFSM", d: dict, reason_prefix: str) -> dict:
 
     concept = d["concept"]
     name = concept.get("name", "") if isinstance(concept, dict) else str(concept)
-    excerpt = concept.get("excerpt", "") if isinstance(concept, dict) else ""
+    excerpt = concept.get("inbox_excerpt", "") if isinstance(concept, dict) else ""
     return {
         "op": "write",
         "heading": name,
@@ -152,7 +152,7 @@ def _embedder_free_near_dups(
         inbox_file = batch.get("inbox_file", "")
         for concept in batch.get("concepts", []):
             if isinstance(concept, dict):
-                name, excerpt = concept.get("name", ""), concept.get("excerpt", "")
+                name, excerpt = concept.get("name", ""), concept.get("inbox_excerpt", "")
             else:
                 name, excerpt = str(concept), ""
             query = f"{name}\n{excerpt}".strip()
@@ -194,7 +194,7 @@ def _collapse_near_dup_concepts(chunk: dict, *, is_near_dup) -> dict:
     for bi, batch in enumerate(batches):
         for c in batch.get("concepts", []):
             name = c.get("name", "") if isinstance(c, dict) else str(c)
-            excerpt = c.get("excerpt", "") if isinstance(c, dict) else ""
+            excerpt = c.get("inbox_excerpt", "") if isinstance(c, dict) else ""
             entries.append([bi, c, name, excerpt])
 
     n = len(entries)
@@ -426,7 +426,7 @@ def collision_pass(fsm: "InjectorFSM", idx: int) -> None:
 
     def _concept_embed_text(concept: Any) -> str:
         if isinstance(concept, dict):
-            return _note_text(concept.get("name", ""), concept.get("excerpt", ""))
+            return _note_text(concept.get("name", ""), concept.get("inbox_excerpt", ""))
         return _note_text(str(concept), "")
 
     all_texts: list[str] = []
@@ -496,7 +496,7 @@ def collision_pass(fsm: "InjectorFSM", idx: int) -> None:
                 continue
             try:
                 from silica.kernel.relatedness import related_notes_for_query
-                excerpt_text = concept.get("excerpt", "") if isinstance(concept, dict) else ""
+                excerpt_text = concept.get("inbox_excerpt", "") if isinstance(concept, dict) else ""
                 related = related_notes_for_query(
                     query_vec=vec,
                     query_text=f"{concept_text}\n{excerpt_text}".strip(),
@@ -562,7 +562,7 @@ def collision_pass(fsm: "InjectorFSM", idx: int) -> None:
                         "path": existing_path,
                         "heading": concept_text,
                         "source_basename": os.path.basename(inbox_file),
-                        "snippet": concept.get("excerpt", "") if isinstance(concept, dict) else "",
+                        "snippet": concept.get("inbox_excerpt", "") if isinstance(concept, dict) else "",
                         "hub": fsm.hub,
                         "reason": f"collision_routed score={score:.3f}{' [hub]' if _is_hub else ''}",
                     })
@@ -627,7 +627,7 @@ def collision_pass(fsm: "InjectorFSM", idx: int) -> None:
             if not candidate_path:
                 continue
             name = concept.get("name", "") if isinstance(concept, dict) else str(concept)
-            excerpt = concept.get("excerpt", "") if isinstance(concept, dict) else ""
+            excerpt = concept.get("inbox_excerpt", "") if isinstance(concept, dict) else ""
             dedup_items.append(WorkItem(
                 kind="dedup",
                 target_path=candidate_path,

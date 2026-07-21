@@ -321,7 +321,7 @@ def novelty_gate(fsm: "InjectorFSM", raw_payload: dict) -> tuple[dict, int]:
                         target_path=match["path"],
                         context={
                             "concept": c.get("name", "") if isinstance(c, dict) else str(c),
-                            "excerpt": c.get("excerpt", "") if isinstance(c, dict) else "",
+                            "excerpt": c.get("inbox_excerpt", "") if isinstance(c, dict) else "",
                             "candidate": match.get("name", match["path"]),
                             "score": d["score"],
                             "inbox_file": d["inbox_file"],

@@ -91,9 +91,9 @@ def test_embedder_free_pass_defers_only_the_near_dup_concept() -> None:
                 "concepts": [
                     {
                         "name": "Self-attention",
-                        "excerpt": "Transformers apply self-attention across the input tokens.",
+                        "inbox_excerpt": "Transformers apply self-attention across the input tokens.",
                     },
-                    {"name": "Sourdough", "excerpt": "Long cold ferment for flavour."},
+                    {"name": "Sourdough", "inbox_excerpt": "Long cold ferment for flavour."},
                 ],
             }
         ]
@@ -112,7 +112,7 @@ def test_embedder_free_pass_returns_nothing_when_no_near_dup() -> None:
 
     chunk = {
         "batches": [
-            {"inbox_file": "inbox/src.md", "concepts": [{"name": "Sourdough", "excerpt": "bread"}]}
+            {"inbox_file": "inbox/src.md", "concepts": [{"name": "Sourdough", "inbox_excerpt": "bread"}]}
         ]
     }
     corpus = {"notes/attention.md": "Transformers use self-attention over input tokens."}

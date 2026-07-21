@@ -18,9 +18,9 @@ def _names(chunk):
 
 
 def test_collapse_drops_sibling_near_dups_keeps_richest_and_distinct():
-    a = {"name": "Neurone artificiale", "excerpt": "x" * 40}          # richest twin
-    a2 = {"name": "Neurone Artificiale (ANN)", "excerpt": "x" * 10}   # near-dup, shorter
-    b = {"name": "Discesa del gradiente", "excerpt": "y" * 30}        # distinct
+    a = {"name": "Neurone artificiale", "inbox_excerpt": "x" * 40}          # richest twin
+    a2 = {"name": "Neurone Artificiale (ANN)", "inbox_excerpt": "x" * 10}   # near-dup, shorter
+    b = {"name": "Discesa del gradiente", "inbox_excerpt": "y" * 30}        # distinct
     chunk = {"schema_version": 1, "batches": [{"inbox_file": "s.md", "concepts": [a, a2, b]}]}
 
     near = lambda a, b: ("Neurone" in a[0]) and ("Neurone" in b[0])  # the two twins only
@@ -35,8 +35,8 @@ def test_collapse_drops_sibling_near_dups_keeps_richest_and_distinct():
 
 def test_collapse_noop_when_no_near_dups():
     chunk = {"schema_version": 1, "batches": [{"inbox_file": "s.md", "concepts": [
-        {"name": "SVM", "excerpt": "margine"},
-        {"name": "PCA", "excerpt": "varianza"},
+        {"name": "SVM", "inbox_excerpt": "margine"},
+        {"name": "PCA", "inbox_excerpt": "varianza"},
     ]}]}
     out = _collapse_near_dup_concepts(chunk, is_near_dup=lambda a, b: False)
     assert len(_names(out)) == 2
@@ -59,9 +59,9 @@ def test_cold_predicate_matches_near_verbatim_bodies():
 
 def test_cold_predicate_collapses_chunk():
     twins = [
-        {"name": "Neurone artificiale", "excerpt": "definizione completa " * 5},
-        {"name": "Neurone Artificiale (ANN)", "excerpt": "breve"},
-        {"name": "Discesa del gradiente", "excerpt": "ottimizzazione dei pesi"},
+        {"name": "Neurone artificiale", "inbox_excerpt": "definizione completa " * 5},
+        {"name": "Neurone Artificiale (ANN)", "inbox_excerpt": "breve"},
+        {"name": "Discesa del gradiente", "inbox_excerpt": "ottimizzazione dei pesi"},
     ]
     chunk = {"schema_version": 1, "batches": [{"inbox_file": "s.md", "concepts": twins}]}
     out = _collapse_near_dup_concepts(chunk, is_near_dup=_cold_intra_chunk_near_dup)

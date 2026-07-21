@@ -567,7 +567,7 @@ def _make_fsm_at_collision(chunk_concepts: list, tmp_path=None) -> InjectorFSM:
 
 def test_collision_high_similarity_routes_to_patch():
     """score ≥ τ_high → pre-routed patch op stored in context, concept removed from chunk."""
-    fsm = _make_fsm_at_collision([{"name": "Neural Networks", "excerpt": "A neural net intro."}])
+    fsm = _make_fsm_at_collision([{"name": "Neural Networks", "inbox_excerpt": "A neural net intro."}])
 
     mock_store = MagicMock()
     mock_store.__len__ = lambda _: 5  # non-empty index
@@ -598,7 +598,7 @@ def test_collision_high_similarity_routes_to_patch():
 
 def test_collision_low_similarity_keeps_for_distillation():
     """score ≤ τ_low → concept kept in chunk for normal distillation, no patch ops."""
-    fsm = _make_fsm_at_collision([{"name": "Quantum Entanglement", "excerpt": "Something unrelated."}])
+    fsm = _make_fsm_at_collision([{"name": "Quantum Entanglement", "inbox_excerpt": "Something unrelated."}])
 
     mock_store = MagicMock()
     mock_store.__len__ = lambda _: 5
@@ -638,7 +638,7 @@ def test_collision_embeds_concept_with_excerpt():
     in hand — anchors the concept in its real semantic neighbourhood.
     """
     fsm = _make_fsm_at_collision([
-        {"name": "MEM", "excerpt": "Agentic memory mechanism for evolving context."}
+        {"name": "MEM", "inbox_excerpt": "Agentic memory mechanism for evolving context."}
     ])
 
     mock_store = MagicMock()
@@ -682,7 +682,7 @@ def test_collision_high_score_name_mismatch_deferred_to_judge():
     pairs it exists to resolve.
     """
     fsm = _make_fsm_at_collision([
-        {"name": "MEMORY", "excerpt": "Agentic memory mechanisms for evolving context."}
+        {"name": "MEMORY", "inbox_excerpt": "Agentic memory mechanisms for evolving context."}
     ])
 
     mock_store = MagicMock()
@@ -721,7 +721,7 @@ def test_collision_high_score_acronym_match_still_patches():
     target, so the mechanical pre-route must remain.
     """
     fsm = _make_fsm_at_collision([
-        {"name": "GPT", "excerpt": "Generative pretrained transformer language model."}
+        {"name": "GPT", "inbox_excerpt": "Generative pretrained transformer language model."}
     ])
 
     mock_store = MagicMock()
@@ -751,7 +751,7 @@ def test_collision_high_score_acronym_match_still_patches():
 
 def test_collision_borderline_deferred():
     """τ_low < score < τ_high → concept deferred, removed from chunk, deferred store called."""
-    fsm = _make_fsm_at_collision([{"name": "Backprop", "excerpt": "Backpropagation intro."}])
+    fsm = _make_fsm_at_collision([{"name": "Backprop", "inbox_excerpt": "Backpropagation intro."}])
 
     mock_store = MagicMock()
     mock_store.__len__ = lambda _: 5
@@ -795,7 +795,7 @@ def test_collision_borderline_defers_rematerializable_op_and_tags_workitem():
     verdict routing can clean up (or author from) the twin bundle."""
     from silica.kernel.workqueue import WorkQueue
 
-    fsm = _make_fsm_at_collision([{"name": "Backprop", "excerpt": "Backpropagation intro."}])
+    fsm = _make_fsm_at_collision([{"name": "Backprop", "inbox_excerpt": "Backpropagation intro."}])
     fsm.work_queue = WorkQueue()
 
     mock_store = MagicMock()
@@ -836,7 +836,7 @@ def test_collision_cooccur_only_candidate_is_never_routed():
     no cosine to threshold against — the concept must flow to distillation."""
     from silica.kernel.relatedness import RelatedNote
 
-    fsm = _make_fsm_at_collision([{"name": "Graph Theory", "excerpt": "Nodes and edges."}])
+    fsm = _make_fsm_at_collision([{"name": "Graph Theory", "inbox_excerpt": "Nodes and edges."}])
 
     mock_store = MagicMock()
     mock_store.__len__ = lambda _: 5  # non-empty index
@@ -876,7 +876,7 @@ def test_collision_inbox_candidate_is_filtered():
     SVM book cross-patching). The concept flows to normal distillation."""
     from silica.kernel.relatedness import RelatedNote
 
-    fsm = _make_fsm_at_collision([{"name": "Support Vector Machines", "excerpt": "SVM intro."}])
+    fsm = _make_fsm_at_collision([{"name": "Support Vector Machines", "inbox_excerpt": "SVM intro."}])
 
     mock_store = MagicMock()
     mock_store.__len__ = lambda _: 5  # non-empty index
