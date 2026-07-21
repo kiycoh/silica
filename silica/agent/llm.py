@@ -94,6 +94,47 @@ def retry_transient(fn, exceptions: tuple, attempts: int = 3, base_delay: float 
                 time.sleep(delay)
 
 
+_LOCAL_LLM_TIMEOUT = 45.0  # wall-clock backstop we enforce ourselves (> the litellm
+# timeout below, so litellm's own timeout wins if it ever fires). litellm's `timeout`
+# kwarg does NOT fire on a provider that accepts the request then never sends a body
+# — observed: OpenRouter holding an ESTAB socket idle ~58min, zero retries, the whole
+# process wedged on one call. 45s matches the openai-SDK read timeout in providers.py;
+# flash normally answers in <10s, so a hung call fails fast (was 150s = too slow when
+# hangs are frequent, the dominant cost of a flaky-provider run).
+
+
+def _bounded(fn, timeout: float, model: str):
+    """Run fn() but raise litellm.Timeout if it exceeds `timeout` seconds.
+
+    The only hang bound we actually control — the library's timeout can silently
+    not fire (see _LOCAL_LLM_TIMEOUT). Raising litellm.Timeout routes into the
+    normal transient-retry path.
+
+    ponytail: on timeout the worker thread is abandoned (daemon) — a blocked
+    C-level socket read can't be force-cancelled. Bounded by the 3-attempt retry
+    cap and the rarity of provider hangs; swap for a cancellable HTTP client if
+    abandoned threads ever pile up.
+    """
+    box: dict = {}
+
+    def _work():
+        try:
+            box["r"] = fn()
+        except BaseException as e:  # noqa: BLE001 - carried to the calling thread
+            box["e"] = e
+
+    th = threading.Thread(target=_work, daemon=True)
+    th.start()
+    th.join(timeout)
+    if th.is_alive():
+        raise litellm.Timeout(
+            message=f"local wall-clock timeout after {timeout:.0f}s (provider sent no response)",
+            model=model, llm_provider=model.split("/", 1)[0])
+    if "e" in box:
+        raise box["e"]
+    return box["r"]
+
+
 def openrouter_routing(provider_list: str | None = None) -> dict | None:
     """OpenRouter `extra_body` provider-routing block, or None.
 
@@ -237,7 +278,7 @@ def call_llm(
     if model.startswith("openrouter/") and (rt := openrouter_routing(openrouter_provider)):
         kwargs["extra_body"] = rt
 
-    kwargs["timeout"] = 120.0
+    kwargs["timeout"] = 40.0  # litellm's own (fires first if it works); _bounded is the backstop
 
     _TRANSIENT = (
         litellm.Timeout,
@@ -247,7 +288,9 @@ def call_llm(
         litellm.BadGatewayError,
     )
     if on_delta is None:
-        response = retry_transient(lambda: litellm.completion(**kwargs), _TRANSIENT, cancel=cancel)
+        response = retry_transient(
+            lambda: _bounded(lambda: litellm.completion(**kwargs), _LOCAL_LLM_TIMEOUT, model),
+            _TRANSIENT, cancel=cancel)
     else:
         def _stream_once():
             on_delta("reset", "")

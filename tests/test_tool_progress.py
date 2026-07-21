@@ -283,7 +283,7 @@ def test_llm_openrouter_include_reasoning(mock_completion):
             messages=messages,
             max_tokens=256000,
             include_reasoning=True,
-            timeout=120.0
+            timeout=40.0
         )
 
         # Test openrouter model with show_thinking=False and verbose=True
@@ -295,14 +295,14 @@ def test_llm_openrouter_include_reasoning(mock_completion):
             messages=messages,
             max_tokens=256000,
             include_reasoning=True,
-            timeout=120.0
+            timeout=40.0
         )
         
         # Test non-openrouter model
         call_llm(model="openai/gpt-4o", messages=messages)
         args, kwargs = mock_completion.call_args
         assert "include_reasoning" not in kwargs
-        assert kwargs.get("timeout") == 120.0
+        assert kwargs.get("timeout") == 40.0
         
     finally:
         CONFIG.show_thinking = orig_thinking

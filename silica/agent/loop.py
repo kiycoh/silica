@@ -151,8 +151,17 @@ def run_agent(
         if topic is not None:
             _bus_mod.BUS.publish(topic, event)
 
+    # Set once the main thread stops waiting on the LLM (Ctrl+C or normal return).
+    # The LLM runs on a detached daemon thread that keeps streaming deltas after an
+    # interrupt; this gate stops those late deltas from re-opening the live region
+    # and printing thinking below "(interrupted)". Also passed as `cancel` to abort
+    # retries. Cleared at the top of each iteration.
+    _abandon = threading.Event()
+
     def _stream_delta(chunk_type: str, content: str) -> None:
         # Called from the LLM worker thread; `iteration` reads the current loop pass.
+        if _abandon.is_set():
+            return  # interrupted/abandoned — stop feeding the renderer
         _emit(LLMStreamEvent(chunk_type=chunk_type, content=content, iteration=iteration))
 
     # Streaming is a TUI ergonomic: only the interactive main loop gets it —
@@ -185,7 +194,7 @@ def run_agent(
             # request — best we can do is stop waiting and stop retrying.
             slot = worker_slot() if constraints is not None else nullcontext()
             with slot:
-                _abandon = threading.Event()
+                _abandon.clear()
                 _llm_kwargs["tools"] = schemas
                 _llm_kwargs["cancel"] = _abandon
                 _future: _cf.Future = _cf.Future()
