@@ -9,7 +9,9 @@ IWE uses BM25 (no Tantivy); we mirror that hand-rolled, matching the codebase
 idiom (the co-occurrence and embedding indexes are also hand-managed) rather
 than adding a dependency.
 
-ponytail: postings held in RAM, recomputed IDF per query; swap for a real index
+ponytail: an in-memory term -> {path: tf} postings map (maintained in
+upsert/remove, rebuilt on load — never persisted) gives O(1) df and O(union)
+candidates instead of an O(docs) scan per query; swap for a real index
 (Tantivy/whoosh) only if the corpus outgrows memory. Fused into RRF by RANK, so
 its unbounded BM25 scores never need to be comparable to cosine (spec 1.2).
 """
@@ -49,11 +51,32 @@ class LexicalStore:
         self._docs: dict[str, dict[str, int]] = {}   # path -> {term: tf}
         self._len: dict[str, int] = {}               # path -> doc length
         self._name: dict[str, str] = {}              # path -> title/key for fuzzy
+        self._postings: dict[str, dict[str, int]] = {}   # DERIVED: term -> {path: tf}
+        self._name_lower: dict[str, str] = {}            # DERIVED: path -> name.lower()
 
     def __len__(self) -> int:
         return len(self._docs)
 
+    def _unindex(self, path: str) -> None:
+        """Drop `path` from every posting list of its current terms."""
+        for t in self._docs.get(path, {}):
+            d = self._postings.get(t)
+            if d:
+                d.pop(path, None)
+                if not d:
+                    self._postings.pop(t, None)
+
+    def _reindex(self) -> None:
+        """Rebuild the derived postings/name_lower indexes from _docs/_name."""
+        self._postings = {}
+        for path, tf in self._docs.items():
+            for term, f in tf.items():
+                self._postings.setdefault(term, {})[path] = f
+        self._name_lower = {path: name.lower() for path, name in self._name.items()}
+
     def upsert(self, path: str, name: str, body: str) -> None:
+        if path in self._docs:
+            self._unindex(path)
         toks = _tokens(f"{name}\n{body}")
         tf: dict[str, int] = {}
         for t in toks:
@@ -61,11 +84,16 @@ class LexicalStore:
         self._docs[path] = tf
         self._len[path] = len(toks)
         self._name[path] = name
+        for term, f in tf.items():
+            self._postings.setdefault(term, {})[path] = f
+        self._name_lower[path] = name.lower()
 
     def remove(self, path: str) -> None:
+        self._unindex(path)
         self._docs.pop(path, None)
         self._len.pop(path, None)
         self._name.pop(path, None)
+        self._name_lower.pop(path, None)
 
     def paths(self) -> list[str]:
         return list(self._docs)
@@ -76,12 +104,15 @@ class LexicalStore:
         q_terms = _tokens(query)
         n = len(self._docs)
         avgdl = (sum(self._len.values()) / n) if n else 0.0
-        df: dict[str, int] = {}
-        for term in set(q_terms):
-            df[term] = sum(1 for tf in self._docs.values() if term in tf)
+        q_term_set = set(q_terms)
+        df: dict[str, int] = {term: len(self._postings.get(term, {})) for term in q_term_set}
+        candidates: set[str] = set().union(
+            *(self._postings.get(t, {}).keys() for t in q_term_set)
+        ) if q_term_set else set()
 
         bm25: dict[str, float] = {}
-        for path, tf in self._docs.items():
+        for path in candidates:
+            tf = self._docs[path]
             dl = self._len[path] or 1
             score = 0.0
             for term in q_terms:
@@ -95,11 +126,16 @@ class LexicalStore:
                 bm25[path] = score
         bm25_ranked = sorted(bm25.items(), key=lambda kv: (-kv[1], kv[0]))
 
-        # Fuzzy leg: skim-style ratio over the query vs each title/key.
+        # Fuzzy leg: quick-ratio upper bounds reject before the full O(L^2)
+        # ratio() — both are documented upper bounds on ratio(), so this can
+        # never drop a real hit. Must scan ALL names, not just BM25 candidates.
         ql = query.strip().lower()
         fuzzy: dict[str, float] = {}
-        for path, name in self._name.items():
-            r = SequenceMatcher(None, ql, name.lower()).ratio()
+        for path, name_lower in self._name_lower.items():
+            sm = SequenceMatcher(None, ql, name_lower)
+            if sm.real_quick_ratio() < _FUZZY_MIN or sm.quick_ratio() < _FUZZY_MIN:
+                continue
+            r = sm.ratio()
             if r >= _FUZZY_MIN:
                 fuzzy[path] = r
         fuzzy_ranked = sorted(fuzzy.items(), key=lambda kv: (-kv[1], kv[0]))
@@ -129,6 +165,7 @@ class LexicalStore:
                 store._docs = {p: dict(tf) for p, tf in data.get("docs", {}).items()}
                 store._len = dict(data.get("len", {}))
                 store._name = dict(data.get("name", {}))
+                store._reindex()
         except Exception:
             # Derived index: quarantine for doctor visibility, then
             # reset to empty (a rebuild repopulates it).
@@ -137,6 +174,8 @@ class LexicalStore:
             store._docs = {}
             store._len = {}
             store._name = {}
+            store._postings = {}
+            store._name_lower = {}
         return store
 
 
