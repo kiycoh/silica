@@ -42,6 +42,26 @@ class DedupBatchDecision(BaseModel):
     decisions: list[DedupDecision] = []
 
 
+def passes_dedup_gate(
+    score: float,
+    incoming_len: int,
+    candidate_len: int,
+    *,
+    threshold: float = 0.85,
+    max_ratio: float = 2.0,
+) -> bool:
+    """Cheap gate before the LLM judge (spec 2.1). True iff the effective cosine
+    clears `threshold` AND the two bodies are within `max_ratio` in size. The
+    size guard rejects the spoke-in-hub false positive (small spoke, big hub:
+    high cosine, huge size gap). Cosine is symmetric, so the spec's mutual
+    requirement is the single self-normalized score.
+    """
+    if score < threshold:
+        return False
+    small, large = sorted((max(incoming_len, 1), max(candidate_len, 1)))
+    return large / small <= max_ratio
+
+
 def run_dedup(item: WorkItem, config: Any) -> dict[str, Any]:
     ctx = item.context
     candidate_path = item.target_path
@@ -57,6 +77,17 @@ def run_dedup(item: WorkItem, config: Any) -> dict[str, Any]:
 
     if ctx.get("concepts"):
         return _run_batch(item, ctx["concepts"], candidate_body[:budget], config)
+
+    if os.getenv("SILICA_DEDUP_GATE"):
+        eff = max(ctx.get("full_score", ctx.get("score", 0.0)),
+                  ctx.get("title_score", 0.0))
+        if not passes_dedup_gate(eff, len(ctx.get("excerpt", "")),
+                                 len(candidate_body[:budget])):
+            gate_decision = DedupDecision(
+                verdict="distinct",
+                rationale="dedup gate: below threshold or size guard",
+            )
+            return _route_verdict(item, ctx, gate_decision, config)
 
     emit_feedback(item, "calling_llm")
     decision = _decide_dedup(
@@ -85,14 +116,17 @@ def _run_batch(
     then route every verdict through the exact same code as a single item."""
     ctx = item.context
     emit_feedback(item, "calling_llm")
-    decisions = _decide_dedup_batch(
-        config,
-        concepts=concepts,
-        candidate_name=ctx.get("candidate", item.target_path),
-        candidate_body=candidate_body,
-        author_spoke=bool(ctx.get("target_dir")),
-        hub=ctx.get("hub"),
-    )
+    if os.getenv("SILICA_DEDUP_GATE"):
+        decisions = _gated_batch_decisions(config, item, concepts, candidate_body)
+    else:
+        decisions = _decide_dedup_batch(
+            config,
+            concepts=concepts,
+            candidate_name=ctx.get("candidate", item.target_path),
+            candidate_body=candidate_body,
+            author_spoke=bool(ctx.get("target_dir")),
+            hub=ctx.get("hub"),
+        )
     results: list[dict[str, Any]] = []
     followups: list[dict[str, Any]] = []
     for entry, decision in zip(concepts, decisions):
@@ -113,6 +147,47 @@ def _run_batch(
     if followups:
         out["followups"] = followups
     return out
+
+
+def _gated_batch_decisions(
+    config: Any, item: WorkItem, concepts: list[dict], candidate_body: str
+) -> list[DedupDecision]:
+    """SILICA_DEDUP_GATE batch path: concepts failing the cheap cosine+size gate
+    skip the LLM and are pre-judged 'distinct' (clearly not duplicates); the rest
+    are judged in one batch call. Returned full-length and aligned to `concepts`,
+    so the caller's zip stays correct and every gated-out concept still routes
+    through the normal distinct path (authoring its spoke for pipeline items),
+    identical to an LLM 'distinct'.
+    """
+    ctx = item.context
+    to_judge: list[dict] = []
+    prejudged: dict[int, DedupDecision] = {}
+    for i, c in enumerate(concepts):
+        eff = max(c.get("full_score", c.get("score", 0.0)) or 0.0,
+                  c.get("title_score", 0.0) or 0.0)
+        if passes_dedup_gate(eff, len(c.get("excerpt", "")), len(candidate_body)):
+            to_judge.append(c)
+        else:
+            prejudged[i] = DedupDecision(
+                verdict="distinct",
+                rationale="dedup gate: below threshold or size guard",
+            )
+    judged = (
+        _decide_dedup_batch(
+            config,
+            concepts=to_judge,
+            candidate_name=ctx.get("candidate", item.target_path),
+            candidate_body=candidate_body,
+            author_spoke=bool(ctx.get("target_dir")),
+            hub=ctx.get("hub"),
+        )
+        if to_judge else []
+    )
+    judged_iter = iter(judged)
+    return [
+        prejudged[i] if i in prejudged else next(judged_iter, DedupDecision())
+        for i in range(len(concepts))
+    ]
 
 
 def _route_verdict(
