@@ -321,7 +321,12 @@ class ObsidianDriver(Protocol):
         """Delete a note from the vault."""
         ...
 
-    def autolink_note(self, path: str, candidates: list[str] | None = None) -> list[str]:
+    def autolink_note(
+        self,
+        path: str,
+        candidates: list[str] | None = None,
+        title_index: list[str] | None = None,
+    ) -> list[str]:
         """Wrap unlinked mentions of vault titles in `path` with links, in place.
 
         Returns the list of titles linked. The CLI backend delegates skip-region
@@ -329,6 +334,9 @@ class ObsidianDriver(Protocol):
         (respecting the user's link-format preference). The FS backend uses the
         deterministic pure-Python autolink() kernel. `candidates` optionally
         restricts which titles are considered (embedding/cluster-prioritised subset).
+        `title_index` optionally supplies a prebuilt disambiguated vault-title
+        list so callers batching many notes avoid a per-note rebuild; when
+        None the backend builds its own.
         """
         ...
 

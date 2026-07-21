@@ -428,7 +428,15 @@ class ObsidianWSBackend(GraphIndexMixin):
         self._rpc("delete", path=path)
         self._patch_graph_remove(path)
 
-    def autolink_note(self, path: str, candidates: list[str] | None = None) -> list[str]:
+    def autolink_note(
+        self,
+        path: str,
+        candidates: list[str] | None = None,
+        title_index: list[str] | None = None,
+    ) -> list[str]:
+        # title_index is accepted for protocol parity but ignored: the WS/CLI
+        # backend delegates title resolution to Obsidian's live graph, so a
+        # caller-built index does not apply.
         added = self._rpc("autolink_note", path=path, candidates=candidates) or []
         if added:
             self._is_graph_built = False  # body rewritten plugin-side; cheapest correct patch
