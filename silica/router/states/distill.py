@@ -29,7 +29,9 @@ if TYPE_CHECKING:
 logger = logging.getLogger(__name__)
 
 # Emitted by the C3 title gate in validate_operations (band 2).
-_NEAR_TITLE_RE = re.compile(r"near_title candidate='([^']*)' path='([^']*)'")
+_NEAR_TITLE_RE = re.compile(
+    r"near_title candidate='([^']*)' path='([^']*)'(?: ratio=([0-9.]+))?"
+)
 
 # Frontmatter `date:` of a source document. Two-step (block, then key inside
 # it) so a `date:` line in the body can never match; the YYYY-MM-DD prefix is
@@ -75,6 +77,14 @@ def _enqueue_near_title_dedups(fsm: "InjectorFSM", rejected_raw: list) -> None:
         if not m:
             continue
         op = r.get("op", {}) or {}
+        # The C3 title gate already computed the fuzzy ratio (validate.py band 2);
+        # carry it as the dedup title_score so SILICA_DEDUP_GATE judges these
+        # near-identical-title pairs on their real similarity instead of a
+        # degenerate 0.0 (which would force every one of them to "distinct").
+        try:
+            title_score = float(m.group(3)) if m.group(3) else 0.0
+        except (TypeError, ValueError):
+            title_score = 0.0
         try:
             wq.enqueue(WorkItem(
                 kind="dedup",
@@ -84,6 +94,7 @@ def _enqueue_near_title_dedups(fsm: "InjectorFSM", rejected_raw: list) -> None:
                     "excerpt": op.get("snippet", ""),
                     "candidate": m.group(1),
                     "score": 0.0,
+                    "title_score": title_score,
                     "inbox_file": fsm.inbox_file,
                     "hub": fsm.hub,
                     "content_hash": fsm._current_content_hash,
@@ -368,7 +379,7 @@ def handle_delegate(fsm: "InjectorFSM") -> None:
                 idx,
                 chunk_hash[:8],
             )
-            fsm.context["ops_path"] = saved_ops_path
+            fsm._chunk_ctx["ops_path"] = saved_ops_path  # per-chunk ns: every consumer reads _chunk_ctx
             fsm.state = orch.InjectorState.SNAPSHOT
             return
     else:
@@ -456,7 +467,6 @@ def handle_delegate(fsm: "InjectorFSM") -> None:
 
 
 def handle_sanitize(fsm: "InjectorFSM") -> None:
-    idx = fsm._current_chunk_idx
     fsm._progress_note(fsm._chunk_task_id("sanitize"), "sanitize", "running")
     res = orch.silica_sanitize(fsm._chunk_ctx["distiller_output_path"])
     if "error" in res:
