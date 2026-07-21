@@ -55,3 +55,51 @@ def test_single_seed_is_not_squashed():
     assert blocks[0].hub is None            # degenerate: not a squash
     assert blocks[0].members == ["only"]
     assert blocks[0].text.startswith("Hub > Solo")  # breadcrumb prefix
+
+
+from silica.kernel.assembly import Neighbors, Caps, assemble
+
+
+def _fixture():
+    # hub <- spoke1, spoke2 (both parent=hub); spoke1 -> related1; spoke1 edge e1
+    bodies = {
+        "hub": "# Hub\nhub body",
+        "spoke1": "# Spoke1\ns1 body",
+        "spoke2": "# Spoke2\ns2 body",
+        "related1": "# Related1\nr1 body",
+        "e1": "# E1\ne1 body",
+    }
+    nbrs = {
+        "spoke1": Neighbors(parent="hub", children=[], related=["related1"], edges=["e1"]),
+        "spoke2": Neighbors(parent="hub", children=[], related=[], edges=[]),
+        "hub": Neighbors(parent=None, children=["spoke1", "spoke2"], related=[], edges=[]),
+        "related1": Neighbors(parent=None, children=[], related=[], edges=[]),
+        "e1": Neighbors(parent=None, children=[], related=[], edges=[]),
+    }
+    return (lambda p: nbrs.get(p, Neighbors(None, [], [], [])),
+            lambda p: bodies.get(p, ""))
+
+
+def test_direction_zero_skips_that_direction():
+    neighbors_of, body_of = _fixture()
+    caps = Caps(parent=1, children=0, related=0, edges=0)
+    res = assemble(["spoke1"], neighbors_of=neighbors_of, body_of=body_of, caps=caps)
+    seen = {p for b in res.blocks for p in b.members}
+    assert "spoke1" in seen and "hub" in seen   # parent hop taken
+    assert "related1" not in seen and "e1" not in seen  # skipped directions
+
+
+def test_two_seeds_sharing_hub_squash_into_one_block():
+    neighbors_of, body_of = _fixture()
+    caps = Caps(parent=1, children=0, related=0, edges=0)
+    res = assemble(["spoke1", "spoke2"], neighbors_of=neighbors_of,
+                   body_of=body_of, caps=caps)
+    squashed = [b for b in res.blocks if b.hub == "hub"]
+    assert len(squashed) == 1
+    assert set(squashed[0].members) >= {"spoke1", "spoke2"}
+
+
+def test_empty_seeds_returns_empty():
+    neighbors_of, body_of = _fixture()
+    res = assemble([], neighbors_of=neighbors_of, body_of=body_of)
+    assert res.blocks == []

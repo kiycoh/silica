@@ -116,3 +116,91 @@ def squash(
     rank_of = {u.path: u.rank for u in units}
     blocks.sort(key=lambda b: min(rank_of[p] for p in b.members))
     return blocks
+
+
+from typing import Callable
+
+ASSEMBLY_BUDGET_CHARS = 12000  # ponytail: placeholder ceiling, tuned in A/B
+
+
+@dataclass
+class Neighbors:
+    parent: str | None
+    children: list[str]
+    related: list[str]
+    edges: list[str]
+
+
+@dataclass
+class Caps:
+    parent: int = 1
+    children: int = 1
+    related: int = 1
+    edges: int = 1
+
+
+@dataclass
+class AssemblyResult:
+    blocks: list[AssembledBlock]
+    truncation: Truncation
+
+
+_MAX_CHAIN = 6  # breadcrumb walk bound (cycle guard)
+
+
+def _breadcrumb(path: str, neighbors_of: Callable[[str], "Neighbors"]) -> str:
+    """spoke -> parent -> hub path, walked up the parent chain (bounded)."""
+    chain = [path]
+    seen = {path}
+    cur = path
+    for _ in range(_MAX_CHAIN):
+        parent = neighbors_of(cur).parent
+        if not parent or parent in seen:
+            break
+        chain.append(parent)
+        seen.add(parent)
+        cur = parent
+    return " > ".join(reversed(chain))  # hub > ... > spoke
+
+
+def assemble(
+    seed_paths: list[str],
+    *,
+    neighbors_of: Callable[[str], Neighbors],
+    body_of: Callable[[str], str],
+    caps: Caps = Caps(),
+    budget: int = ASSEMBLY_BUDGET_CHARS,
+) -> AssemblyResult:
+    """Directional 1-hop expansion + budget + squash. See module docstring."""
+    if not seed_paths:
+        return AssemblyResult(blocks=[], truncation=Truncation())
+
+    seed_set = set(seed_paths)
+    seeds = [Unit(path=p, text=body_of(p), is_seed=True, rank=i)
+             for i, p in enumerate(seed_paths)]
+
+    periphery: list[Unit] = []
+    seen: set[str] = set(seed_set)
+    prank = 0
+    for p in seed_paths:
+        n = neighbors_of(p)
+        directions = (
+            ([n.parent] if n.parent else [])[: caps.parent],
+            n.children[: caps.children],
+            n.related[: caps.related],
+            n.edges[: caps.edges],
+        )
+        for group in directions:
+            for np in group:
+                if np in seen:
+                    continue
+                seen.add(np)
+                periphery.append(Unit(path=np, text=body_of(np),
+                                      is_seed=False, rank=prank))
+                prank += 1
+
+    kept, trunc = fill_budget(seeds, periphery, budget=budget)
+    hub_of = {u.path: neighbors_of(u.path).parent for u in kept}
+    crumb_of = {u.path: _breadcrumb(u.path, neighbors_of) for u in kept}
+    blocks = squash(kept, hub_of, crumb_of)
+    return AssemblyResult(blocks=blocks, truncation=trunc)
