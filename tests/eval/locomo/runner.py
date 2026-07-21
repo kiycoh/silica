@@ -546,7 +546,7 @@ def run_question(qa: dict, qid: str, index: dict[str, dict], *, model: str,
                  run_sessions: dict[str, str] | None = None,
                  n_sessions: int | None = None,
                  timeline_seed: str | None = None,
-                 improve: bool = False) -> dict:
+                 improve: bool = False, assemble: bool = False) -> dict:
     cat = qa.get("category")
     qtype = _CATEGORY.get(cat, f"cat-{cat}")
     is_abs = cat == _ADVERSARIAL
@@ -576,7 +576,8 @@ def run_question(qa: dict, qid: str, index: dict[str, dict], *, model: str,
                                 use_embedder=use_embedder, use_rerank=use_rerank,
                                 episodic_ttl_days=episodic_ttl, with_facts=distill,
                                 paths=list(index.keys()) if stuff else None,
-                                use_recall_weights=improve, **win_kw)
+                                use_recall_weights=improve,
+                                assemble=assemble, **win_kw)
         rels = [b.path for b in p.blocks]
 
         if distill and gold_sessions:
@@ -665,7 +666,7 @@ def run(data: list[dict], run_root: Path, *, model: str, judge_model: str, k: in
         window_chars: int | None = None, key_schema: bool = False,
         categories: set[int] | None = None, limit: int | None = None,
         ingest_mode: str = "distill", answer_mode: str = "oneshot",
-        timeline: bool = False, improve: bool = False,
+        timeline: bool = False, improve: bool = False, assemble: bool = False,
         verbose: bool = False, out: Path | None = None) -> dict:
     from silica.config import CONFIG
     from silica.kernel import perception
@@ -689,6 +690,7 @@ def run(data: list[dict], run_root: Path, *, model: str, judge_model: str, k: in
                    "answer_mode": answer_mode,
                    "timeline": timeline,
                    "improve": improve,
+                   "assemble": assemble,
                    "seen_override": "session-date" if ingest_mode == "fsm" else None,
                    "fsm": {},
                    "failed_conversations": [],
@@ -732,7 +734,8 @@ def run(data: list[dict], run_root: Path, *, model: str, judge_model: str, k: in
                            limit=limit, ingest_mode=ingest_mode,
                            answer_mode=answer_mode, timeline=timeline,
                            verbose=verbose, out=out,
-                           planned=planned, metrics=_metrics, improve=improve)
+                           planned=planned, metrics=_metrics, improve=improve,
+                           assemble=assemble)
     finally:
         CONFIG.episodic_ttl_days = old_ttl
     doc.pop("partial", None)
@@ -745,7 +748,7 @@ def _run_conversations(data, rows, doc, *, run_root, model, judge_model, k,
                        distill, episodic_ttl, reuse, flat_context, facts_last,
                        windows, window_chars, key_schema, categories, limit,
                        ingest_mode, answer_mode, timeline, verbose, out, planned,
-                       metrics, improve) -> None:
+                       metrics, improve, assemble) -> None:
     for inst in data:
         if limit is not None and len(rows) >= limit:
             break
@@ -810,7 +813,8 @@ def _run_conversations(data, rows, doc, *, run_root, model, judge_model, k,
                                window_chars=window_chars, now=now, speakers=speakers,
                                answer_mode=answer_mode, session_map=session_map,
                                run_sessions=run_sessions, n_sessions=n_sessions,
-                               timeline_seed=timeline_seed, improve=improve)
+                               timeline_seed=timeline_seed, improve=improve,
+                               assemble=assemble)
             rows.append(row)
             if verbose:
                 mark = (f"sr={row['session_recall']}" if retrieval_only
@@ -884,6 +888,10 @@ def main(argv=None) -> int:
                          "phase 1 — agent mode's silica_recall tool call doesn't "
                          "consume the weights yet — and incompatible with "
                          "--stuff, which bypasses retrieval.")
+    ap.add_argument("--assemble", action="store_true",
+                    help="read-time assembly A/B arm: expand each seed 1 hop over "
+                         "parent/children/related/edges and squash co-hub seeds "
+                         "into one breadcrumbed block (default off).")
     ap.add_argument("--conversations", default="",
                     help="comma-separated sample_ids to run "
                          "(pilot: conv-26,conv-47,conv-49)")
@@ -970,7 +978,7 @@ def main(argv=None) -> int:
                   categories=categories, limit=args.limit,
                   ingest_mode=args.ingest, answer_mode=args.answer,
                   timeline=args.timeline, improve=args.improve,
-                  verbose=args.verbose, out=out)
+                  assemble=args.assemble, verbose=args.verbose, out=out)
     finally:
         import silica.driver
         silica.driver._driver = None
