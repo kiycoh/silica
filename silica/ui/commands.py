@@ -133,6 +133,12 @@ COMMANDS: tuple[Command, ...] = (
         summary="build/update co-occurrence index (without embedder)",
     ),
     Command(
+        name="/lexical",
+        group="direct",
+        usage="[folder] [--force]",
+        summary="build/update lexical (BM25/fuzzy) index",
+    ),
+    Command(
         name="/wiki",
         group="direct",
         usage="[folder] [--overview-only] [--force]",

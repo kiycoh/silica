@@ -652,6 +652,69 @@ def silica_cooccurrence_refresh(folder: str = "", force: bool = False) -> dict[s
     }
 
 
+class LexicalRefreshArgs(BaseModel):
+    folder: str = Field(default="", description="Vault-relative folder to restrict indexing (empty = entire vault)")
+    force: bool = Field(default=False, description="Rebuild the whole index from empty")
+
+@tool(LexicalRefreshArgs, cls="composed", collapse="eager")
+def silica_lexical_refresh(folder: str = "", force: bool = False) -> dict[str, Any]:
+    """Build or refresh the vault lexical (BM25/fuzzy) index.
+
+    The lexical twin of silica_cooccurrence_refresh: a hand-written in-memory
+    BM25 + fuzzy index over note title+body, strong on rare tokens, proper
+    nouns, and dates. Seeds an existing vault so the optional lexical retrieval
+    leg (use_lexical) has an index to query; writes keep it fresh automatically
+    afterwards (write-hook, index-gated). Run once to create the index.
+    """
+    from silica.kernel.lexical import get_lexical_store
+
+    try:
+        all_refs = DRIVER.list_files(folder or None)
+    except Exception as e:
+        return {"error": f"Failed to list vault files: {e}"}
+
+    notes: list[tuple[str, str, str]] = []
+    errors: list[str] = []
+    for ref in all_refs:
+        path = ref.path or ref.name
+        name = ref.name or path
+        try:
+            # RAW content (matches the write-hook + cooccur): keeps a bulk-seeded
+            # index identical to an incrementally-maintained one.
+            body = DRIVER.read_note(path).content or ""
+        except Exception as exc:
+            errors.append(f"{path}: {exc}")
+            continue
+        idx_path = path.removesuffix(".md")
+        notes.append((idx_path, name, body))
+
+    if not notes:
+        return {"error": "No notes found to index", "read_errors": errors}
+
+    store = get_lexical_store()
+    if force:
+        store.clear()
+    for idx_path, name, body in notes:
+        store.upsert(idx_path, name, body)
+
+    # GC: drop indexed notes no longer present in the (folder-scoped) vault.
+    current_paths = {idx_path for idx_path, _, _ in notes}
+    stale_paths = [
+        p for p in store.paths()
+        if _in_folder(p, folder) and p not in current_paths
+    ]
+    for p in stale_paths:
+        store.remove(p)
+    store.save()
+
+    return {
+        "indexed": len(store),
+        "total_notes": len(notes),
+        "read_errors": len(errors),
+        "index_path": str(store._path),
+    }
+
+
 class VaultReportArgs(BaseModel):
     folder: str = Field(default="", description="Vault-relative folder to scope (empty = whole vault)")
     top_k: int = Field(default=10, description="How many god-nodes / bridges to surface")

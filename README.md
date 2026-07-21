@@ -239,7 +239,7 @@ That's the whole idea. You don't have to believe anything about the model, only 
 | `/web-search "<topic>"` | Cited web findings into the inbox |
 | `/convert <file>` | Transcode a PDF into a markdown draft |
 
-**Indexes:** `/embed` · `/cooccur` (embedder-free)
+**Indexes:** `/embed` · `/cooccur` (embedder-free) · `/lexical` (BM25/fuzzy)
 
 **Visualize:** `/graph [out.html]` · `/map <note>`
 
