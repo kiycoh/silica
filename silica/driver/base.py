@@ -40,13 +40,32 @@ def build_title_trie(title_lowers: Any) -> dict:
     """Char trie of titles (length >= 2). Terminal nodes hold the full title."""
     root: dict = {}
     for title_lower in title_lowers:
-        if len(title_lower) < 2:
-            continue
-        node = root
-        for ch in title_lower:
-            node = node.setdefault(ch, {})
-        node[_TITLE] = title_lower
+        trie_insert(root, title_lower)
     return root
+
+
+def trie_insert(trie: dict, title_lower: str) -> None:
+    """Add one title to an existing trie (idempotent). Titles < 2 chars skipped."""
+    if len(title_lower) < 2:
+        return
+    node = trie
+    for ch in title_lower:
+        node = node.setdefault(ch, {})
+    node[_TITLE] = title_lower
+
+
+def trie_remove(trie: dict, title_lower: str) -> None:
+    """Remove one title's terminal marker. Leaves now-dead branches in place
+    (harmless: mentions_in only emits at a _TITLE marker). Prune only if a
+    profiler ever shows trie memory matters."""
+    if len(title_lower) < 2:
+        return
+    node = trie
+    for ch in title_lower:
+        node = node.get(ch)
+        if node is None:
+            return
+    node.pop(_TITLE, None)
 
 
 def mentions_in(content_lower: str, trie: dict) -> set[str]:

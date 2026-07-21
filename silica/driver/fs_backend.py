@@ -33,6 +33,8 @@ from silica.driver.base import (
     Txn,
     build_title_trie,
     mentions_in,
+    trie_insert,
+    trie_remove,
 )
 from silica.kernel import frontmatter as fm
 from silica.kernel import ofm
@@ -54,6 +56,7 @@ class ObsidianFSBackend(GraphIndexMixin):
         self._graph = nx.DiGraph()
         self._unresolved_links: set[tuple[str, str]] = set() # (source_path, raw_target)
         self._mention_index: dict[str, set[str]] = {}        # title_lower -> set(path)
+        self._title_trie: dict = {}                    # char trie of note titles (mention matching)
         self._needs_reindex: bool = True
         self._dirty_paths: set[str] = set()           # paths patched since last full rebuild
         # ponytail: unbounded — grows to the whole vault's bodies in RAM; add
@@ -213,7 +216,7 @@ class ObsidianFSBackend(GraphIndexMixin):
         # Pass 2: Parse and resolve links + build mention index. Bucket the
         # titles by first word ONCE so the per-body scan is near-linear, not the
         # old O(N²·L) title×body sweep.
-        title_trie = build_title_trie(self._notes_by_name)
+        self._title_trie = build_title_trie(self._notes_by_name)
         for rel_path_file, path in files_to_process:
             try:
                 content = path.read_text(encoding="utf-8")
@@ -226,7 +229,7 @@ class ObsidianFSBackend(GraphIndexMixin):
                         self._unresolved_links.add((rel_path_file, target))
 
                 # Mention index
-                for title_lower in mentions_in(content.lower(), title_trie):
+                for title_lower in mentions_in(content.lower(), self._title_trie):
                     self._mention_index.setdefault(title_lower, set()).add(rel_path_file)
             except Exception as e:
                 logger.warning("Failed to index %s: %s", rel_path_file, e)
@@ -274,6 +277,8 @@ class ObsidianFSBackend(GraphIndexMixin):
                     self._notes_by_name[name_lower] = [
                         r for r in self._notes_by_name[name_lower] if r.path != rel_path
                     ]
+                    if not self._notes_by_name.get(name_lower):
+                        trie_remove(self._title_trie, name_lower)
             self._dirty_paths.discard(rel_path)
             return
 
@@ -287,6 +292,7 @@ class ObsidianFSBackend(GraphIndexMixin):
             self._notes_by_name[name_lower] = []
         if ref not in self._notes_by_name[name_lower]:
             self._notes_by_name[name_lower].append(ref)
+        trie_insert(self._title_trie, name_lower)
 
         # --- rebuild edges for this path ---
         targets = set(extract_links(content))
@@ -298,8 +304,7 @@ class ObsidianFSBackend(GraphIndexMixin):
                 self._unresolved_links.add((rel_path, target))
 
         # --- rebuild mention index for this path (first-word-anchored) ---
-        trie = build_title_trie(self._notes_by_name)
-        for title_lower in mentions_in(content.lower(), trie):
+        for title_lower in mentions_in(content.lower(), self._title_trie):
             self._mention_index.setdefault(title_lower, set()).add(rel_path)
 
         self._dirty_paths.add(rel_path)
