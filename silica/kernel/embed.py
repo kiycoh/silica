@@ -16,6 +16,7 @@ Embeddings substrate rule (from the plan):
 """
 from __future__ import annotations
 
+import heapq
 import time
 from pathlib import Path
 from typing import Any
@@ -379,10 +380,13 @@ class EmbedStore:
             for path, sim in zip(mat_paths, sims.tolist()):
                 scores[path] = sim
         results = [(s, p) for p, s in scores.items() if p not in exclude]
-        results.sort(reverse=True)  # by (score, path) desc — preserves tie-break
+        # heapq.nlargest(k, results) is documented-equivalent to
+        # sorted(results, reverse=True)[:k] — same top-k, same (score, path)
+        # desc tie-break — but O(N log k) instead of a full O(N log N) sort.
+        top = heapq.nlargest(k, results)
         return [
             {"path": path, "name": self._notes[path]["name"], "score": round(float(score), 4)}
-            for score, path in results[:k]
+            for score, path in top
         ]
 
     def cosine_top_k(
