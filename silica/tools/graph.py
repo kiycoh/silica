@@ -654,7 +654,7 @@ def silica_cooccurrence_refresh(folder: str = "", force: bool = False) -> dict[s
 
 class LexicalRefreshArgs(BaseModel):
     folder: str = Field(default="", description="Vault-relative folder to restrict indexing (empty = entire vault)")
-    force: bool = Field(default=False, description="Rebuild the whole index from empty")
+    force: bool = Field(default=False, description="Rebuild the scanned folder's slice from empty (the whole index when folder is empty)")
 
 @tool(LexicalRefreshArgs, cls="composed", collapse="eager")
 def silica_lexical_refresh(folder: str = "", force: bool = False) -> dict[str, Any]:
