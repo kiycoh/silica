@@ -200,13 +200,106 @@ def _recall_facts(perception: Perception, query: str, query_vec, *, now: str,
         logger.warning("perceive: episodic recall failed (context continues): %s", e)
 
 
+def _maybe_assemble(blocks: list[NoteBlock], *, assemble: bool, query: str) -> list[NoteBlock]:
+    """Gate: assemble=False returns blocks untouched (bit-identical default)."""
+    if not assemble or not blocks:
+        return blocks
+    return _assemble_blocks(blocks, query)
+
+
+def _driver_neighbors(path: str):
+    """`assembly.Neighbors` for one note, read live from DRIVER + cooccurrence.
+
+    Keyspace note: seeds and `body_of`/`by_path` live in the store keyspace
+    (no ".md"); `NoteRef.path` (children via backlinks, related via links)
+    carries ".md", so it is stripped here to match. `parent` is transcribed
+    as the raw `parent note` prop value (a NAME, not necessarily a store
+    path) and `edges` as raw cooccurrence-store keys — both may not resolve
+    through `body_of`; see the caller's keyspace concerns.
+    """
+    from silica.driver import DRIVER
+    from silica.kernel import assembly
+    from silica.kernel.cooccurrence import cooccur_key, get_cooccur_store
+    from silica.config import CONFIG
+
+    parent = None
+    try:
+        raw = (DRIVER.props_of(path) or {}).get("parent note") or ""
+        parent = str(raw).strip().strip("[]").strip() or None
+    except Exception:
+        parent = None
+    try:
+        related = [r.path.removesuffix(".md") for r in DRIVER.links(path)]
+    except Exception:
+        related = []
+    children: list[str] = []
+    try:
+        for b in DRIVER.backlinks(path):
+            bp = (DRIVER.props_of(b.path) or {}).get("parent note") or ""
+            if str(bp).strip().strip("[]").strip().lower() == _name_of(path).lower():
+                children.append(b.path.removesuffix(".md"))
+    except Exception:
+        children = []
+    edges: list[str] = []
+    try:
+        store = get_cooccur_store(lang=CONFIG.cooccurrence_lang)
+        row = store.note_edges_for(cooccur_key(path))
+        edges = [p for p, _w in sorted(row.items(), key=lambda kv: (-kv[1], kv[0]))]
+    except Exception:
+        edges = []
+    return assembly.Neighbors(parent=parent, children=children,
+                              related=related, edges=edges)
+
+
+def _name_of(path: str) -> str:
+    return path.rsplit("/", 1)[-1].removesuffix(".md")
+
+
+def _assembly_body(path: str) -> str:
+    _date, body = _read_dated_body(path)
+    return body or ""
+
+
+def _assemble_blocks(blocks: list[NoteBlock], query: str) -> list[NoteBlock]:
+    from silica.kernel import assembly
+
+    by_path = {b.path: b for b in blocks}
+
+    def _body(p: str) -> str:
+        # Seeds already carry the correctly-fetched body (right origin, memory
+        # or vault, per _read_dated_body) on NoteBlock.body — assemble() calls
+        # body_of() for every unit including seeds, and a re-read here would
+        # default to origin="vault" and silently drop memory-lane seed bodies.
+        # Only genuine periphery paths (not in by_path) fall back to a fresh read.
+        seed = by_path.get(p)
+        return seed.body if seed is not None else _assembly_body(p)
+
+    res = assembly.assemble(
+        [b.path for b in blocks],
+        neighbors_of=_driver_neighbors,
+        body_of=_body,
+    )
+    out: list[NoteBlock] = []
+    for ab in res.blocks:
+        head = by_path.get(ab.members[0])
+        out.append(NoteBlock(
+            path=ab.members[0],
+            date=head.date if head else "",
+            evidence=head.evidence if head else "",
+            body=ab.text,
+            excerpt=ab.text,   # assembled text is already budgeted
+        ))
+    return out
+
+
 def perceive(query: str, *, now: str, k: int = DEFAULT_K,
              window_chars: int = WINDOW_CHARS, windows: int = DEFAULT_WINDOWS,
              facts_k: int = FACTS_K,
              episodic_ttl_days: int | None = None, with_facts: bool = True,
              use_embedder: bool = True, use_rerank: bool = True,
              paths: list[str] | None = None,
-             use_recall_weights: bool = False) -> Perception:
+             use_recall_weights: bool = False,
+             assemble: bool = False) -> Perception:
     """Retrieve + assemble the answer-time context for `query`.
 
     ``paths`` skips retrieval and assembles the given notes in order (the eval
@@ -215,6 +308,9 @@ def perceive(query: str, *, now: str, k: int = DEFAULT_K,
     None = CONFIG default, 0 = never expire. ``use_recall_weights`` (phase 1 of
     `improve`, eval-only, default off) is forwarded to `facade_retrieve`; it
     has no effect when ``paths`` is set, since that bypasses retrieval.
+    ``assemble`` (default off) folds each seed's 1-hop neighbours into a
+    squashed, breadcrumbed block; no effect when ``paths`` is set (that
+    bypasses retrieval).
     """
     from silica.kernel.rerank import best_windows
 
@@ -237,6 +333,9 @@ def perceive(query: str, *, now: str, k: int = DEFAULT_K,
                    if query else body[:window_chars])
         blocks.append(NoteBlock(path=path, date=date, evidence=evidence,
                                 body=body, excerpt=excerpt))
+
+    if paths is None:
+        blocks = _maybe_assemble(blocks, assemble=assemble, query=query)
 
     perception = Perception(query=query, blocks=blocks)
     if with_facts:
