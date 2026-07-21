@@ -95,7 +95,9 @@ def handle_autolink(fsm: "InjectorFSM") -> None:
                     candidates = None
 
                 added = orch.DRIVER.autolink_note(
-                    path, candidates=candidates if candidates is not None else title_index
+                    path,
+                    candidates=candidates if candidates is not None else title_index,
+                    title_index=title_index,
                 )
                 if added:
                     total_added += len(added)
