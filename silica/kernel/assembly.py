@@ -11,7 +11,9 @@ ranked/reranked; neighbours enter as periphery and are never re-ranked.
 """
 from __future__ import annotations
 
+import re
 from dataclasses import dataclass, field
+from typing import Callable
 
 
 @dataclass
@@ -47,8 +49,6 @@ def fill_budget(
             dropped.append(u.path)
     return kept, Truncation(kept=len(kept), dropped=dropped)
 
-
-import re
 
 _ATX = re.compile(r"^(#{1,6})(\s)", re.MULTILINE)
 
@@ -117,8 +117,6 @@ def squash(
     blocks.sort(key=lambda b: min(rank_of[p] for p in b.members))
     return blocks
 
-
-from typing import Callable
 
 ASSEMBLY_BUDGET_CHARS = 12000  # ponytail: placeholder ceiling, tuned in A/B
 
