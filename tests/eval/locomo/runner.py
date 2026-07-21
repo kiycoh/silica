@@ -898,9 +898,9 @@ def main(argv=None) -> int:
     ap.add_argument("--lexical", action="store_true",
                     help="read-time lexical (BM25) A/B arm: fuse the lexical leg "
                          "into facade retrieval (default off). Requires the "
-                         "lexical index to have been built during ingest (the "
-                         "Task 8 write-choke-point hook) — otherwise this is a "
-                         "no-op with an empty index.")
+                         "lexical index to have been built first with "
+                         "silica_lexical_refresh (the /lexical CLI) — otherwise "
+                         "this is a no-op with an empty index.")
     ap.add_argument("--conversations", default="",
                     help="comma-separated sample_ids to run "
                          "(pilot: conv-26,conv-47,conv-49)")
