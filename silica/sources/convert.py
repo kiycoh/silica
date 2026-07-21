@@ -293,6 +293,12 @@ def _mineru_error(stderr: str) -> str:
         return str(parsed.get("error") or err[:300])
     except (ValueError, AttributeError):
         pass
+    # The task blob is usually EMBEDDED in the final "Error: N task(s) failed"
+    # line, where its "error" field sits past any truncation window — pull it
+    # straight out (last match = final task).
+    fields = re.findall(r'"error":\s*"((?:[^"\\]|\\.)+)"', err)
+    if fields:
+        return fields[-1][:300]
     lines = [
         ln.strip() for ln in err.splitlines()  # \r-split too: tqdm bars separate
         if ln.strip() and not _MINERU_NOISE_RE.search(ln)

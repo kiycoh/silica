@@ -39,6 +39,24 @@ def test_skips_server_startup_noise_and_surfaces_real_error():
     assert "mineru-api" not in out
 
 
+def test_extracts_error_field_from_embedded_task_blob():
+    # mineru 3.4.4's real failure shape: startup noise, then a final line with
+    # the task JSON embedded — its "error" field sits past any 300-char window.
+    stderr = (
+        "2026-07-22 01:04:05.607 | INFO     | mineru.cli.client:run_orchestrated_cli:953"
+        " - Started local mineru-api at http://127.0.0.1:52983\n"
+        "INFO:     Started server process [1097256]\n"
+        "Error: 1 task(s) failed while processing documents:\n"
+        '- task#1 (l.Spark-SQL): Task f07cd05c failed for task#1 [l.Spark-SQL]: '
+        '{"task_id": "f07cd05c", "status": "failed", "backend": "pipeline", '
+        '"file_names": ["l.Spark-SQL"], "created_at": "2026-07-21T23:07:03+00:00", '
+        '"started_at": "2026-07-21T23:07:03+00:00", "completed_at": '
+        '"2026-07-21T23:07:06+00:00", "error": "No module named \'six\'", '
+        '"queued_ahead": 0}\n'
+    )
+    assert _mineru_error(stderr) == "No module named 'six'"
+
+
 def test_last_meaningful_line_when_no_explicit_error_keyword():
     # No ERROR line (e.g. killed mid-run) → last non-noise line beats head noise.
     stderr = (

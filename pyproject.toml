@@ -57,6 +57,10 @@ rerank = ["sentence-transformers>=3.0"]
 # chosen. See SILICA_PDF_PROVIDER.
 pdf = [
     "mineru[pipeline]>=3.4.4",
+    # mineru 3.4.4 packaging bug: its vendored pytorchocr imports `six`
+    # (pytorchocr/data/imaug/operators.py) without declaring it, so every
+    # pipeline convert dies with ModuleNotFoundError. Drop when upstream fixes.
+    "six",
 ]
 # Everything except [dev]. Self-referential extra: pip resolves it back to this
 # same project. Note it inherits [pdf] and [rerank], so it pulls torch and
