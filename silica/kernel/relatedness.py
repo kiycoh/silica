@@ -228,19 +228,29 @@ def _concept_idf(
     zero the whole co-occurrence signal and silently drop the leg. On a real
     corpus the smoothing is negligible, so hub suppression is unchanged.
 
-    ponytail: one extra O(notes) pass, recomputed per query; memoise on the store
-    if a profiler ever shows it hot.
+    ponytail: backed by `CooccurStore.stem_postings()` (Task 3.4) instead of an
+    O(notes) scan — df is just posting length (scope-filtered), n is the
+    in-scope note count. Only queried `stems` are looked up, so this is
+    O(|stems| + in-scope postings) rather than O(all notes).
     """
-    df: dict[str, int] = {}
-    n = 0
-    for path in cooccur_store.paths():
-        if not _path_in_scope(path, scope):
-            continue
-        n += 1
-        for stem in cooccur_store.note_nodes(path):
-            if stem in stems:
-                df[stem] = df.get(stem, 0) + 1
     import math
+
+    postings = cooccur_store.stem_postings()
+    if scope is None:
+        n = len(cooccur_store)
+        df = {stem: len(postings[stem]) for stem in stems if stem in postings}
+    else:
+        in_scope = [p for p in cooccur_store.paths() if _path_in_scope(p, scope)]
+        n = len(in_scope)
+        scope_set = set(in_scope)
+        df = {}
+        for stem in stems:
+            plist = postings.get(stem)
+            if not plist:
+                continue
+            c = sum(1 for p in plist if p in scope_set)
+            if c:
+                df[stem] = c
 
     return {stem: math.log((n + 1) / c) for stem, c in df.items() if c > 0}
 
@@ -259,15 +269,26 @@ def _rank_cooccur_from_profile(
     if not profile:
         return None
     idf = _concept_idf(cooccur_store, set(profile), scope=scope)
+    # Candidate set = union of the query stems' postings (Task 3.4): only notes
+    # sharing at least one profile stem can score > 0, so this yields the same
+    # note_scores as a full-notes scan without visiting notes that can't match.
+    postings = cooccur_store.stem_postings()
+    candidates: set[str] = set()
+    for stem in profile:
+        plist = postings.get(stem)
+        if plist:
+            candidates.update(plist)
     note_scores: dict[str, float] = {}
-    for path in cooccur_store.paths():
+    for path in candidates:
         if path in blocked or not _path_in_scope(path, scope):
             continue
         overlap = 0.0
-        for stem, count in cooccur_store.note_nodes(path).items():
-            weight = profile.get(stem)
-            if weight:
-                overlap += weight * count * idf.get(stem, 0.0)
+        for stem, weight in profile.items():
+            if not weight:
+                continue
+            plist = postings.get(stem)
+            if plist and path in plist:
+                overlap += weight * plist[path] * idf.get(stem, 0.0)
         if overlap > 0.0:
             note_scores[path] = overlap
     if not note_scores:

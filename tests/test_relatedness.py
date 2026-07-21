@@ -403,3 +403,252 @@ def test_fuse_recall_leg_proposes_notes_absent_from_semantic_legs():
     assert "Z" not in [r.path for r in out_without]
     out_with = _fuse(embed, None, k=10, recall_rank=[("Z", 3.0)])
     assert "Z" in [r.path for r in out_with]
+
+
+# ---------------------------------------------------------------------------
+# Task 3.4 (perf/hot-paths): stem-postings inverted index backs _concept_idf
+# and _rank_cooccur_from_profile's candidate scoring. This is a
+# REFERENCE-EQUIVALENCE suite: the postings-backed implementations must
+# return IDENTICAL values (idf map / ranked list / None) to the old full-scan
+# implementations, reimplemented below as reference functions frozen at the
+# pre-refactor behavior. The coverage/flatness/gate tail is exercised through
+# the REAL `_rank_cooccur_from_profile`, not reimplemented, since it must stay
+# byte-identical rather than merely equivalent.
+# ---------------------------------------------------------------------------
+
+import math as _math
+import statistics as _statistics
+
+from silica.kernel import relatedness as _relatedness_mod
+from silica.kernel.relatedness import _concept_idf, _rank_cooccur_from_profile, _path_in_scope
+
+_snowball = __import__("snowballstemmer").stemmer("english").stemWord
+
+
+def _old_concept_idf(cooccur_store, stems, *, scope):
+    """Frozen copy of the pre-3.4 `_concept_idf`: full paths()/note_nodes() scan."""
+    df: dict[str, int] = {}
+    n = 0
+    for path in cooccur_store.paths():
+        if not _path_in_scope(path, scope):
+            continue
+        n += 1
+        for stem in cooccur_store.note_nodes(path):
+            if stem in stems:
+                df[stem] = df.get(stem, 0) + 1
+    return {stem: _math.log((n + 1) / c) for stem, c in df.items() if c > 0}
+
+
+def _old_rank_cooccur_from_profile(cooccur_store, profile, *, k, blocked, scope):
+    """Frozen copy of the pre-3.4 `_rank_cooccur_from_profile`: two full scans.
+
+    Reads `_COOCCUR_MIN_CONFIDENCE` off the live module (not a bound import) so
+    a test that monkeypatches the threshold affects this reference the same
+    way it affects the real function under test.
+    """
+    if not profile:
+        return None
+    idf = _old_concept_idf(cooccur_store, set(profile), scope=scope)
+    note_scores: dict[str, float] = {}
+    for path in cooccur_store.paths():
+        if path in blocked or not _path_in_scope(path, scope):
+            continue
+        overlap = 0.0
+        for stem, count in cooccur_store.note_nodes(path).items():
+            weight = profile.get(stem)
+            if weight:
+                overlap += weight * count * idf.get(stem, 0.0)
+        if overlap > 0.0:
+            note_scores[path] = overlap
+    if not note_scores:
+        return None
+    ranked = sorted(note_scores.items(), key=lambda kv: (-kv[1], kv[0]))[:k]
+    total_mass = sum(w * idf.get(s, 0.0) for s, w in profile.items())
+    top_stems = set(cooccur_store.note_nodes(ranked[0][0]))
+    matched = sum(w * idf.get(s, 0.0) for s, w in profile.items() if s in top_stems)
+    coverage = (matched / total_mass) if total_mass > 0 else 0.0
+    scores = [s for _p, s in ranked]
+    flatness = scores[0] / _statistics.median(scores)
+    fired = coverage < _relatedness_mod._COOCCUR_MIN_CONFIDENCE
+    if fired:
+        return None
+    return ranked
+
+
+def _dozen_notes_store(tmp_path) -> CooccurStore:
+    """A dozen notes with varied stems/counts, some in a subfolder (scope tests).
+
+    Profile stems used across the cases below: alpha, beta, gamma, zeta.
+      root1: alpha beta gamma delta epsilon  (full spread)
+      root2: alpha beta                      (partial, low count)
+      root3: gamma delta epsilon zeta        (partial, no alpha/beta)
+      root4: alpha x3                        (single stem, high count)
+      root5: beta x3                         (single stem, high count)
+      root6: eta theta iota                  (disjoint -> never a candidate)
+      root7: mu nu                           (disjoint -> never a candidate)
+      root8: alpha beta gamma delta          (near-full spread)
+      folder/n1: alpha beta gamma            (subfolder, full profile overlap)
+      folder/n2: alpha zeta                  (subfolder, partial)
+      folder/n3: kappa lambda                (subfolder, disjoint)
+      folder/n4: beta gamma                  (subfolder, partial)
+    """
+    st = CooccurStore(path=tmp_path / "dozen.json", lang="english")
+    st.upsert_note("root1", build_contribution("root1", "alpha beta gamma delta epsilon"))
+    st.upsert_note("root2", build_contribution("root2", "alpha beta"))
+    st.upsert_note("root3", build_contribution("root3", "gamma delta epsilon zeta"))
+    st.upsert_note("root4", build_contribution("root4", "alpha alpha alpha"))
+    st.upsert_note("root5", build_contribution("root5", "beta beta beta"))
+    st.upsert_note("root6", build_contribution("root6", "eta theta iota"))
+    st.upsert_note("root7", build_contribution("root7", "mu nu"))
+    st.upsert_note("root8", build_contribution("root8", "alpha beta gamma delta"))
+    st.upsert_note("folder/n1", build_contribution("n1", "alpha beta gamma"))
+    st.upsert_note("folder/n2", build_contribution("n2", "alpha zeta"))
+    st.upsert_note("folder/n3", build_contribution("n3", "kappa lambda"))
+    st.upsert_note("folder/n4", build_contribution("n4", "beta gamma"))
+    return st
+
+
+def _main_profile() -> dict[str, float]:
+    return {
+        _snowball("alpha"): 2.0,
+        _snowball("beta"): 1.0,
+        _snowball("gamma"): 1.5,
+        _snowball("zeta"): 3.0,
+    }
+
+
+def test_concept_idf_reference_equivalence_scope_none_and_scoped(tmp_path):
+    st = _dozen_notes_store(tmp_path)
+    stems = {_snowball(w) for w in ("alpha", "beta", "gamma", "zeta", "missingstem")}
+    for scope in (None, "folder"):
+        new = _concept_idf(st, stems, scope=scope)
+        old = _old_concept_idf(st, stems, scope=scope)
+        assert new == old
+
+
+def test_rank_cooccur_reference_equivalence_scope_none(tmp_path):
+    st = _dozen_notes_store(tmp_path)
+    profile = _main_profile()
+    new = _rank_cooccur_from_profile(st, profile, k=100, blocked=set(), scope=None)
+    old = _old_rank_cooccur_from_profile(st, profile, k=100, blocked=set(), scope=None)
+    assert new is not None
+    assert new == old
+
+
+def test_rank_cooccur_reference_equivalence_real_scope(tmp_path):
+    st = _dozen_notes_store(tmp_path)
+    profile = _main_profile()
+    new = _rank_cooccur_from_profile(st, profile, k=100, blocked=set(), scope="folder")
+    old = _old_rank_cooccur_from_profile(st, profile, k=100, blocked=set(), scope="folder")
+    assert new is not None
+    assert new == old
+    # scope filtering actually took effect (root-level notes excluded)
+    assert all(p.startswith("folder/") for p, _s in new)
+
+
+def test_rank_cooccur_reference_equivalence_nonempty_blocked_incl_query(tmp_path):
+    st = _dozen_notes_store(tmp_path)
+    profile = _main_profile()
+    blocked = {"root1", "root4"}  # "root1" stands in for the query path
+    new = _rank_cooccur_from_profile(st, profile, k=100, blocked=blocked, scope=None)
+    old = _old_rank_cooccur_from_profile(st, profile, k=100, blocked=blocked, scope=None)
+    assert new is not None
+    assert new == old
+    assert "root1" not in [p for p, _s in new]
+    assert "root4" not in [p for p, _s in new]
+
+
+def test_rank_cooccur_reference_equivalence_empty_profile_is_none(tmp_path):
+    st = _dozen_notes_store(tmp_path)
+    new = _rank_cooccur_from_profile(st, {}, k=10, blocked=set(), scope=None)
+    old = _old_rank_cooccur_from_profile(st, {}, k=10, blocked=set(), scope=None)
+    assert new is None
+    assert new == old
+
+
+def test_rank_cooccur_reference_equivalence_absent_stems_is_none(tmp_path):
+    st = _dozen_notes_store(tmp_path)
+    profile = {_snowball("zzznotinstore"): 1.0, _snowball("wontmatch"): 2.0}
+    new = _rank_cooccur_from_profile(st, profile, k=10, blocked=set(), scope=None)
+    old = _old_rank_cooccur_from_profile(st, profile, k=10, blocked=set(), scope=None)
+    assert new is None
+    assert new == old
+
+
+def test_rank_cooccur_reference_equivalence_ties_broken_by_path(tmp_path):
+    st = CooccurStore(path=tmp_path / "ties.json", lang="english")
+    st.upsert_note("zeta_note", build_contribution("zeta_note", "alpha"))
+    st.upsert_note("alpha_note", build_contribution("alpha_note", "alpha"))
+    profile = {_snowball("alpha"): 1.0}
+    new = _rank_cooccur_from_profile(st, profile, k=10, blocked=set(), scope=None)
+    old = _old_rank_cooccur_from_profile(st, profile, k=10, blocked=set(), scope=None)
+    assert new == old
+    # equal overlap score -> tie broken by path ascending
+    assert [p for p, _s in new] == ["alpha_note", "zeta_note"]
+
+
+def test_rank_cooccur_reference_equivalence_k_smaller_than_candidates(tmp_path):
+    st = _dozen_notes_store(tmp_path)
+    profile = _main_profile()
+    new = _rank_cooccur_from_profile(st, profile, k=2, blocked=set(), scope=None)
+    old = _old_rank_cooccur_from_profile(st, profile, k=2, blocked=set(), scope=None)
+    assert new is not None
+    assert len(new) == 2
+    assert new == old
+
+
+def test_rank_cooccur_reference_equivalence_k_larger_than_candidates(tmp_path):
+    st = _dozen_notes_store(tmp_path)
+    profile = _main_profile()
+    new = _rank_cooccur_from_profile(st, profile, k=1000, blocked=set(), scope=None)
+    old = _old_rank_cooccur_from_profile(st, profile, k=1000, blocked=set(), scope=None)
+    assert new is not None
+    assert new == old
+
+
+def test_rank_cooccur_reference_equivalence_gate_not_fired(tmp_path, monkeypatch):
+    # Dormant gate (default 0.0): must not fire, new == old, non-None.
+    monkeypatch.setattr(_relatedness_mod, "_COOCCUR_MIN_CONFIDENCE", 0.0)
+    st = _dozen_notes_store(tmp_path)
+    profile = _main_profile()
+    new = _rank_cooccur_from_profile(st, profile, k=100, blocked=set(), scope=None)
+    old = _old_rank_cooccur_from_profile(st, profile, k=100, blocked=set(), scope=None)
+    assert new is not None
+    assert new == old
+
+
+def test_rank_cooccur_reference_equivalence_gate_fires(tmp_path, monkeypatch):
+    # Coverage is a ratio <= 1.0 (matched/total_mass, matched <= total_mass);
+    # a threshold well above 1.0 is guaranteed to fire regardless of the
+    # fixture's actual coverage value.
+    monkeypatch.setattr(_relatedness_mod, "_COOCCUR_MIN_CONFIDENCE", 999.0)
+    st = _dozen_notes_store(tmp_path)
+    profile = _main_profile()
+    new = _rank_cooccur_from_profile(st, profile, k=100, blocked=set(), scope=None)
+    old = _old_rank_cooccur_from_profile(st, profile, k=100, blocked=set(), scope=None)
+    assert new is None
+    assert new == old
+
+
+def test_rank_cooccur_postings_invalidated_on_upsert_and_delete(tmp_path):
+    st = CooccurStore(path=tmp_path / "inv.json", lang="english")
+    st.upsert_note("A", build_contribution("A", "alpha beta"))
+    st.upsert_note("B", build_contribution("B", "gamma"))
+    profile = {_snowball("alpha"): 1.0}
+
+    ranked = _rank_cooccur_from_profile(st, profile, k=10, blocked=set(), scope=None)
+    assert [p for p, _s in ranked] == ["A"]
+
+    # upsert moves A off 'alpha' -> A drops out of the ranking entirely
+    st.upsert_note("A", build_contribution("A", "gamma delta"))
+    ranked2 = _rank_cooccur_from_profile(st, profile, k=10, blocked=set(), scope=None)
+    assert ranked2 is None
+
+    # a fresh note carrying 'alpha' becomes the new candidate
+    st.upsert_note("C", build_contribution("C", "alpha alpha"))
+    ranked3 = _rank_cooccur_from_profile(st, profile, k=10, blocked=set(), scope=None)
+    assert [p for p, _s in ranked3] == ["C"]
+
+    st.delete_note("C")
+    ranked4 = _rank_cooccur_from_profile(st, profile, k=10, blocked=set(), scope=None)
+    assert ranked4 is None

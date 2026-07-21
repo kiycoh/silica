@@ -339,6 +339,72 @@ def test_note_nodes_second_call_served_from_cache(tmp_path):
     assert "A" in store._note_nodes_cache
 
 
+# ---------------------------------------------------------------------------
+# Task 3.4 (perf/hot-paths): stem_postings() — cached stem -> {path: count}
+# inverted index, invalidated through the same _invalidate() seam as
+# note_nodes()/_adj/_labels.
+# ---------------------------------------------------------------------------
+
+def test_stem_postings_builds_stem_to_path_count_map(tmp_path):
+    store = CooccurStore(path=tmp_path / "cooc.json")
+    store.upsert_note("A", build_contribution("A", "alpha alpha beta"))
+    store.upsert_note("B", build_contribution("B", "alpha gamma"))
+    st = __import__("snowballstemmer").stemmer("english").stemWord
+    postings = store.stem_postings()
+    assert postings[st("alpha")] == {"A": 2, "B": 1}
+    assert postings[st("beta")] == {"A": 1}
+    assert postings[st("gamma")] == {"B": 1}
+
+
+def test_stem_postings_matches_manual_aggregation_across_notes(tmp_path):
+    store = CooccurStore(path=tmp_path / "cooc.json")
+    store.upsert_note("A", build_contribution("A", "alpha beta gamma"))
+    store.upsert_note("B", build_contribution("B", "beta gamma delta"))
+    store.upsert_note("C", build_contribution("C", "delta epsilon"))
+    postings = store.stem_postings()
+    manual: dict[str, dict[str, int]] = {}
+    for path in store.paths():
+        for stem, count in store.note_nodes(path).items():
+            manual.setdefault(stem, {})[path] = count
+    assert postings == manual
+
+
+def test_stem_postings_empty_store_returns_empty(tmp_path):
+    store = CooccurStore(path=tmp_path / "cooc.json")
+    assert store.stem_postings() == {}
+
+
+def test_stem_postings_invalidated_on_upsert(tmp_path):
+    store = CooccurStore(path=tmp_path / "cooc.json")
+    store.upsert_note("A", build_contribution("A", "alpha beta"))
+    store.stem_postings()  # warms the cache
+    store.upsert_note("A", build_contribution("A", "gamma delta"))
+    st = __import__("snowballstemmer").stemmer("english").stemWord
+    postings = store.stem_postings()
+    assert st("alpha") not in postings
+    assert postings[st("gamma")] == {"A": 1}
+
+
+def test_stem_postings_invalidated_on_delete(tmp_path):
+    store = CooccurStore(path=tmp_path / "cooc.json")
+    store.upsert_note("A", build_contribution("A", "alpha beta"))
+    store.upsert_note("B", build_contribution("B", "alpha gamma"))
+    store.stem_postings()  # warms the cache
+    store.delete_note("A")
+    st = __import__("snowballstemmer").stemmer("english").stemWord
+    postings = store.stem_postings()
+    assert "A" not in postings.get(st("alpha"), {})
+    assert postings[st("alpha")] == {"B": 1}
+
+
+def test_stem_postings_served_from_cache_on_second_call(tmp_path):
+    store = CooccurStore(path=tmp_path / "cooc.json")
+    store.upsert_note("A", build_contribution("A", "alpha beta"))
+    store.stem_postings()
+    assert store._stem_postings is not None
+    assert store.stem_postings() is store._stem_postings
+
+
 def test_to_networkx_builds_weighted_undirected_graph(tmp_path):
     store = CooccurStore(path=tmp_path / "cooc.json")
     store.upsert_note("A", build_contribution("A", "alpha beta"))

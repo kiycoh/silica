@@ -228,6 +228,8 @@ class CooccurStore:
         self._labels: dict[str, str] | None = None
         # per-path note_nodes() derived-dict cache (mirrors the _adj cache)
         self._note_nodes_cache: dict[str, dict[str, int]] = {}
+        # stem -> {path: count} inverted index cache (mirrors the _adj cache)
+        self._stem_postings: dict[str, dict[str, int]] | None = None
         self._load()
 
     # --- caches ---
@@ -235,6 +237,7 @@ class CooccurStore:
         self._adj = None
         self._labels = None
         self._note_nodes_cache = {}
+        self._stem_postings = None
 
     # --- I/O ---
     def _load(self) -> None:
@@ -353,6 +356,18 @@ class CooccurStore:
             )
             self._note_nodes_cache[key] = cached
         return dict(cached)
+
+    def stem_postings(self) -> dict[str, dict[str, int]]:
+        """Inverted index stem -> {path: count}, lazily built from stored notes and
+        invalidated with the other derived caches. Gives df (len of a posting) and
+        the candidate set (union of query-stem postings) without an all-notes scan."""
+        if self._stem_postings is None:
+            idx: dict[str, dict[str, int]] = {}
+            for path in self._notes:
+                for stem, count in self.note_nodes(path).items():
+                    idx.setdefault(stem, {})[path] = count
+            self._stem_postings = idx
+        return self._stem_postings
 
     def top_stems(self, n: int = 20) -> list[str]:
         """Top-n stem nodes by total weight across all notes, as display labels.
