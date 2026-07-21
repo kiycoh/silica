@@ -348,9 +348,15 @@ def handle_write(fsm: "InjectorFSM") -> None:
                         continue
                     idx_path = path.removesuffix(".md")
                     stem = os.path.splitext(os.path.basename(path))[0]
-                    body = orch.DRIVER.read_note(path).content or ""
-                    lex.upsert(idx_path, stem, body)
-                fsm.context["_lexical_dirty"] = True
+                    try:
+                        body = orch.DRIVER.read_note(path).content or ""
+                        lex.upsert(idx_path, stem, body)
+                        # Only mark dirty after a real upsert, so a run that
+                        # indexed nothing never triggers a spurious index save
+                        # (mirrors the embed/cooccur dirty-flag gating).
+                        fsm.context["_lexical_dirty"] = True
+                    except Exception as _re:
+                        logger.debug("WRITE: lexical refresh failed for '%s': %s", path, _re)
         except Exception as _le:
             logger.debug("WRITE: lexical refresh skipped (%s)", _le)
     except Exception as _me:
