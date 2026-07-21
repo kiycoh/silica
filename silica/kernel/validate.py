@@ -143,6 +143,7 @@ def validate_operations(
     # title_key, built lazily once per call. Empty on any driver failure —
     # the gate abstains, never blocks the pipeline.
     _title_gate_cache: dict[str, tuple[str, str]] | None = None  # key -> (title, path)
+    _title_gate_list_cache: list[str] | None = None
 
     def _target_dir_titles() -> dict[str, tuple[str, str]]:
         nonlocal _title_gate_cache
@@ -152,7 +153,7 @@ def validate_operations(
         out: dict[str, tuple[str, str]] = {}
         try:
             norm_dir = (target_dir or "").replace("\\", "/").strip("/")
-            for ref in DRIVER.search_names(""):
+            for ref in DRIVER.list_files(norm_dir):
                 ref_dir = os.path.dirname((ref.path or "").replace("\\", "/")).strip("/")
                 if ref_dir != norm_dir:
                     continue
@@ -163,6 +164,12 @@ def validate_operations(
             logger.debug("validate: title gate enumeration failed (abstaining): %s", e)
         _title_gate_cache = out
         return out
+
+    def _target_dir_title_list() -> list[str]:
+        nonlocal _title_gate_list_cache
+        if _title_gate_list_cache is None:
+            _title_gate_list_cache = [t for (t, _p) in _target_dir_titles().values()]
+        return _title_gate_list_cache
 
     # 2. Coerce write <-> patch and enforce default hub fallback
     if not hub and target_dir:
@@ -372,7 +379,7 @@ def validate_operations(
             # decides — never a hard block, never a silent fourth duplicate.
             from silica.kernel.title import near_titles
             stem = os.path.splitext(os.path.basename(path))[0]
-            near = near_titles(stem, [t for (t, _p) in _target_dir_titles().values()])
+            near = near_titles(stem, _target_dir_title_list())
             if near:
                 cand_title, ratio = near[0]
                 cand_path = next(
