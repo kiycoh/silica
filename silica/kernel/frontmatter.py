@@ -21,7 +21,9 @@ def split(content):
 
 def clean_tag(t):
     """Canonical tag normalizer (moved from templates.py — single source of truth)."""
-    t = re.sub(r'^[\d\.]+\s*', '', str(t))
+    # Strip a leading list-ordinal ("1. ", "2) ") but not a digit fused to a word:
+    # require a separator + space so "3d"/"2fa"/"3D-Printing" keep their leading digit.
+    t = re.sub(r'^\d+[.\)]\s+', '', str(t))
     t = t.lower()
     t = re.sub(r'[^a-z0-9\s-]', '', t)
     t = re.sub(r'[\s_]+', '-', t)

@@ -195,6 +195,15 @@ def test_strip_preserves_markdown_structural_runs():
     assert strip_degenerate_runs("!!!!!") == "!"
 
 
+def test_strip_preserves_digit_runs():
+    # A16: digits are data, not garbage — never collapse numeric runs.
+    assert strip_degenerate_runs("population is 100000 people") == "population is 100000 people"
+    assert strip_degenerate_runs("1000000000") == "1000000000"
+    assert strip_degenerate_runs("0x00000") == "0x00000"
+    # letter garbage still collapses
+    assert strip_degenerate_runs("aaaaaaa") == "a"
+
+
 def test_strip_degenerate_normalized_in_ops():
     ops = [{"op": "write", "path": "Dir/A.md", "heading": "A",
             "source_basename": "inbox.md",

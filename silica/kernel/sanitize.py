@@ -41,7 +41,9 @@ _ILLEGAL_FILENAME_CHARS_RE = re.compile(r'[/\\:*?"<>|]')
 # — ATX headings up to ######, thematic breaks / setext underlines, emphasis,
 # code fences — and collapsing them corrupts real document structure (the golden
 # integrity probe caught `##### Heading` → `# Heading` on nucleate).
-_DEGENERATE_RUN_RE = re.compile(r'([^\n#*_=~`-])\1{4,}')
+# Also excludes digits (\d): they are data, not garbage — "100000" is a number,
+# not a degenerate run, and collapsing it silently corrupts the value.
+_DEGENERATE_RUN_RE = re.compile(r'([^\n\d#*_=~`-])\1{4,}')
 
 # Nested wikilink brackets: 3+ consecutive '[' or ']'. A valid wikilink uses
 # exactly two; 3+ only appears when an already-bracketed name was wrapped again

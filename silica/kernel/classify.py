@@ -327,7 +327,9 @@ def _llm_arbitrate(
             continue
         idx = entry.get("index")
         folder = entry.get("folder", "")
-        if idx is None or idx >= len(ambiguous):
+        # Reject non-int and out-of-range (incl. negative): a schema-valid -1 would
+        # relabel the last note, and a string index raises TypeError on `idx >= len`.
+        if not isinstance(idx, int) or not (0 <= idx < len(ambiguous)):
             continue
         note_path = ambiguous[idx][0]
         result[note_path] = folder if folder in valid_folders else taxonomy.uncategorized
