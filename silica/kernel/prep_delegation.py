@@ -15,7 +15,6 @@ from __future__ import annotations
 import json
 import logging
 import os
-import threading
 import typing
 from pathlib import Path
 
@@ -369,24 +368,11 @@ def _call_with_deadline(fn, seconds: float):
     per-chunk read timer, so a dead upstream holds the socket open forever.
     Only real elapsed time is trustworthy here.
     """
-    # ponytail: daemon thread leaks on timeout (dies with socket/process);
-    # acceptable for a single-turn call, revisit if calls pile up.
-    box: dict = {}
-
-    def _run():
-        try:
-            box["value"] = fn()
-        except Exception as e:
-            box["error"] = e
-
-    t = threading.Thread(target=_run, daemon=True, name="distiller-call")
-    t.start()
-    t.join(seconds)
-    if t.is_alive():
-        raise TimeoutError(f"distiller call exceeded {seconds:.0f}s wall-clock deadline")
-    if "error" in box:
-        raise box["error"]
-    return box["value"]
+    from silica.agent.llm import run_with_deadline
+    return run_with_deadline(
+        fn, seconds,
+        lambda: TimeoutError(f"distiller call exceeded {seconds:.0f}s wall-clock deadline"),
+    )
 
 
 def run_distiller(

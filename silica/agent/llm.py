@@ -102,36 +102,47 @@ _LOCAL_LLM_TIMEOUT = 130.0  # wall-clock backstop we enforce ourselves (> the li
 # first on a normal timeout and this only catches the silent-hang case.
 
 
-def _bounded(fn, timeout: float, model: str):
-    """Run fn() but raise litellm.Timeout if it exceeds `timeout` seconds.
+def run_with_deadline(fn, timeout: float, on_timeout, *, catch: type = Exception):
+    """Run fn() on a daemon thread, joining up to `timeout` seconds.
 
-    The only hang bound we actually control — the library's timeout can silently
-    not fire (see _LOCAL_LLM_TIMEOUT). Raising litellm.Timeout routes into the
-    normal transient-retry path.
+    Past the deadline, raise `on_timeout()`; if fn raised (of type `catch`),
+    re-raise it on the caller thread; otherwise return fn()'s value. The only
+    wall-clock bound we control — a transport read-timeout can silently not fire
+    when the provider trickles keep-alive bytes.
 
     ponytail: on timeout the worker thread is abandoned (daemon) — a blocked
-    C-level socket read can't be force-cancelled. Bounded by the 3-attempt retry
-    cap and the rarity of provider hangs; swap for a cancellable HTTP client if
-    abandoned threads ever pile up.
+    C-level socket read can't be force-cancelled. Bounded by the caller's retry
+    cap / single-turn use; swap for a cancellable HTTP client if abandoned
+    threads ever pile up.
     """
     box: dict = {}
 
     def _work():
         try:
             box["r"] = fn()
-        except BaseException as e:  # noqa: BLE001 - carried to the calling thread
+        except catch as e:  # noqa: BLE001 - carried to the calling thread
             box["e"] = e
 
     th = threading.Thread(target=_work, daemon=True)
     th.start()
     th.join(timeout)
     if th.is_alive():
-        raise litellm.Timeout(
-            message=f"local wall-clock timeout after {timeout:.0f}s (provider sent no response)",
-            model=model, llm_provider=model.split("/", 1)[0])
+        raise on_timeout()
     if "e" in box:
         raise box["e"]
     return box["r"]
+
+
+def _bounded(fn, timeout: float, model: str):
+    """Run fn() but raise litellm.Timeout if it exceeds `timeout` seconds, routing
+    the silent-hang case into the normal transient-retry path (see _LOCAL_LLM_TIMEOUT)."""
+    return run_with_deadline(
+        fn, timeout,
+        lambda: litellm.Timeout(
+            message=f"local wall-clock timeout after {timeout:.0f}s (provider sent no response)",
+            model=model, llm_provider=model.split("/", 1)[0]),
+        catch=BaseException,
+    )
 
 
 def _bounded_stream(make_iter, per_chunk_timeout: float, model: str):
@@ -266,6 +277,23 @@ def expand_tool_calls(
     return parsed, wire
 
 
+def build_assistant_message(
+    content: str | None, tool_calls_raw: list[tuple[str, str, str]] | None,
+) -> tuple[dict, list[ToolCall]]:
+    """Assemble the assistant history dict + parsed ToolCalls both provider paths
+    build identically: {"role": "assistant"} (+content if any, +tool_calls if any).
+
+    Callers add path-specific keys (reasoning_content, thinking_blocks) afterwards.
+    """
+    msg: dict = {"role": "assistant"}
+    if content:
+        msg["content"] = content
+    parsed: list[ToolCall] = []
+    if tool_calls_raw:
+        parsed, msg["tool_calls"] = expand_tool_calls(tool_calls_raw)
+    return msg, parsed
+
+
 def call_llm(
     model: str,
     messages: list[dict],
@@ -376,19 +404,13 @@ def call_llm(
         reasoning = "\n".join(b.get("thinking", "") for b in blocks if isinstance(b, dict))
 
     # Build the assistant message dict for conversation history
-    assistant_msg: dict = {"role": "assistant"}
-    if message.content:
-        assistant_msg["content"] = message.content
+    raw = ([(tc.id, tc.function.name, tc.function.arguments) for tc in message.tool_calls]
+           if message.tool_calls else None)
+    assistant_msg, parsed_calls = build_assistant_message(message.content, raw)
     if reasoning:
         assistant_msg["reasoning_content"] = reasoning
     if isinstance(blocks, list):
         assistant_msg["thinking_blocks"] = blocks
-
-    # Parse tool calls and build sanitized history
-    parsed_calls: list[ToolCall] = []
-    if message.tool_calls:
-        raw = [(tc.id, tc.function.name, tc.function.arguments) for tc in message.tool_calls]
-        parsed_calls, assistant_msg["tool_calls"] = expand_tool_calls(raw)
 
     if CONFIG.verbose:
         text_preview = (message.content or "")[:80].replace("\n", " ")

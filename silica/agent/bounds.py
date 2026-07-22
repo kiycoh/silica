@@ -208,6 +208,18 @@ def dedup_bounds(larger_path: str, *, hub: str | None = None) -> CapabilityBound
     )
 
 
+def _single_write_bounds(spoke_path: str, name: str, *, hub: str | None) -> CapabilityBounds:
+    """One-note write envelope: a single `write` of the framework-derived
+    `spoke_path`, hub never touchable. `name` sets log attribution."""
+    spoke_key = _norm_path(spoke_path)
+    return CapabilityBounds(
+        name=name,
+        allowed_ops=frozenset({OpType.write}),
+        target_predicate=lambda p: _norm_path(p) == spoke_key,
+        forbidden_paths=frozenset({hub} if hub else set()),
+    )
+
+
 def dedup_spoke_bounds(spoke_path: str, *, hub: str | None = None) -> CapabilityBounds:
     """Spoke bounds for a dedup `distinct` verdict: create exactly ONE new note.
 
@@ -216,14 +228,7 @@ def dedup_spoke_bounds(spoke_path: str, *, hub: str | None = None) -> Capability
     `spoke_path` — the path the framework derived from the title, never one the
     model picked — and the hub is never touchable.
     """
-    spoke_key = _norm_path(spoke_path)
-    forbidden = frozenset({hub} if hub else set())
-    return CapabilityBounds(
-        name="dedup_spoke",
-        allowed_ops=frozenset({OpType.write}),
-        target_predicate=lambda p: _norm_path(p) == spoke_key,
-        forbidden_paths=forbidden,
-    )
+    return _single_write_bounds(spoke_path, "dedup_spoke", hub=hub)
 
 
 def expand_bounds(spoke_path: str, *, hub: str | None = None) -> CapabilityBounds:
@@ -233,14 +238,7 @@ def expand_bounds(spoke_path: str, *, hub: str | None = None) -> CapabilityBound
     validator already sanitized, hub never touchable — under its own name so
     logs attribute the write to the expand retry, not the dedup judge.
     """
-    spoke_key = _norm_path(spoke_path)
-    forbidden = frozenset({hub} if hub else set())
-    return CapabilityBounds(
-        name="expand",
-        allowed_ops=frozenset({OpType.write}),
-        target_predicate=lambda p: _norm_path(p) == spoke_key,
-        forbidden_paths=forbidden,
-    )
+    return _single_write_bounds(spoke_path, "expand", hub=hub)
 
 
 def refiner_bounds(

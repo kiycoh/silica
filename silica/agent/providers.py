@@ -13,7 +13,7 @@ import openai
 import orjson
 from pydantic import BaseModel
 
-from silica.agent.llm import LLMResponse, expand_tool_calls, openrouter_routing, retry_transient
+from silica.agent.llm import LLMResponse, build_assistant_message, openrouter_routing, retry_transient
 
 logger = logging.getLogger(__name__)
 
@@ -187,15 +187,10 @@ class OpenAICompatibleProvider:
                     if not content_str and parsed_object:
                         content_str = orjson.dumps(parsed_object.model_dump()).decode("utf-8")
                     
-                    assistant_msg: dict[str, Any] = {"role": "assistant"}
-                    if message.content:
-                        assistant_msg["content"] = message.content
+                    raw = ([(tc.id, tc.function.name, tc.function.arguments) for tc in message.tool_calls]
+                           if message.tool_calls else None)
+                    assistant_msg, parsed_calls = build_assistant_message(message.content, raw)
 
-                    parsed_calls = []
-                    if message.tool_calls:
-                        raw = [(tc.id, tc.function.name, tc.function.arguments) for tc in message.tool_calls]
-                        parsed_calls, assistant_msg["tool_calls"] = expand_tool_calls(raw)
-                    
                     return LLMResponse(
                         text=content_str,
                         tool_calls=parsed_calls,
@@ -271,15 +266,9 @@ class OpenAICompatibleProvider:
 
             content = "".join(content_chunks) or None
             tool_calls_list = [tc_acc[k] for k in sorted(tc_acc)]
-
-            assistant_msg: dict[str, Any] = {"role": "assistant"}
-            if content:
-                assistant_msg["content"] = content
-
-            parsed_calls = []
-            if tool_calls_list:
-                raw = [(t["id"], t["function"]["name"], t["function"]["arguments"]) for t in tool_calls_list]
-                parsed_calls, assistant_msg["tool_calls"] = expand_tool_calls(raw)
+            raw = ([(t["id"], t["function"]["name"], t["function"]["arguments"]) for t in tool_calls_list]
+                   if tool_calls_list else None)
+            assistant_msg, parsed_calls = build_assistant_message(content, raw)
 
             return LLMResponse(
                 text=content,
@@ -335,6 +324,19 @@ def get_embedder(config: Any) -> OpenAIEmbedder:
         api_key=getattr(config, "embedding_api_key", "lm-studio"),
         model=getattr(config, "embedding_model", "qwen3-embedding-8b"),
     )
+
+
+def get_embedder_or_none(config: Any, label: str, *, level: str = "warning") -> OpenAIEmbedder | None:
+    """Acquire the embedder, or None if unavailable (logged at `level`).
+
+    Centralizes the 'try get_embedder, on failure log and skip the phase' guard
+    each embedding-gated FSM handler repeats; callers keep their own skip action.
+    """
+    try:
+        return get_embedder(config)
+    except Exception as e:
+        getattr(logger, level)("%s: embedder unavailable (%s) — skipping", label, e)
+        return None
 
 
 class Reranker:
