@@ -94,13 +94,12 @@ def retry_transient(fn, exceptions: tuple, attempts: int = 3, base_delay: float 
                 time.sleep(delay)
 
 
-_LOCAL_LLM_TIMEOUT = 45.0  # wall-clock backstop we enforce ourselves (> the litellm
+_LOCAL_LLM_TIMEOUT = 130.0  # wall-clock backstop we enforce ourselves (> the litellm
 # timeout below, so litellm's own timeout wins if it ever fires). litellm's `timeout`
 # kwarg does NOT fire on a provider that accepts the request then never sends a body
 # — observed: OpenRouter holding an ESTAB socket idle ~58min, zero retries, the whole
-# process wedged on one call. 45s matches the openai-SDK read timeout in providers.py;
-# flash normally answers in <10s, so a hung call fails fast (was 150s = too slow when
-# hangs are frequent, the dominant cost of a flaky-provider run).
+# process wedged on one call. Kept 10s above the 120s litellm timeout so litellm fires
+# first on a normal timeout and this only catches the silent-hang case.
 
 
 def _bounded(fn, timeout: float, model: str):
@@ -278,7 +277,7 @@ def call_llm(
     if model.startswith("openrouter/") and (rt := openrouter_routing(openrouter_provider)):
         kwargs["extra_body"] = rt
 
-    kwargs["timeout"] = 40.0  # litellm's own (fires first if it works); _bounded is the backstop
+    kwargs["timeout"] = 120.0  # litellm's own (fires first if it works); _bounded is the backstop
 
     _TRANSIENT = (
         litellm.Timeout,
