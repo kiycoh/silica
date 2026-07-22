@@ -359,6 +359,10 @@ def _handle_direct_shortcut(raw_input: str, messages: list[dict]) -> bool:
             from silica.kernel.vault_manifest import apply_manifest_to_config, reset_manifest_cache
             reset_manifest_cache()  # manifest is vault-scoped too
             apply_manifest_to_config()
+            # Vault-scoped store caches are path-keyed (harmless on lookup) but
+            # retain the old vault's index/vectors for the process lifetime.
+            from silica.kernel.relatedness import reset_vault_caches
+            reset_vault_caches()
             CONSOLE.print(f"  Vault → [bold]{resolved}[/] (backend: {CONFIG.backend})")
             _announce_code_lane()
             # Surface the frozen-language drift here, not only in `/vault` info:

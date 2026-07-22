@@ -68,6 +68,21 @@ _EXPANSION_DISCOUNT = 0.25
 _POOL_MIN = 25
 
 
+def reset_vault_caches() -> None:
+    """Drop all vault-scoped leg caches so a /vault switch releases the previous
+    vault's index/vectors instead of retaining them for the process lifetime.
+
+    Lives on the facade so callers (the CLI /vault handler) don't import the
+    legs directly — the leg caches are path-keyed, so this is memory release,
+    not correctness (a stale-keyed lookup would miss and rebuild anyway).
+    """
+    from silica.kernel import cooccurrence, embed, lexical
+
+    embed.clear()
+    cooccurrence.clear()
+    lexical.clear()
+
+
 @dataclass
 class RelatedNote:
     """A fused related-note candidate with its provenance.
@@ -240,7 +255,7 @@ def _concept_idf(
         n = len(cooccur_store)
         df = {stem: len(postings[stem]) for stem in stems if stem in postings}
     else:
-        in_scope = [p for p in cooccur_store.paths() if _path_in_scope(p, scope)]
+        in_scope = cooccur_store.paths_in_scope(scope)
         n = len(in_scope)
         scope_set = set(in_scope)
         df = {}

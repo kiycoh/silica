@@ -57,6 +57,7 @@ ALLOWED = {
     "router/states/setup.py":       "pairwise cosine (crossdedup, salience theme gate)",
     "router/states/write.py":       "incremental embed index refresh after writes",
     "router/states/finalize.py":    "embed index cleanup on rollback",
+    "driver/fs_backend.py":         "embed vector cleanup on note delete/rename (index maintenance), not relatedness ranking",
     "tools/graph.py":               "index refresh tools + raw semantic search by design",
     "tools/runners.py":             "pairwise cosine dedup windows (silica_dedup)",
     "tools/curate.py":              "constructs stores to inject into the facade (orphan candidates)",

@@ -31,7 +31,7 @@ _FUZZY_MIN = 0.82  # SequenceMatcher ratio floor for a fuzzy title/key hit
 
 def _index_path() -> Path:
     from silica.kernel import paths
-    return paths.index_dir() / "lexical.json"
+    return paths.index_file("lexical")
 
 
 def _tokens(text: str) -> list[str]:
@@ -68,10 +68,8 @@ class LexicalStore:
 
     def _reindex(self) -> None:
         """Rebuild the derived postings/name_lower indexes from _docs/_name."""
-        self._postings = {}
-        for path, tf in self._docs.items():
-            for term, f in tf.items():
-                self._postings.setdefault(term, {})[path] = f
+        from silica.kernel.paths import build_postings
+        self._postings = build_postings(self._docs)
         self._name_lower = {path: name.lower() for path, name in self._name.items()}
 
     def upsert(self, path: str, name: str, body: str) -> None:
@@ -183,7 +181,10 @@ _STORE_CACHE: dict[str, "LexicalStore"] = {}
 
 
 def get_lexical_store() -> "LexicalStore":
-    key = str(_index_path())
-    if key not in _STORE_CACHE:
-        _STORE_CACHE[key] = LexicalStore.load()
-    return _STORE_CACHE[key]
+    from silica.kernel.paths import path_keyed_singleton
+    return path_keyed_singleton(_STORE_CACHE, str(_index_path()), LexicalStore.load)
+
+
+def clear() -> None:
+    """Drop all cached stores (test isolation; frees memory on /vault switch)."""
+    _STORE_CACHE.clear()

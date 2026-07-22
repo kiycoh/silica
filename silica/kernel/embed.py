@@ -34,7 +34,7 @@ def _index_path() -> Path:
     # Function, not constant: resolves per current vault; tests monkeypatch it.
     from silica.kernel import paths
 
-    return paths.index_dir() / "embeddings.json"
+    return paths.index_file("embeddings")
 
 # Maximum characters of note content to embed (title + body prefix).
 # Keeps embedding calls fast without losing most of the signal.
@@ -449,12 +449,8 @@ def get_store() -> "EmbedStore":
     re-deserialising the index, and the write path mutates the same instance
     every reader sees (no reload needed for consistency). Use `clear()` in tests.
     """
-    key = str(_index_path())
-    store = _STORE_CACHE.get(key)
-    if store is None:
-        store = EmbedStore()
-        _STORE_CACHE[key] = store
-    return store
+    from silica.kernel.paths import path_keyed_singleton
+    return path_keyed_singleton(_STORE_CACHE, str(_index_path()), EmbedStore)
 
 
 def clear() -> None:

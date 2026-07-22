@@ -38,7 +38,7 @@ def _index_path() -> Path:
     # Function, not constant: resolves per current vault; tests monkeypatch it.
     from silica.kernel import paths
 
-    return paths.index_dir() / "cooccurrence.json"
+    return paths.index_file("cooccurrence")
 
 
 def _index_path_for(vault: str) -> Path:
@@ -187,12 +187,8 @@ def get_cooccur_store(lang: str = "english") -> "CooccurStore":
     ``embed.get_store``). ``lang`` only seeds an empty store; a loaded store
     keeps the language frozen on disk. Use ``clear()`` in tests.
     """
-    key = str(_index_path())
-    store = _STORE_CACHE.get(key)
-    if store is None:
-        store = CooccurStore(lang=lang)
-        _STORE_CACHE[key] = store
-    return store
+    from silica.kernel.paths import path_keyed_singleton
+    return path_keyed_singleton(_STORE_CACHE, str(_index_path()), lambda: CooccurStore(lang=lang))
 
 
 def clear() -> None:
@@ -220,6 +216,12 @@ class CooccurStore:
         # lazy aggregated graph caches (scope=None only)
         self._adj: dict[str, dict[str, float]] | None = None
         self._labels: dict[str, str] | None = None
+        # scoped aggregate + in-scope path caches: a folder-scoped report calls
+        # _aggregate(scope)/paths_in_scope(scope) once per note with the SAME
+        # scope, which was an O(N) rebuild each time -> O(N^2). Keyed by scope,
+        # cleared with the rest on any mutation.
+        self._scoped_agg_cache: dict[str, tuple[dict[str, dict[str, float]], dict[str, str]]] = {}
+        self._scope_paths_cache: dict[str, list[str]] = {}
         # per-path note_nodes() derived-dict cache (mirrors the _adj cache)
         self._note_nodes_cache: dict[str, dict[str, int]] = {}
         # stem -> {path: count} inverted index cache (mirrors the _adj cache)
@@ -230,6 +232,8 @@ class CooccurStore:
     def _invalidate(self) -> None:
         self._adj = None
         self._labels = None
+        self._scoped_agg_cache = {}
+        self._scope_paths_cache = {}
         self._note_nodes_cache = {}
         self._stem_postings = None
 
@@ -356,11 +360,8 @@ class CooccurStore:
         invalidated with the other derived caches. Gives df (len of a posting) and
         the candidate set (union of query-stem postings) without an all-notes scan."""
         if self._stem_postings is None:
-            idx: dict[str, dict[str, int]] = {}
-            for path in self._notes:
-                for stem, count in self.note_nodes(path).items():
-                    idx.setdefault(stem, {})[path] = count
-            self._stem_postings = idx
+            from silica.kernel.paths import build_postings
+            self._stem_postings = build_postings({p: self.note_nodes(p) for p in self._notes})
         return self._stem_postings
 
     def top_stems(self, n: int = 20) -> list[str]:
@@ -385,10 +386,13 @@ class CooccurStore:
 
         scope, if given, restricts to notes whose path == scope or starts with
         scope + "/" (folder scoping, context-level filtering).
-        scope=None results are cached; scoped results are computed fresh.
+        Both scope=None and scoped results are cached (per-scope), cleared on
+        any mutation via _invalidate().
         """
         if scope is None and self._adj is not None and self._labels is not None:
             return self._adj, self._labels
+        if scope is not None and scope in self._scoped_agg_cache:
+            return self._scoped_agg_cache[scope]
 
         def _in_scope(p: str) -> bool:
             if not scope:
@@ -414,7 +418,40 @@ class CooccurStore:
         }
         if scope is None:
             self._adj, self._labels = adj, labels
+        else:
+            self._scoped_agg_cache[scope] = (adj, labels)
         return adj, labels
+
+    def paths_in_scope(self, scope: str | None) -> list[str]:
+        """In-scope note paths (cached per scope). scope=None returns all paths.
+
+        Lets scope-repeating consumers (a folder-scoped report ranking every
+        note) avoid re-filtering all paths per call.
+        """
+        if not scope:
+            return self.paths()
+        cached = self._scope_paths_cache.get(scope)
+        if cached is None:
+            s = scope.strip("/").lower()
+            cached = [
+                p for p in self._notes
+                if (pp := p.strip("/").lower()) == s or pp.startswith(s + "/")
+            ]
+            self._scope_paths_cache[scope] = cached
+        return list(cached)
+
+    def note_adjacency(self) -> dict[str, dict[str, float]]:
+        """Symmetric note-edge adjacency {path: {neighbour: score}}, one O(E) pass.
+
+        Uncached: a hot loop over note_edges_for() pays an O(E) reverse scan per
+        note (O(N*E)); build this once and index it instead.
+        """
+        adj: dict[str, dict[str, float]] = {}
+        for lo, nbrs in self._note_edges.items():
+            for hi, s in nbrs.items():
+                adj.setdefault(lo, {})[hi] = s
+                adj.setdefault(hi, {})[lo] = s
+        return adj
 
     def node_label(self, stem: str) -> str:
         _adj, labels = self._aggregate()

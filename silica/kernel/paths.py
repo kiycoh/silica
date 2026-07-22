@@ -92,6 +92,36 @@ def silica_tmp_dir() -> Path:
     return d
 
 
+def index_file(name: str) -> Path:
+    """Resolve one derived-index file (``<name>.json``) under the current vault's
+    index dir. The per-store ``_index_path`` shims delegate here (kept as module
+    functions so tests can still monkeypatch them per store)."""
+    return index_dir() / f"{name}.json"
+
+
+def build_postings(docs: dict[str, dict[str, int]]) -> dict[str, dict[str, int]]:
+    """Invert ``{doc: {term: count}}`` into the postings index ``{term: {doc: count}}``.
+    The shared inner loop of every term/stem postings build (co-occurrence, lexical)."""
+    idx: dict[str, dict[str, int]] = {}
+    for doc, terms in docs.items():
+        for term, count in terms.items():
+            idx.setdefault(term, {})[doc] = count
+    return idx
+
+
+def path_keyed_singleton(cache: dict, key: str, factory):
+    """Return cache[key], building it via factory() on first access.
+
+    The shared shape behind every per-index-path store singleton (embed,
+    co-occurrence, lexical): keying by resolved index path follows a /vault
+    switch automatically. Callers own the cache dict (and its clear())."""
+    inst = cache.get(key)
+    if inst is None:
+        inst = factory()
+        cache[key] = inst
+    return inst
+
+
 def is_obsidian_vault(path) -> bool:
     """True when `path` is an Obsidian vault (carries a `.obsidian/` dir).
 
