@@ -81,6 +81,8 @@ class StubPluginServer:
             if frame.get("type") != "rpc":
                 continue
             rid, method, params = frame.get("id"), frame.get("method"), frame.get("params") or {}
+            if method == "__noreply__":
+                continue  # test hook: never answer, to exercise the driver's RPC-timeout cleanup
             try:
                 result = self._dispatch(method, params)
             except Exception as exc:  # fatal op → rpc_error, driver raises
@@ -414,6 +416,15 @@ def test_autolink_note_wraps_unlinked_mentions(wbe):
     added = wbe.autolink_note("Notes/Mention.md")
     assert added == ["Perceptron"]
     assert "[[Perceptron]]" in wbe.read_note(ref).content
+
+
+def test_rpc_timeout_drops_pending_entry(wbe):
+    """A timed-out RPC must not strand its future in _pending (leak on timeout)."""
+    wbe._ensure_connected()
+    wbe._timeout = 0.2
+    with pytest.raises(Exception):
+        wbe._rpc("__noreply__")
+    assert wbe._pending == {}
 
 
 def test_snapshot_restore_round_trips_prior_content(wbe):

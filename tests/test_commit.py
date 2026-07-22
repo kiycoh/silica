@@ -82,6 +82,19 @@ def test_delete_op_path_is_leased():
     )
 
 
+def test_commit_unlinks_staging_file():
+    """The ~/.silica/tmp ops file must not survive the call (no disk leak)."""
+    from silica.kernel.paths import silica_tmp_dir
+
+    before = set(silica_tmp_dir().glob("*.json"))
+    with patch("silica.tools.composed.silica_validate_ops", return_value={"validated_count": 1, "success": True}), \
+         patch("silica.tools.wrapped.silica_snapshot", return_value={"txn_id": "t1", "inverses": []}), \
+         patch("silica.tools.composed.silica_bulk_write", return_value={"successful": 1, "total": 1, "failed": []}), \
+         patch("silica.tools.composed.silica_lint", return_value={"success": True}):
+        commit_ops([_patch_op()], target_dir="Concepts")
+    assert set(silica_tmp_dir().glob("*.json")) == before
+
+
 # ---------------------------------------------------------------------------
 # commit_derived — machine-generated notes with prior metadata preservation
 # ---------------------------------------------------------------------------

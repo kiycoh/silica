@@ -17,8 +17,9 @@ Two guarantees layered on top for sub-agents:
 from __future__ import annotations
 
 import logging
+import os
 import uuid
-from contextlib import ExitStack
+from contextlib import ExitStack, suppress
 from typing import Any, Callable
 
 import orjson
@@ -111,59 +112,64 @@ def commit_ops(
         return {"status": "no_ops", "committed": 0, "rejected_by_bounds": rejected_by_bounds}
 
     ops_path = _write_ops_tmp(ops)
+    try:
+        # Validate (C4: overwrites ops_path with the validated, coerced ops).
+        vres = silica_validate_ops(ops_path, payload_paths=[], target_dir=target_dir, hub=hub or "")
+        if "error" in vres:
+            return {"status": "error", "error": vres["error"], "rejected_by_bounds": rejected_by_bounds}
+        if vres.get("validated_count", 0) == 0:
+            return {"status": "no_ops", "committed": 0, "rejected_by_bounds": rejected_by_bounds, "validate": vres}
 
-    # Validate (C4: overwrites ops_path with the validated, coerced ops).
-    vres = silica_validate_ops(ops_path, payload_paths=[], target_dir=target_dir, hub=hub or "")
-    if "error" in vres:
-        return {"status": "error", "error": vres["error"], "rejected_by_bounds": rejected_by_bounds}
-    if vres.get("validated_count", 0) == 0:
-        return {"status": "no_ops", "committed": 0, "rejected_by_bounds": rejected_by_bounds, "validate": vres}
+        touched = [
+            (p, op.op.value if op.op else "", op.hub or "")
+            for op in load_ops(ops_path)
+            if (p := op.touched_ref()) and op.op is not OpType.skip
+        ]
+        lease_paths = sorted({p for p, _, _ in touched})
 
-    touched = [
-        (p, op.op.value if op.op else "", op.hub or "")
-        for op in load_ops(ops_path)
-        if (p := op.touched_ref()) and op.op is not OpType.skip
-    ]
-    lease_paths = sorted({p for p, _, _ in touched})
+        with ExitStack() as stack:
+            # Deterministic lock ordering (sorted) avoids deadlock between sub-agents.
+            for p in lease_paths:
+                stack.enter_context(path_lease(p))
 
-    with ExitStack() as stack:
-        # Deterministic lock ordering (sorted) avoids deadlock between sub-agents.
-        for p in lease_paths:
-            stack.enter_context(path_lease(p))
+            sres = silica_snapshot(ops_path)
+            if "error" in sres:
+                return {"status": "error", "error": sres["error"], "rejected_by_bounds": rejected_by_bounds}
+            txn_id = sres["txn_id"]
+            inverses = sres.get("inverses", [])
 
-        sres = silica_snapshot(ops_path)
-        if "error" in sres:
-            return {"status": "error", "error": sres["error"], "rejected_by_bounds": rejected_by_bounds}
-        txn_id = sres["txn_id"]
-        inverses = sres.get("inverses", [])
+            def _rollback(reason: dict) -> dict:
+                try:
+                    silica_restore(txn_id=txn_id, inverses=inverses)
+                except Exception as e:
+                    logger.error("commit_ops rollback failed: %s", e)
+                    reason["rollback_error"] = str(e)
+                reason.update({"status": "rolled_back", "committed": 0, "txn_id": txn_id,
+                               "rejected_by_bounds": rejected_by_bounds})
+                return reason
 
-        def _rollback(reason: dict) -> dict:
-            try:
-                silica_restore(txn_id=txn_id, inverses=inverses)
-            except Exception as e:
-                logger.error("commit_ops rollback failed: %s", e)
-                reason["rollback_error"] = str(e)
-            reason.update({"status": "rolled_back", "committed": 0, "txn_id": txn_id,
-                           "rejected_by_bounds": rejected_by_bounds})
-            return reason
+            wres = silica_bulk_write(ops_path)
+            if "error" in wres:
+                return _rollback({"error": wres["error"]})
+            if wres.get("successful", 0) == 0 and wres.get("total", 0) > 0:
+                return _rollback({"error": "all write ops failed"})
 
-        wres = silica_bulk_write(ops_path)
-        if "error" in wres:
-            return _rollback({"error": wres["error"]})
-        if wres.get("successful", 0) == 0 and wres.get("total", 0) > 0:
-            return _rollback({"error": "all write ops failed"})
+            lint_failures: list[dict] = []
+            for p, op_type, h in touched:
+                lr = silica_lint(p, op_type=op_type, hub=h)
+                if not lr.get("success", True):
+                    lint_failures.append({"path": p, "errors": lr.get("errors")})
+            if lint_failures:
+                return _rollback({"lint_failures": lint_failures})
 
-        lint_failures: list[dict] = []
-        for p, op_type, h in touched:
-            lr = silica_lint(p, op_type=op_type, hub=h)
-            if not lr.get("success", True):
-                lint_failures.append({"path": p, "errors": lr.get("errors")})
-        if lint_failures:
-            return _rollback({"lint_failures": lint_failures})
-
-    return {
-        "status": "committed",
-        "committed": wres.get("successful", len(lease_paths)),
-        "txn_id": txn_id,
-        "rejected_by_bounds": rejected_by_bounds,
-    }
+        return {
+            "status": "committed",
+            "committed": wres.get("successful", len(lease_paths)),
+            "txn_id": txn_id,
+            "rejected_by_bounds": rejected_by_bounds,
+        }
+    finally:
+        # Staging file is scoped to this call; nothing references it after return.
+        # Unlink here — commit_ops runs outside the FSM's _cleanup_tmp lifecycle.
+        with suppress(OSError):
+            os.unlink(ops_path)

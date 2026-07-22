@@ -159,15 +159,22 @@ class ObsidianWSBackend(GraphIndexMixin):
         self._next_id += 1
         fut = asyncio.get_running_loop().create_future()
         self._pending[rid] = fut
-        await self._ws.send(json.dumps({"type": "rpc", "id": rid, "method": method, "params": params}))
-        return await fut
+        try:
+            await self._ws.send(json.dumps({"type": "rpc", "id": rid, "method": method, "params": params}))
+            return await asyncio.wait_for(fut, self._timeout)
+        finally:
+            # Drop the entry on every exit (reply, timeout, send failure) so a
+            # timed-out RPC can't strand its future in _pending forever.
+            self._pending.pop(rid, None)
 
     def _rpc(self, method: str, **params: Any) -> Any:
         """Issue one RPC from the sync caller thread and block on its reply."""
         self._ensure_connected()
         assert self._loop is not None  # set by _ensure_connected
         cf = asyncio.run_coroutine_threadsafe(self._send_rpc(method, params), self._loop)
-        return cf.result(self._timeout)
+        # +5s guard: the coroutine's own wait_for is authoritative and self-cleans;
+        # this only trips if the loop thread itself is wedged.
+        return cf.result(self._timeout + 5)
 
     def close(self) -> None:
         """Close the socket and tear down the loop thread. Idempotent."""
