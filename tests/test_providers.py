@@ -34,6 +34,19 @@ class TestProviders(unittest.TestCase):
             self.assertIsInstance(provider_or, OpenAICompatibleProvider)
             self.assertEqual(provider_or.model, "or-model")
 
+    def test_get_provider_custom_uses_config_endpoint(self):
+        class CustomConfig:
+            provider = "custom"
+            model = "custom/my-model"
+            provider_base_url = "http://localhost:8000/v1"
+            provider_api_key = "sk-local"
+
+        provider = get_provider(CustomConfig())
+        self.assertIsInstance(provider, OpenAICompatibleProvider)
+        self.assertEqual(provider.model, "my-model")  # custom/ prefix stripped
+        self.assertIn("localhost:8000", str(provider.client.base_url))
+        self.assertEqual(provider.client.api_key, "sk-local")
+
     def test_get_provider_worker(self):
         class DummyWorkerConfig:
             def __init__(self, provider, model, worker_provider=None, worker_model=None, worker_api_key=None):
@@ -171,6 +184,88 @@ class TestProviders(unittest.TestCase):
         self.assertEqual(mock_client.chat.completions.create.call_count, 3)
         self.assertEqual(response.text, "Success after retries")
         self.assertEqual(mock_sleep.call_count, 2)
+
+
+def test_presets_are_a_subset_of_known_prefixes():
+    """Every preset name must be an auto-prefixable provider prefix, else its
+    bare model never gets `provider/` prepended and routing silently breaks."""
+    from silica.agent.providers import PROVIDER_PRESETS
+    from silica.config import PROVIDER_PREFIXES
+
+    assert set(PROVIDER_PRESETS) <= PROVIDER_PREFIXES
+
+
+def test_call_llm_custom_routes_via_openai(monkeypatch):
+    """A custom/ model reaches litellm as openai/<id> with an explicit api_base,
+    since litellm has no `custom/` provider."""
+    from silica.agent import llm
+
+    captured: dict = {}
+
+    class _Msg:
+        content = "ok"
+        tool_calls = None
+        reasoning_content = None
+        reasoning = None
+        thinking_blocks = None
+
+    class _Choice:
+        message = _Msg()
+        finish_reason = "stop"
+
+    class _Resp:
+        choices = [_Choice()]
+        usage = None
+
+    def fake_completion(**kwargs):
+        captured.update(kwargs)
+        return _Resp()
+
+    monkeypatch.setattr(llm.litellm, "completion", fake_completion)
+    monkeypatch.setattr(llm.CONFIG, "provider_base_url", "http://localhost:9999/v1")
+    monkeypatch.setattr(llm.CONFIG, "provider_api_key", "sk-local")
+
+    resp = llm.call_llm("custom/qwen3", [{"role": "user", "content": "hi"}])
+
+    assert captured["model"] == "openai/qwen3"
+    assert captured["api_base"] == "http://localhost:9999/v1"
+    assert captured["api_key"] == "sk-local"
+    assert resp.text == "ok"
+
+
+def test_call_llm_ollama_routes_via_ollama_chat(monkeypatch):
+    """An ollama/ model reaches litellm as ollama_chat/<id> so tool calls use
+    /api/chat (native) rather than /api/generate (prompt-emulated)."""
+    from silica.agent import llm, providers
+
+    captured: dict = {}
+
+    class _Msg:
+        content = "ok"
+        tool_calls = None
+        reasoning_content = None
+        reasoning = None
+        thinking_blocks = None
+
+    class _Choice:
+        message = _Msg()
+        finish_reason = "stop"
+
+    class _Resp:
+        choices = [_Choice()]
+        usage = None
+
+    def fake_completion(**kwargs):
+        captured.update(kwargs)
+        return _Resp()
+
+    monkeypatch.setattr(llm.litellm, "completion", fake_completion)
+    # Don't let clamp_max_tokens probe a live Ollama during the test.
+    monkeypatch.setattr(providers, "model_limits", lambda p, m: (0, 0))
+
+    llm.call_llm("ollama/llama3.2:3b", [{"role": "user", "content": "hi"}])
+
+    assert captured["model"] == "ollama_chat/llama3.2:3b"
 
 
 def test_streaming_path_collects_usage():

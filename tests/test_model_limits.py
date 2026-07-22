@@ -88,29 +88,64 @@ OLLAMA_UNPINNED = {  # no num_ctx → fall back to the trained max
     "model_info": {"general.architecture": "qwen2", "qwen2.context_length": 40960},
 }
 
+# A model NOT loaded (or a listing that predates the context_length field) →
+# /api/ps yields no usable window, so model_limits falls back to /api/show.
+OLLAMA_PS_EMPTY = {"models": []}
+
 
 class TestOllama:
+    # /api/ps is probed first; these show-based tests mock it empty so they
+    # deterministically exercise the fallback regardless of any live Ollama.
+    @patch("silica.agent.providers.httpx.get")
     @patch("silica.agent.providers.httpx.post")
-    def test_num_ctx_wins_over_trained_max(self, mock_post):
+    def test_num_ctx_wins_over_trained_max(self, mock_post, mock_get):
+        mock_get.return_value = _http_response(OLLAMA_PS_EMPTY)
         mock_post.return_value = _http_response(OLLAMA_PINNED)
         assert model_limits("ollama", "llama3.1") == (8192, 0)
 
+    @patch("silica.agent.providers.httpx.get")
     @patch("silica.agent.providers.httpx.post")
-    def test_falls_back_to_trained_max_when_unpinned(self, mock_post):
+    def test_falls_back_to_trained_max_when_unpinned(self, mock_post, mock_get):
+        mock_get.return_value = _http_response(OLLAMA_PS_EMPTY)
         mock_post.return_value = _http_response(OLLAMA_UNPINNED)
         assert model_limits("ollama", "qwen2.5") == (40960, 0)
 
+    @patch("silica.agent.providers.httpx.get")
     @patch("silica.agent.providers.httpx.post")
-    def test_strips_ollama_prefix_and_posts_show(self, mock_post):
+    def test_strips_ollama_prefix_and_posts_show(self, mock_post, mock_get):
+        mock_get.return_value = _http_response(OLLAMA_PS_EMPTY)
         mock_post.return_value = _http_response(OLLAMA_PINNED)
         model_limits("ollama", "ollama/llama3.1")
         assert mock_post.call_args.args[0].endswith("/api/show")
         assert mock_post.call_args.kwargs["json"] == {"model": "llama3.1"}
 
+    @patch("silica.agent.providers.httpx.get")
     @patch("silica.agent.providers.httpx.post")
-    def test_missing_model_info_returns_zero(self, mock_post):
+    def test_missing_model_info_returns_zero(self, mock_post, mock_get):
+        mock_get.return_value = _http_response(OLLAMA_PS_EMPTY)
         mock_post.return_value = _http_response({"parameters": ""})
         assert model_limits("ollama", "ghost") == (0, 0)
+
+    @patch("silica.agent.providers.httpx.post")
+    @patch("silica.agent.providers.httpx.get")
+    def test_loaded_ps_window_wins_over_trained_max(self, mock_get, mock_post):
+        # The bug this fixes: a model loaded at the 4096 default while /api/show
+        # would report the 131072 trained max → silent truncation. /api/ps wins.
+        mock_get.return_value = _http_response(
+            {"models": [{"name": "llama3.2:3b", "context_length": 4096}]}
+        )
+        assert model_limits("ollama", "ollama/llama3.2:3b") == (4096, 0)
+        mock_post.assert_not_called()  # ps answered → show never queried
+
+    @patch("silica.agent.providers.httpx.get")
+    @patch("silica.agent.providers.httpx.post")
+    def test_ps_miss_falls_through_to_show(self, mock_post, mock_get):
+        # Model loaded, but a DIFFERENT one than asked for → no ps match → show.
+        mock_get.return_value = _http_response(
+            {"models": [{"name": "other:latest", "context_length": 4096}]}
+        )
+        mock_post.return_value = _http_response(OLLAMA_PINNED)
+        assert model_limits("ollama", "llama3.1") == (8192, 0)
 
 
 class TestOpenRouter:

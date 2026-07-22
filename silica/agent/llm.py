@@ -346,6 +346,21 @@ def call_llm(
     if model.startswith("openrouter/") and (rt := openrouter_routing(openrouter_provider)):
         kwargs["extra_body"] = rt
 
+    # Ollama: route via litellm's `ollama_chat/` provider (/api/chat — native
+    # tool calls + chat templating) rather than `ollama/` (/api/generate, which
+    # emulates tools by injecting JSON into the prompt). This is a tool-heavy
+    # agentic loop, so the chat endpoint is the correct one. Users keep writing
+    # `ollama/` in config; clamp_max_tokens above already ran on that prefix.
+    if model.startswith("ollama/"):
+        kwargs["model"] = "ollama_chat/" + model.split("/", 1)[1]
+
+    # Custom OpenAI-compatible endpoint: litellm has no `custom/` provider, so
+    # route via its generic openai/ path with an explicit api_base/api_key.
+    if model.startswith("custom/"):
+        kwargs["model"] = "openai/" + model.split("/", 1)[1]
+        kwargs["api_base"] = CONFIG.provider_base_url or None
+        kwargs["api_key"] = CONFIG.provider_api_key or "dummy-key"
+
     kwargs["timeout"] = 120.0  # litellm's own (fires first if it works); _bounded is the backstop
 
     _TRANSIENT = (

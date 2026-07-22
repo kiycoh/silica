@@ -36,7 +36,16 @@ PROVIDER_PRESETS = {
     "gemini": {
         "base_url": "https://generativelanguage.googleapis.com/v1beta/openai/",
         "api_key_env": "GEMINI_API_KEY"
-    }
+    },
+    # Hosted, OpenAI-compatible. litellm resolves the same prefixes natively for
+    # the interactive loop; these presets serve the constrained-decoding/distiller
+    # path. "custom" (any other OpenAI-compatible URL) has no static row — its
+    # endpoint comes from config.provider_base_url/_api_key (see get_provider).
+    "openai": {"base_url": "https://api.openai.com/v1", "api_key_env": "OPENAI_API_KEY"},
+    "groq": {"base_url": "https://api.groq.com/openai/v1", "api_key_env": "GROQ_API_KEY"},
+    "deepseek": {"base_url": "https://api.deepseek.com", "api_key_env": "DEEPSEEK_API_KEY"},
+    "mistral": {"base_url": "https://api.mistral.ai/v1", "api_key_env": "MISTRAL_API_KEY"},
+    "xai": {"base_url": "https://api.x.ai/v1", "api_key_env": "XAI_API_KEY"},
 }
 
 
@@ -53,9 +62,12 @@ def model_limits(provider: str, model: str) -> tuple[int, int]:
     lmstudio   → GET {base}/api/v0/models: `loaded_context_length` (the window
                  the model is loaded with RIGHT NOW, often below its max) with
                  `max_context_length` as fallback. No output cap.
-    ollama     → POST {base}/api/show: `num_ctx` from the Modelfile parameters
-                 (the loaded window) if pinned, else the trained max from
-                 `model_info["<arch>.context_length"]`. No output cap.
+    ollama     → GET {base}/api/ps: `context_length` of the model as LOADED
+                 right now (often the 4096 default, far below the trained max —
+                 the real ceiling, past which Ollama truncates silently). Falls
+                 back to POST {base}/api/show when the model isn't loaded:
+                 `num_ctx` from the Modelfile parameters if pinned, else the
+                 trained max from `model_info["<arch>.context_length"]`. No output cap.
     openrouter → GET /api/v1/models: `context_length` plus the top provider's
                  `max_completion_tokens` (often far below the window — e.g.
                  qwen3-8b: 131k ctx, 8k out).
@@ -66,11 +78,22 @@ def model_limits(provider: str, model: str) -> tuple[int, int]:
         if provider == "ollama":
             base = PROVIDER_PRESETS["ollama"]["base_url"].removesuffix("/v1")
             wanted = model.removeprefix("ollama/")
+            # A loaded model reports its ACTUAL window in /api/ps — this is the
+            # ground truth (it already reflects the Modelfile pin or the runtime
+            # 4096 default), so it wins outright when present. Its own try/except
+            # falls through to /api/show if ps is down or predates this field.
+            try:
+                ps = httpx.get(f"{base}/api/ps", timeout=5.0).json().get("models") or []
+                loaded = next((m for m in ps if wanted in (m.get("name"), m.get("model"))), None)
+                if loaded and loaded.get("context_length"):
+                    return int(loaded["context_length"]), 0
+            except Exception as e:
+                logger.debug("ollama /api/ps unavailable for %s: %s", wanted, e)
             info = httpx.post(f"{base}/api/show", json={"model": wanted}, timeout=5.0).json()
-            # Prefer num_ctx if the Modelfile pins it (the window actually loaded).
+            # Model not loaded: prefer num_ctx if the Modelfile pins it.
             # ponytail: Ollama's *default* num_ctx (~4096) isn't reported in /api/show,
-            # so an unpinned model reports its trained max here — cap it with
-            # SILICA_MAX_CONTEXT or `PARAMETER num_ctx` if that overshoots the load.
+            # so an unpinned model reports its trained max here — /api/ps above is the
+            # real fix; this remains the pre-load estimate.
             params = info.get("parameters") or ""
             num_ctx = next((int(f[1]) for p in params.splitlines()
                             if (f := p.split())[:1] == ["num_ctx"] and len(f) > 1), 0)
@@ -493,13 +516,17 @@ def get_provider(config: Any, role: str = "router") -> OpenAICompatibleProvider:
         model_name = getattr(config, "model", "")
 
     preset = PROVIDER_PRESETS.get(provider_name)
-    if not preset:
-        preset = PROVIDER_PRESETS["lmstudio"]
-
-    base_url = preset["base_url"]
-    api_key = preset.get("api_key", "lm-studio")
-    if "api_key_env" in preset:
-        api_key = os.getenv(preset["api_key_env"], "dummy-key")
+    if preset:
+        base_url = preset["base_url"]
+        api_key = preset.get("api_key", "lm-studio")
+        if "api_key_env" in preset:
+            api_key = os.getenv(preset["api_key_env"], "dummy-key")
+    else:
+        # custom / unknown provider: endpoint from config (SILICA_PROVIDER_BASE_URL
+        # / _API_KEY). Falls back to the lmstudio localhost default so a bare
+        # misconfig still points somewhere local rather than crashing.
+        base_url = getattr(config, "provider_base_url", "") or PROVIDER_PRESETS["lmstudio"]["base_url"]
+        api_key = getattr(config, "provider_api_key", "") or "dummy-key"
 
     # Worker role: explicit api-key override takes precedence over the preset.
     if role == "worker":
