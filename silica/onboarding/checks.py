@@ -38,7 +38,7 @@ def check_chat_model(config: SilicaConfig) -> CheckResult:
             "SILICA_MODEL is not set",
             "run `silica init`",
         )
-    key_env = {"openrouter": "OPENROUTER_API_KEY", "gemini": "GEMINI_API_KEY"}.get(config.provider)
+    key_env = PROVIDER_PRESETS.get(config.provider, {}).get("api_key_env")
     if key_env and not os.getenv(key_env):
         return CheckResult(
             "chat model", "fail",
@@ -51,18 +51,28 @@ def check_chat_model(config: SilicaConfig) -> CheckResult:
 def check_chat_endpoint(config: SilicaConfig) -> CheckResult:
     if not config.model.strip():
         return CheckResult("chat endpoint", "warn", "skipped — no model configured")
-    if config.provider != "lmstudio":
+    if config.provider in ("lmstudio", "ollama"):
+        base_url = PROVIDER_PRESETS[config.provider]["base_url"]
+    elif config.provider == "custom":
+        base_url = config.provider_base_url
+        if not base_url:
+            return CheckResult(
+                "chat endpoint", "fail",
+                "custom provider but SILICA_PROVIDER_BASE_URL is unset",
+                "run `silica init`",
+            )
+    else:
         return CheckResult(
             "chat endpoint", "ok", f"{config.provider} (hosted, not probed)"
         )
-    base_url = PROVIDER_PRESETS["lmstudio"]["base_url"]
+    label = {"lmstudio": "LM Studio", "ollama": "Ollama"}.get(config.provider, "the endpoint")
     try:
-        httpx.get(f"{base_url}/models", timeout=_HTTP_TIMEOUT)
+        httpx.get(f"{base_url.rstrip('/')}/models", timeout=_HTTP_TIMEOUT)
     except Exception:
         return CheckResult(
             "chat endpoint", "fail",
             f"{base_url} unreachable",
-            "start LM Studio, or switch provider with `silica init`",
+            f"start {label}, or switch provider with `silica init`",
         )
     return CheckResult("chat endpoint", "ok", f"{base_url} reachable")
 

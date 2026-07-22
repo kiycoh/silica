@@ -76,6 +76,117 @@ class TestRunWizard:
         assert "SILICA_MODEL=test-model" in content
         assert "OPENROUTER_API_KEY" not in content
 
+    def test_custom_provider_flow_writes_base_url_and_key(self, monkeypatch, tmp_path):
+        import silica.onboarding.wizard as wizard
+
+        vault = tmp_path / "vault"
+        vault.mkdir()
+        env_path = tmp_path / ".env"
+
+        monkeypatch.setattr(wizard.gitstate, "find_repo_root", lambda p: None)
+        monkeypatch.setattr(wizard, "run_checks", lambda cfg: [])
+        monkeypatch.setattr(wizard.os, "environ", dict(os.environ))
+
+        answers = [
+            str(vault),                     # vault path
+            "",                             # force language? → Enter
+            "custom",                       # provider
+            "http://localhost:8000/v1",     # base URL
+            "",                             # API key → default dummy-key
+            "qwen3",                        # model id
+            "skip",                         # embeddings
+            "",                             # write → y
+        ]
+        rc = wizard.run_wizard(input_fn=self._scripted(answers), env_path=env_path)
+
+        assert rc == 0
+        content = env_path.read_text()
+        assert "SILICA_PROVIDER=custom" in content
+        assert "SILICA_PROVIDER_BASE_URL=http://localhost:8000/v1" in content
+        assert "SILICA_PROVIDER_API_KEY=dummy-key" in content
+        assert "SILICA_MODEL=qwen3" in content
+
+    def test_ollama_flow_writes_provider_and_model(self, monkeypatch, tmp_path):
+        import silica.onboarding.wizard as wizard
+
+        vault = tmp_path / "vault"
+        vault.mkdir()
+        env_path = tmp_path / ".env"
+
+        monkeypatch.setattr(wizard.gitstate, "find_repo_root", lambda p: None)
+        monkeypatch.setattr(wizard, "run_checks", lambda cfg: [])
+        monkeypatch.setattr(wizard.os, "environ", dict(os.environ))
+        # Don't probe a live Ollama; offer a pick-list deterministically.
+        monkeypatch.setattr(wizard, "_ollama_installed_models", lambda: ["llama3.2:3b"])
+
+        answers = [
+            str(vault),      # vault path
+            "",              # force language? → Enter
+            "ollama",        # provider
+            "llama3.2:3b",   # model id
+            "skip",          # embeddings
+            "",              # write → y
+        ]
+        rc = wizard.run_wizard(input_fn=self._scripted(answers), env_path=env_path)
+
+        assert rc == 0
+        content = env_path.read_text()
+        assert "SILICA_PROVIDER=ollama" in content
+        assert "SILICA_MODEL=llama3.2:3b" in content
+
+    def test_ollama_flow_accepts_installed_default_on_enter(self, monkeypatch, tmp_path):
+        import silica.onboarding.wizard as wizard
+
+        vault = tmp_path / "vault"
+        vault.mkdir()
+        env_path = tmp_path / ".env"
+
+        monkeypatch.setattr(wizard.gitstate, "find_repo_root", lambda p: None)
+        monkeypatch.setattr(wizard, "run_checks", lambda cfg: [])
+        monkeypatch.setattr(wizard.os, "environ", dict(os.environ))
+        monkeypatch.setattr(wizard, "_ollama_installed_models", lambda: ["mistral:7b"])
+
+        answers = [
+            str(vault),  # vault path
+            "",          # force language? → Enter
+            "ollama",    # provider
+            "",          # model id → Enter accepts first installed default
+            "skip",      # embeddings
+            "",          # write → y
+        ]
+        rc = wizard.run_wizard(input_fn=self._scripted(answers), env_path=env_path)
+
+        assert rc == 0
+        assert "SILICA_MODEL=mistral:7b" in env_path.read_text()
+
+    def test_hosted_groq_flow_writes_key_env(self, monkeypatch, tmp_path):
+        import silica.onboarding.wizard as wizard
+
+        vault = tmp_path / "vault"
+        vault.mkdir()
+        env_path = tmp_path / ".env"
+
+        monkeypatch.setattr(wizard.gitstate, "find_repo_root", lambda p: None)
+        monkeypatch.setattr(wizard, "run_checks", lambda cfg: [])
+        monkeypatch.setattr(wizard.os, "environ", dict(os.environ))
+
+        answers = [
+            str(vault),     # vault path
+            "",             # force language? → Enter
+            "groq",         # provider
+            "",             # model → default groq/llama-3.3-70b-versatile
+            "gsk_test",     # Groq API key
+            "skip",         # embeddings
+            "",             # write → y
+        ]
+        rc = wizard.run_wizard(input_fn=self._scripted(answers), env_path=env_path)
+
+        assert rc == 0
+        content = env_path.read_text()
+        assert "SILICA_PROVIDER=groq" in content
+        assert "SILICA_MODEL=groq/llama-3.3-70b-versatile" in content
+        assert "GROQ_API_KEY=gsk_test" in content
+
     def test_declining_write_aborts(self, monkeypatch, tmp_path):
         import silica.onboarding.wizard as wizard
 

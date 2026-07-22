@@ -82,6 +82,31 @@ class TestCheckChatEndpoint:
         r = checks.check_chat_endpoint(_cfg(model="qwen3-30b"))
         assert r.status == "ok"
 
+    def test_ollama_is_probed_not_hosted(self, monkeypatch):
+        import silica.onboarding.checks as checks
+
+        captured: dict = {}
+
+        def fake_get(url, timeout):
+            captured["url"] = url
+            return object()
+
+        monkeypatch.setattr(checks.httpx, "get", fake_get)
+        r = checks.check_chat_endpoint(_cfg(model="ollama/llama3.2:3b"))
+        assert r.status == "ok"
+        assert captured["url"] == "http://localhost:11434/v1/models"
+
+    def test_ollama_unreachable_fails_with_ollama_hint(self, monkeypatch):
+        import silica.onboarding.checks as checks
+
+        def boom(url, timeout):
+            raise checks.httpx.ConnectError("refused")
+
+        monkeypatch.setattr(checks.httpx, "get", boom)
+        r = checks.check_chat_endpoint(_cfg(model="ollama/llama3.2:3b"))
+        assert r.status == "fail"
+        assert "Ollama" in r.hint
+
 
 class TestCheckVault:
     def test_explicit_path_missing_fails(self):

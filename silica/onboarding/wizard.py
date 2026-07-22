@@ -72,6 +72,24 @@ def _ask(
     return raw or default
 
 
+def _ollama_installed_models() -> list[str]:
+    """Tags installed in the local Ollama, best-effort ([] if it's down/absent).
+
+    Lets the wizard offer a pick-list instead of asking the user to recall an
+    exact tag. Never raises — a down Ollama just means no suggestions.
+    """
+    import httpx
+
+    from silica.agent.providers import PROVIDER_PRESETS
+
+    base = PROVIDER_PRESETS["ollama"]["base_url"].removesuffix("/v1")
+    try:
+        data = httpx.get(f"{base}/api/tags", timeout=3.0).json()
+        return [m["name"] for m in data.get("models", []) if m.get("name")]
+    except Exception:
+        return []
+
+
 def _section(glyph_key: str, title: str, n: int) -> None:
     """Flat-gutter step header in the TUI's brand vocabulary: glyph + title in
     bold brand cyan, a dim `· n/N` counter riding after it."""
@@ -176,20 +194,27 @@ def _run_wizard_inner(
                     encoding="utf-8",
                 )
 
-    # 2. Chat provider — the hosted PROVIDER_PRESETS entries that need a key.
+    # 2. Chat provider — the hosted PROVIDER_PRESETS entries that need a key,
+    # plus `custom` for any other OpenAI-compatible URL (vLLM, llama.cpp, ...).
     _section("model", "Chat provider", 2)
-    # (provider, key env var, default model, key prompt) for the two hosted presets.
+    # (key env var, default model, key prompt) per hosted preset.
     _HOSTED = {
         "openrouter": ("OPENROUTER_API_KEY", "openrouter/anthropic/claude-sonnet-5", "OpenRouter API key"),
         "gemini": ("GEMINI_API_KEY", "gemini/gemini-2.5-flash", "Google Gemini API key"),
+        "openai": ("OPENAI_API_KEY", "openai/gpt-4o", "OpenAI API key"),
+        "groq": ("GROQ_API_KEY", "groq/llama-3.3-70b-versatile", "Groq API key"),
+        "deepseek": ("DEEPSEEK_API_KEY", "deepseek/deepseek-chat", "DeepSeek API key"),
+        "mistral": ("MISTRAL_API_KEY", "mistral/mistral-large-latest", "Mistral API key"),
+        "xai": ("XAI_API_KEY", "xai/grok-2-latest", "xAI (Grok) API key"),
     }
     provider = ""
-    while provider not in ("lmstudio", *_HOSTED):
+    while provider not in ("lmstudio", "ollama", "custom", *_HOSTED):
         provider = _ask(
             input_fn,
-            "Chat provider — lmstudio (local, no key), openrouter or gemini (hosted)",
+            "Chat provider — lmstudio or ollama (local), custom (any OpenAI-compatible URL), "
+            "or hosted: " + ", ".join(_HOSTED),
             "lmstudio",
-        )
+        ).lower()
     updates["SILICA_PROVIDER"] = provider
     if provider in _HOSTED:
         key_env, default_model, key_prompt = _HOSTED[provider]
@@ -198,6 +223,28 @@ def _run_wizard_inner(
         while not key:
             key = _ask(input_fn, key_prompt, os.getenv(key_env, ""), secret=True)
         updates[key_env] = key
+    elif provider == "custom":
+        base_url = ""
+        while not base_url:
+            base_url = _ask(input_fn, "Base URL (OpenAI-compatible, e.g. http://localhost:8000/v1)")
+        updates["SILICA_PROVIDER_BASE_URL"] = base_url
+        # Local servers usually ignore the key but the OpenAI SDK demands non-empty.
+        updates["SILICA_PROVIDER_API_KEY"] = _ask(
+            input_fn, "API key [Enter for none / local]", "dummy-key", secret=True
+        )
+        model = ""
+        while not model:
+            model = _ask(input_fn, "Model id served at that URL")
+    elif provider == "ollama":
+        installed = _ollama_installed_models()
+        prompt = (
+            f"Ollama model id (installed: {', '.join(installed)})"
+            if installed else "Ollama model id (e.g. llama3.2)"
+        )
+        default = installed[0] if installed else ""
+        model = ""
+        while not model:
+            model = _ask(input_fn, prompt, default)
     else:
         model = ""
         while not model:
