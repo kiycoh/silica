@@ -22,12 +22,12 @@ class UndoJournalStore:
     def __init__(self, path: Path | str | None = None):
         self._path = Path(path) if path else _DEFAULT_JOURNAL_PATH
         self._path.parent.mkdir(parents=True, exist_ok=True)
-        # ponytail: one lock over the shared sqlite conn (check_same_thread=False).
-        # Journal writes are rare, so serialising them is free and stops the GUI's
-        # to_thread worker from corrupting the db on a concurrent write.
-        self._lock = threading.Lock()
+        # ponytail: WAL + per-thread connections; sqlite's busy_timeout serialises
+        # writers, so no app-level lock. A thread's conn is closed only by GC when
+        # the thread dies — fine for the GUI's small to_thread pool.
+        self._local = threading.local()
         try:
-            self._connect()
+            self._init_schema()
         except sqlite3.DatabaseError as e:
             # A corrupt journal must not brick startup or the /revert of future
             # runs. Quarantine it and start fresh; the durable backstop for older
@@ -36,19 +36,35 @@ class UndoJournalStore:
                 "undo journal at %s is corrupt (%s); quarantining and starting fresh",
                 self._path, e,
             )
+            conn = getattr(self._local, "conn", None)
+            if conn is not None:
+                conn.close()
+                self._local.conn = None
             try:
                 self._path.replace(self._path.with_suffix(".corrupt"))
             except OSError:
                 pass
-            self._connect()
+            for suffix in ("-wal", "-shm"):
+                # a stale WAL sidecar must not be replayed into the fresh db
+                Path(str(self._path) + suffix).unlink(missing_ok=True)
+            self._init_schema()
 
-    def _connect(self) -> None:
-        self._conn = sqlite3.connect(str(self._path), check_same_thread=False)
-        self._conn.row_factory = sqlite3.Row
-        self._init_schema()
+    def _conn(self) -> sqlite3.Connection:
+        conn = getattr(self._local, "conn", None)
+        if conn is None:
+            conn = sqlite3.connect(str(self._path))
+            try:
+                conn.row_factory = sqlite3.Row
+                conn.execute("PRAGMA journal_mode=WAL")
+                conn.execute("PRAGMA busy_timeout=5000")
+            except sqlite3.DatabaseError:
+                conn.close()
+                raise
+            self._local.conn = conn
+        return conn
 
     def _init_schema(self) -> None:
-        self._conn.executescript(
+        self._conn().executescript(
             """
             CREATE TABLE IF NOT EXISTS runs (
                 run_id      TEXT PRIMARY KEY,
@@ -72,30 +88,31 @@ class UndoJournalStore:
         # Migration: pre-scoping DBs lack `vault`. Legacy rows stay NULL, so a
         # vault-filtered last_active_run() never surfaces them — foreign/stale
         # runs from a deleted or reorganised vault retire themselves.
-        cols = {r["name"] for r in self._conn.execute("PRAGMA table_info(runs)")}
+        conn = self._conn()
+        cols = {r["name"] for r in conn.execute("PRAGMA table_info(runs)")}
         if "vault" not in cols:
-            self._conn.execute("ALTER TABLE runs ADD COLUMN vault TEXT")
-        self._conn.commit()
+            conn.execute("ALTER TABLE runs ADD COLUMN vault TEXT")
+        conn.commit()
 
     def start_run(self, source: str | None = None, vault: str | None = None) -> str:
         run_id = uuid.uuid4().hex
-        with self._lock:
-            self._conn.execute(
-                "INSERT INTO runs (run_id, source, vault, started_at) VALUES (?, ?, ?, ?)",
-                (run_id, source, vault, time.time()),
-            )
-            self._conn.commit()
+        conn = self._conn()
+        conn.execute(
+            "INSERT INTO runs (run_id, source, vault, started_at) VALUES (?, ?, ?, ?)",
+            (run_id, source, vault, time.time()),
+        )
+        conn.commit()
         return run_id
 
     def record(self, run_id: str, inverse: InverseOp, post_hash: str | None) -> None:
-        with self._lock:
-            self._conn.execute(
-                "INSERT INTO inverses (run_id, path, kind, version, prior_content, post_hash) "
-                "VALUES (?, ?, ?, ?, ?, ?)",
-                (run_id, inverse.path, inverse.kind.value, inverse.version,
-                 inverse.prior_content, post_hash),
-            )
-            self._conn.commit()
+        conn = self._conn()
+        conn.execute(
+            "INSERT INTO inverses (run_id, path, kind, version, prior_content, post_hash) "
+            "VALUES (?, ?, ?, ?, ?, ?)",
+            (run_id, inverse.path, inverse.kind.value, inverse.version,
+             inverse.prior_content, post_hash),
+        )
+        conn.commit()
 
     def last_active_run(self, vault: str | None = None) -> str | None:
         """Most recent un-reverted run that has inverses.
@@ -113,17 +130,15 @@ class UndoJournalStore:
             query += " AND r.vault = ?"
             params.append(vault)
         query += " ORDER BY r.started_at DESC, r.rowid DESC LIMIT 1"
-        with self._lock:
-            row = self._conn.execute(query, params).fetchone()
+        row = self._conn().execute(query, params).fetchone()
         return row["run_id"] if row else None
 
     def inverses_for(self, run_id: str) -> list[tuple[InverseOp, str | None]]:
-        with self._lock:
-            rows = self._conn.execute(
-                "SELECT path, kind, version, prior_content, post_hash "
-                "FROM inverses WHERE run_id = ? ORDER BY id DESC",
-                (run_id,),
-            ).fetchall()
+        rows = self._conn().execute(
+            "SELECT path, kind, version, prior_content, post_hash "
+            "FROM inverses WHERE run_id = ? ORDER BY id DESC",
+            (run_id,),
+        ).fetchall()
         out: list[tuple[InverseOp, str | None]] = []
         for r in rows:
             inv = InverseOp(
@@ -134,11 +149,11 @@ class UndoJournalStore:
         return out
 
     def mark_reverted(self, run_id: str) -> None:
-        with self._lock:
-            self._conn.execute(
-                "UPDATE runs SET reverted_at = ? WHERE run_id = ?", (time.time(), run_id)
-            )
-            self._conn.commit()
+        conn = self._conn()
+        conn.execute(
+            "UPDATE runs SET reverted_at = ? WHERE run_id = ?", (time.time(), run_id)
+        )
+        conn.commit()
 
 
 _store: UndoJournalStore | None = None

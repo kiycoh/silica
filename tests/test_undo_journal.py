@@ -167,3 +167,31 @@ def test_legacy_null_vault_runs_are_retired_under_scoping(tmp_path):
 
     assert store.last_active_run(vault="/vaults/current") is None
     assert store.last_active_run() == r_legacy   # still reachable unscoped
+
+
+def test_concurrent_writes_from_many_threads(tmp_path):
+    """WAL + per-thread connections: parallel record() calls from a thread pool
+    (the GUI's to_thread shape) must all land, with no lock and no corruption."""
+    import threading
+
+    store = UndoJournalStore(tmp_path / "j.db")
+    run_id = store.start_run("concurrent")
+    errors: list[Exception] = []
+
+    def worker(i: int) -> None:
+        try:
+            for j in range(10):
+                store.record(run_id, _inv(f"t{i}-{j}.md"), post_hash=None)
+        except Exception as e:  # pragma: no cover - only on failure
+            errors.append(e)
+
+    threads = [threading.Thread(target=worker, args=(i,)) for i in range(8)]
+    for t in threads:
+        t.start()
+    for t in threads:
+        t.join()
+
+    assert not errors
+    assert len(store.inverses_for(run_id)) == 80
+    mode = store._conn().execute("PRAGMA journal_mode").fetchone()[0]
+    assert mode == "wal"
