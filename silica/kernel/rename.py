@@ -35,7 +35,7 @@ from urllib.parse import unquote, quote
 # wikilinks and headings to rewrite them.
 # ---------------------------------------------------------------------------
 
-from silica.kernel.autolink import SKIP_PATTERNS_BASE, build_skip_mask
+from silica.kernel.autolink import SKIP_PATTERNS_BASE, build_skip_mask, _FRONTMATTER_RE
 
 
 def _build_skip_mask(text: str) -> list[bool]:
@@ -168,6 +168,34 @@ def _rewrite_wikilinks(
     return result, len(replacements)
 
 
+def _rewrite_frontmatter_wikilinks(
+    content: str,
+    old_path: str,
+    new_path: str,
+    *,
+    rewrite_name_links: bool,
+) -> tuple[str, int]:
+    """Rewrite wikilinks living INSIDE the leading frontmatter block.
+
+    The shared skip mask masks all of frontmatter, but Silica writes wikilinks
+    into `parent note:`/`related:`/`hub:` properties on every note; Obsidian
+    rewrites those link-type properties on rename and so must we (A19). Rewrite
+    them with an all-clear mask over the frontmatter substring only.
+    """
+    m = _FRONTMATTER_RE.match(content)
+    if not m:
+        return content, 0
+    block = m.group(0)
+    clear_mask = [False] * len(block)
+    new_block, n = _rewrite_wikilinks(
+        block, clear_mask, old_path, new_path,
+        rewrite_name_links=rewrite_name_links,
+    )
+    if n:
+        content = new_block + content[m.end(0):]
+    return content, n
+
+
 # ---------------------------------------------------------------------------
 # Markdown link rewriter
 # ---------------------------------------------------------------------------
@@ -298,8 +326,10 @@ def rewrite_links(
        Only relative hrefs that resolve to old_path are rewritten.
        %20 and angle-bracket forms are handled and round-tripped.
 
-    6. Skip regions — never rewritten:
-       frontmatter, fenced code, inline code, display math, inline math.
+    6. Skip regions — body links never rewritten inside:
+       fenced code, inline code, display math, inline math. Frontmatter body is
+       skipped for prose links but its wikilink-valued properties (parent note:,
+       related:, hub:) ARE rewritten, mirroring Obsidian (A19).
 
     7. Case-insensitive matching; whole-target only (``[[Older]]`` is safe).
     """
@@ -319,4 +349,10 @@ def rewrite_links(
 
     result, n_md = _rewrite_markdown_links(result, mask, old_path, new_path)
 
-    return result, n_wiki + n_md
+    # Frontmatter is a skip region for the passes above; rewrite the wikilinks
+    # Silica stores in its properties separately (A19).
+    result, n_fm = _rewrite_frontmatter_wikilinks(
+        result, old_path, new_path, rewrite_name_links=rewrite_name_links,
+    )
+
+    return result, n_wiki + n_md + n_fm

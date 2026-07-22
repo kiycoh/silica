@@ -335,14 +335,25 @@ class TestSkipRegions:
         assert new == content
         assert n == 0
 
-    def test_frontmatter(self):
-        """Links in YAML frontmatter are never touched."""
+    def test_frontmatter_wikilink_properties_rewritten(self):
+        """Wikilink-valued frontmatter properties ARE rewritten (A19) — Silica
+        stores parent note:/related:/hub: as wikilinks and Obsidian rewrites
+        link-type properties on rename. Both the property and the body update."""
         content = "---\nlinks: [[Old]]\n---\n\nSee [[Old]] here."
         new, n = rewrite_links(content, "A/Old.md", "A/New.md")
-        # Only the body link is rewritten
-        assert "---\nlinks: [[Old]]\n---" in new
-        assert "[[New]]" in new
-        assert n == 1
+        assert "links: [[New]]" in new
+        assert "See [[New]] here." in new
+        assert n == 2
+
+    def test_frontmatter_silica_shaped_properties(self):
+        """The real producer shape: quoted wikilinks in parent note:/related:."""
+        content = (
+            '---\nparent note: "[[Old]]"\nrelated:\n  - "[[Old]]"\n---\n\nbody\n'
+        )
+        new, n = rewrite_links(content, "Hubs/Old.md", "Hubs/New.md")
+        assert 'parent note: "[[New]]"' in new
+        assert '- "[[New]]"' in new
+        assert n == 2
 
     def test_display_math(self):
         content = "$$[[Old]]$$"
