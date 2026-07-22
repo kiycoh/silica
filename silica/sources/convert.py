@@ -54,6 +54,13 @@ _SLUG_RE = re.compile(r"[^a-z0-9]+")
 _MINERU_BACKEND = "pipeline"
 _MINERU_TIMEOUT_S = 3600
 
+# stderr triage (see _mineru_error): noise = loguru INFO/DEBUG, uvicorn banner
+# lines, tqdm progress bars; error-ish = a line naming an error/exception.
+_MINERU_NOISE_RE = re.compile(
+    r"\|\s*(?:INFO|DEBUG)\s*\||^(?:INFO|DEBUG|WARNING):|it/s|\d+%\|", re.IGNORECASE
+)
+_MINERU_ERR_RE = re.compile(r"error|exception|traceback", re.IGNORECASE)
+
 
 def convert(target: str, dest_dir: str = "") -> list[str]:
     """Convert a non-`.md` file into one or more `.md` notes in the inbox.
@@ -272,16 +279,34 @@ def _pdf_via_opendataloader(src: Path, workdir: Path) -> tuple[str, Path]:
 def _mineru_error(stderr: str) -> str:
     """One-line, human-readable error from mineru's stderr.
 
-    mineru may write a JSON task blob (with an ``error`` field) or plain text.
-    Pull the ``error`` field when present; otherwise head-truncate (not tail —
-    the useful message is at the front, and a tail slice starts mid-token).
+    mineru may write a JSON task blob (with an ``error`` field) or a loguru
+    stream. Pull the ``error`` field when present. Otherwise the cause is NOT
+    at the head: this mineru version spins up an internal ``mineru-api`` server
+    and floods stderr with startup logs + tqdm bars before any work, so
+    head-truncating just surfaces "Started local mineru-api ...". Drop
+    INFO/progress noise, then return the last error-ish line (else the last
+    meaningful line) — a Python traceback puts "XError: msg" last too.
     """
     err = stderr.strip()
     try:
         parsed = json.loads(err)
         return str(parsed.get("error") or err[:300])
     except (ValueError, AttributeError):
+        pass
+    # The task blob is usually EMBEDDED in the final "Error: N task(s) failed"
+    # line, where its "error" field sits past any truncation window — pull it
+    # straight out (last match = final task).
+    fields = re.findall(r'"error":\s*"((?:[^"\\]|\\.)+)"', err)
+    if fields:
+        return fields[-1][:300]
+    lines = [
+        ln.strip() for ln in err.splitlines()  # \r-split too: tqdm bars separate
+        if ln.strip() and not _MINERU_NOISE_RE.search(ln)
+    ]
+    if not lines:
         return err[:300]
+    hits = [ln for ln in lines if _MINERU_ERR_RE.search(ln)]
+    return (hits[-1] if hits else lines[-1])[:300]
 
 
 def _pdf_via_mineru(src: Path, workdir: Path) -> tuple[str, Path]:

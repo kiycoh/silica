@@ -74,7 +74,11 @@ def test_injector_write_defers_failing_note_keeps_siblings(vault_fsm, monkeypatc
     c = vault_fsm.note("C.md", "---\n---\nseed\n")
 
     def fake_lint(note_name, op_type="", hub=""):
-        return {"success": "Bad" not in str(note_name), "errors": ["e"]}
+        # Diff-aware patch lint: the bad note only fails once the patch appends
+        # its block, so the violation counts as newly introduced.
+        from silica.driver import DRIVER
+        introduced = "Bad" in str(note_name) and "Note aggiuntive" in DRIVER.read_note(note_name).content
+        return {"success": not introduced, "errors": ["e"] if introduced else []}
     monkeypatch.setattr("silica.tools.composed.silica_lint", fake_lint)
 
     fsm = vault_fsm.make_fsm()

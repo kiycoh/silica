@@ -21,3 +21,47 @@ def test_plain_short_message_stripped():
 
 def test_json_without_error_field_falls_back_to_head():
     assert _mineru_error('{"status": "queued"}') == '{"status": "queued"}'
+
+
+def test_skips_server_startup_noise_and_surfaces_real_error():
+    # The exact symptom: mineru's internal mineru-api logs fill the head, so the
+    # old [:300] slice returned "Started local mineru-api ..." and hid the cause.
+    stderr = (
+        "2026-07-22 00:36:13.800 | INFO     | mineru.cli.client:run_orchestrated_cli:953"
+        " - Started local mineru-api at http://127.0.0.1:49077\n"
+        "INFO:     Started server process [1041512]\n"
+        "INFO:     Waiting for application startup.\n"
+        "Layout Predict:  50%|#####     | 20/40 [00:01<00:01, 18.5it/s]\n"
+        "2026-07-22 00:36:20.1 | ERROR    | mineru.backend.pipeline:run:99 - CUDA out of memory\n"
+    )
+    out = _mineru_error(stderr)
+    assert "out of memory" in out.lower()
+    assert "mineru-api" not in out
+
+
+def test_extracts_error_field_from_embedded_task_blob():
+    # mineru 3.4.4's real failure shape: startup noise, then a final line with
+    # the task JSON embedded — its "error" field sits past any 300-char window.
+    stderr = (
+        "2026-07-22 01:04:05.607 | INFO     | mineru.cli.client:run_orchestrated_cli:953"
+        " - Started local mineru-api at http://127.0.0.1:52983\n"
+        "INFO:     Started server process [1097256]\n"
+        "Error: 1 task(s) failed while processing documents:\n"
+        '- task#1 (l.Spark-SQL): Task f07cd05c failed for task#1 [l.Spark-SQL]: '
+        '{"task_id": "f07cd05c", "status": "failed", "backend": "pipeline", '
+        '"file_names": ["l.Spark-SQL"], "created_at": "2026-07-21T23:07:03+00:00", '
+        '"started_at": "2026-07-21T23:07:03+00:00", "completed_at": '
+        '"2026-07-21T23:07:06+00:00", "error": "No module named \'six\'", '
+        '"queued_ahead": 0}\n'
+    )
+    assert _mineru_error(stderr) == "No module named 'six'"
+
+
+def test_last_meaningful_line_when_no_explicit_error_keyword():
+    # No ERROR line (e.g. killed mid-run) → last non-noise line beats head noise.
+    stderr = (
+        "2026-07-22 | INFO | mineru.cli.client - Started local mineru-api\n"
+        "OCR-rec Predict:  10%|#         | 60/627 [00:00<00:01, 544it/s]\n"
+        "Killed\n"
+    )
+    assert _mineru_error(stderr) == "Killed"

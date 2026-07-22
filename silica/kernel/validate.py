@@ -313,6 +313,20 @@ def validate_operations(
                     if _heading_key(n) == _heading_key(heading)
                 ]
                 if len(near) != 1:
+                    # Fallback: the op title is often a cleaner rephrase of the
+                    # registered concept ("DataFrame" vs "dataframe spark").
+                    # Accept only a UNIQUE token-subset match (one side's word
+                    # set contained in the other) — ambiguous / 1-to-many still
+                    # rejects, so content can't attach to the wrong concept.
+                    ht = frozenset(_heading_key(heading).split())
+                    if ht:
+                        subset = [
+                            n for n in valid_concepts[source_basename]
+                            if (nt := frozenset(_heading_key(n).split())) and (ht <= nt or nt <= ht)
+                        ]
+                        if len(subset) == 1:
+                            near = subset
+                if len(near) != 1:
                     rejected_ops.append(Rejection(op=op, reason=f"Heading '{heading}' not present in payload concepts"))
                     continue
                 logger.info("validate: heading '%s' normalized to payload concept '%s'", heading, near[0])

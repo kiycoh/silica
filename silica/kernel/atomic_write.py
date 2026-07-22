@@ -55,6 +55,20 @@ def commit_note_atomic(op: Op, *, hub: str | None = None, lint: bool = True) -> 
     txn = build_txn([op])
     inverses: list[InverseOp] = list(txn.inverses)
 
+    # Diff-aware patch lint baseline: a patch appends to a user-authored note
+    # that may already carry violations (e.g. an [!definizione] callout the
+    # user uses). Only violations the patch INTRODUCES should block it — else a
+    # pre-existing issue reverts every patch to that note forever. Captured on
+    # the pre-write content; writes (new notes) keep an empty baseline.
+    baseline_errors: set[str] = set()
+    if lint and path and op.op == OpType.patch:
+        try:
+            baseline_errors = set(
+                silica_lint(path, op_type=op_name, hub=hub or op.hub or "").get("errors", [])
+            )
+        except Exception:
+            baseline_errors = set()
+
     # 2. execute the single op
     try:
         execute_one(op)
@@ -81,10 +95,12 @@ def commit_note_atomic(op: Op, *, hub: str | None = None, lint: bool = True) -> 
             ok=False, path=path, op=op_name, inverses=inverses, error=str(e)
         )
 
-    # 3. optional lint on this note; revert on failure
+    # 3. optional lint on this note; revert on failure. Only NEW violations
+    # (not in the pre-write baseline) count — see baseline_errors above.
     if lint and path:
         lr = silica_lint(path, op_type=op_name, hub=hub or op.hub or "")
-        if not lr.get("success", True):
+        new_errors = [e for e in lr.get("errors", []) if e not in baseline_errors]
+        if new_errors:
             silica_restore(
                 txn_id=txn.id,
                 inverses=[inv.model_dump() for inv in inverses],
@@ -94,7 +110,7 @@ def commit_note_atomic(op: Op, *, hub: str | None = None, lint: bool = True) -> 
                 path=path,
                 op=op_name,
                 inverses=inverses,
-                error=f"lint failed: {lr.get('errors')}",
+                error=f"lint failed: {new_errors}",
                 reverted=True,
             )
 

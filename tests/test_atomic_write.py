@@ -24,8 +24,14 @@ def test_clean_patch_commits_and_returns_inverse(tmp_vault, monkeypatch):
 def test_lint_failure_reverts_only_this_note(tmp_vault, monkeypatch):
     target = tmp_vault.note("Areas/Roadmap.md", "---\n---\nseed\n")
     original = tmp_vault.read(target)
-    monkeypatch.setattr("silica.tools.composed.silica_lint",
-                        lambda *a, **k: {"success": False, "errors": ["bad link"]})
+
+    # Diff-aware patch lint: fail only once the patch has appended its block, so
+    # the violation is NEWLY introduced (a pre-existing one wouldn't revert).
+    def fake_lint(note_name, op_type="", hub=""):
+        from silica.driver import DRIVER
+        introduced = "Note aggiuntive" in DRIVER.read_note(note_name).content
+        return {"success": not introduced, "errors": ["bad link"] if introduced else []}
+    monkeypatch.setattr("silica.tools.composed.silica_lint", fake_lint)
     res = commit_note_atomic(_patch_op(target), lint=True)
     assert res.ok is False
     assert res.reverted is True
@@ -39,7 +45,9 @@ def test_failing_sibling_does_not_roll_back_others(tmp_vault, monkeypatch):
     c = tmp_vault.note("People/Grace.md", "---\n---\nseed\n")
 
     def fake_lint(note_name, op_type="", hub=""):
-        return {"success": "Roadmap" not in note_name, "errors": ["bad"]}
+        from silica.driver import DRIVER
+        introduced = "Roadmap" in note_name and "Note aggiuntive" in DRIVER.read_note(note_name).content
+        return {"success": not introduced, "errors": ["bad"] if introduced else []}
     monkeypatch.setattr("silica.tools.composed.silica_lint", fake_lint)
 
     ops = [_patch_op(a), _patch_op(b), _patch_op(c)]

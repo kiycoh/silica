@@ -33,8 +33,25 @@ def slugify(s: str) -> str:
 def _link_name(name: str) -> str:
     """Bare note name for a wikilink target — strips brackets the distiller may
     already have wrapped around it, so f'[[{name}]]' never becomes '[[[[X]]]]'
-    (a quadruple-bracket frontmatter link Obsidian reads as unresolved)."""
-    return name.strip().strip("[]").strip()
+    (a quadruple-bracket frontmatter link Obsidian reads as unresolved), and
+    un-escapes a markdown-table pipe (``\\|`` → ``|``): the distiller emits
+    aliases like ``[[Target\\|Alias]]``, and ``\\|`` is an invalid escape inside
+    the double-quoted YAML scalar we wrap related/hub links in — it breaks
+    parsing of the WHOLE frontmatter block (real incident: DQL note, run of
+    2026-07-22, rejected as 'Missing or invalid frontmatter')."""
+    return name.strip().strip("[]").strip().replace("\\|", "|")
+
+
+def close_unbalanced_fences(text: str) -> str:
+    """Append a closing code fence when the ``` count is odd, mirroring the
+    lint's ``body.count('```') % 2`` check (ast._balanced). A distilled snippet
+    that opens a fence and never closes it fails post-write lint and gets
+    deferred — closing it mechanically lands the note instead of losing it.
+    ponytail: balances only the top-level fence count; a snippet that nests
+    fences pathologically still needs a real fix."""
+    if text.count("```") % 2:
+        return text.rstrip() + "\n```\n"
+    return text
 
 
 def template_spoke(heading: str, snippet: str, hub: str, title: str | None = None, tags: list[str] | None = None, related: list[str] | None = None, parent: str | None = None) -> str:
@@ -157,7 +174,7 @@ def prepare_fields(*, title: str, body: str, hub: str | None = None,
 
     return {
         "title": title,
-        "body": body.strip() or "(da espandere)",
+        "body": close_unbalanced_fences(body.strip()) or "(da espandere)",
         "tags": tag_list,
         "related": related_items,
         "parent": f'"[[{parent_link}]]"' if parent_link else "",
@@ -306,7 +323,7 @@ def patch_snippet(heading: str, snippet: str, source_basename: str, hub: str | N
 
 ## Note aggiuntive — {heading} (da {source_basename})
 
-{snippet.strip()}
+{close_unbalanced_fences(snippet.strip())}
 """
     if existing_content is not None:
         existing_content = ensure_hub_link(existing_content, hub)

@@ -627,8 +627,34 @@ class InjectorFSM(BaseFSM[InjectorState]):
             if getattr(self, "_prefetcher", None) is not None:
                 self._prefetcher.shutdown()
             self._cleanup_tmp()
+            self._boundary_anneal()
             self._flush_indexes()
         return self.context
+
+    def _boundary_anneal(self) -> None:
+        """Mechanical recovery sweep, once per run: re-validate every deferred
+        bundle against the now-larger vault and write what passes. No LLM
+        (steer=False) — the escalation pass stays the opt-in silica_anneal tool.
+        This is what lets the in-run gate stay strict: anything it defers gets a
+        batched second chance here, off the critical path.
+
+        ponytail: sweeps the whole deferred store each run; if a vault
+        accumulates many unfixable bundles, gate on this-run deferrals instead.
+        Kill-switch: SILICA_BOUNDARY_ANNEAL=0.
+        """
+        import os
+        if os.getenv("SILICA_BOUNDARY_ANNEAL", "1") == "0":
+            return
+        try:
+            from silica.kernel.deferred import get_deferred_store
+            if not get_deferred_store().list_all():
+                return
+            from silica.tools.pipeline import silica_anneal
+            res = silica_anneal(steer=False)
+            if res.get("written"):
+                logger.info("boundary anneal: recovered %d deferred op(s)", res.get("written"))
+        except Exception as e:
+            logger.debug("boundary anneal skipped (%s)", e)
 
     def _flush_indexes(self) -> None:
         """Persist the deferred embed + co-occurrence upserts once per run (Fix A).
