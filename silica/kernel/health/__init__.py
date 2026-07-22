@@ -3,7 +3,7 @@
 
 """L1 Health — the golden harness's gated metrics, callable on the live vault.
 
-The two GATED probes of the golden coherence harness (tests/eval/golden),
+The two GATED probes of the golden coherence harness (evals/golden),
 homed here so the agent can run them in-session via the silica_health tool.
 One definition, two consumers: the harness runner (regression gate) and the
 tool (diagnostic) both call these.

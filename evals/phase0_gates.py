@@ -19,7 +19,7 @@ side's coverage/flatness distributions as the reference for a future re-run.
 The reranker SERVICE need not be running: both hooks fire before the HTTP
 call, and a dead endpoint only degrades the (ignored) arm-B ordering.
 
-  uv run python -m tests.eval.phase0_gates --vault ~/Documents/Obsidian/test
+  uv run python -m evals.phase0_gates --vault ~/Documents/Obsidian/test
 """
 from __future__ import annotations
 
@@ -32,7 +32,7 @@ from typing import Any
 _FACTORS = (2, 3, 4, 5, 8, 10)          # candidate _RERANK_WINDOW_FACTOR values
 _COVERAGE_REFS = (0.02, 0.05, 0.1, 0.2)  # reference thresholds for gate 1
 
-_REPO = Path(__file__).resolve().parents[2]
+_REPO = Path(__file__).resolve().parents[1]
 OUT_PATH = _REPO / "bench" / "phase0_gates.json"
 
 
@@ -89,7 +89,7 @@ def main(argv=None) -> int:
     os.environ.setdefault("SILICA_RERANK_BASE_URL", "http://localhost:1235/v1")
     os.environ.setdefault("SILICA_RERANK_MODEL", "bge-reranker-v2-m3")
 
-    ap = argparse.ArgumentParser(prog="python -m tests.eval.phase0_gates")
+    ap = argparse.ArgumentParser(prog="python -m evals.phase0_gates")
     ap.add_argument("--vault", required=True, help="real vault (fusion-probe side)")
     ap.add_argument("--lme-data", default=str(_REPO / "docs/eval-handoff/lme_s_sample.json"))
     ap.add_argument("--lme-root", default=str(_REPO / "bench/lme_s_raw"))
@@ -107,7 +107,7 @@ def main(argv=None) -> int:
     rerank.RERANK_GATE_PROBE = lambda sig: rows.append({"gate": "rerank", **ctx, **sig})
 
     # --- corpus 1: LME_s sample, retrieval-only on frozen vaults -------------
-    from tests.eval.longmemeval.runner import run_instance
+    from evals.longmemeval.runner import run_instance
 
     sample = json.loads(Path(args.lme_data).read_text(encoding="utf-8"))
     if args.limit:
@@ -131,8 +131,8 @@ def main(argv=None) -> int:
     from silica.agent.providers import get_reranker
     from silica.config import CONFIG
     from silica.kernel.health import fusion_probe
-    from tests.eval.golden import probe_fusion
-    from tests.eval.golden.runner import _open_stores, resolve_vault
+    from evals.golden import probe_fusion
+    from evals.golden.runner import _open_stores, resolve_vault
 
     vault = resolve_vault(args.vault)
     store, embed_store = _open_stores(vault)

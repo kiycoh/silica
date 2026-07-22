@@ -66,7 +66,7 @@ def derive_taxonomy(domains: list[str], store, top_n: int = TOP_N) -> Taxonomy:
 
 def domain_paths(vault, domains: list[str]) -> list[str]:
     """Vault-relative ``*.md`` paths under one of the domain folders (sorted)."""
-    from tests.eval.golden.runner import iter_notes
+    from evals.golden.runner import iter_notes
 
     dom = set(domains)
     out = []

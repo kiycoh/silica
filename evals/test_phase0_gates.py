@@ -3,7 +3,7 @@
 
 """summarize()/separation() arithmetic on hand-built probe rows (phase-0,
 retrieval-gates spec 2026-07-14)."""
-from tests.eval.phase0_gates import separation, summarize
+from evals.phase0_gates import separation, summarize
 
 
 def _rr(corpus: str, median_len: float, window: int = 800) -> dict:

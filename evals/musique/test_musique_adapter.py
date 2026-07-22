@@ -13,7 +13,7 @@ from __future__ import annotations
 import json
 from pathlib import Path
 
-from tests.eval.musique import runner
+from evals.musique import runner
 
 
 def _corpus():

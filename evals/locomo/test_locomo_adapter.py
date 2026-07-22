@@ -13,7 +13,7 @@ from __future__ import annotations
 
 import silica.agent.llm as llm_mod
 from silica.agent.llm import LLMResponse
-from tests.eval.locomo import runner
+from evals.locomo import runner
 
 
 def _conv_inst():

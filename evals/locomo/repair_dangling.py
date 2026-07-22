@@ -15,7 +15,7 @@ occurrence-vs-notes curve (see pick_n.py):
     navigator sees plain text instead of a broken link.
 
 Result: zero dangling, +19 notes (N=3), walls removed concentrated on traffic.
-Run:  uv run python tests/eval/locomo/repair_dangling.py [SRC] [DST] [N]
+Run:  uv run python evals/locomo/repair_dangling.py [SRC] [DST] [N]
 """
 from __future__ import annotations
 

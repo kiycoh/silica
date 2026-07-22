@@ -19,7 +19,7 @@ regression that pins the harness's ΔE wiring:
 from __future__ import annotations
 
 from silica.kernel.graph_report import compute_report
-from tests.eval.vault_energy import vault_energy
+from evals.vault_energy import vault_energy
 
 
 def _seed(tmp_vault, ghost_links: int = 1):

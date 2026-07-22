@@ -33,7 +33,7 @@ from silica.kernel.graph_report.models import (
     IntegrationDeficit,
     VaultReport,
 )
-from tests.eval.vault_energy import Weights, vault_energy
+from evals.vault_energy import Weights, vault_energy
 
 
 def _clique(members: list[str]) -> list[dict]:

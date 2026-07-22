@@ -11,7 +11,7 @@ and the union >= expanded invariant.
 from __future__ import annotations
 
 from silica.kernel.cooccurrence import CooccurStore, build_contribution
-from tests.eval.golden import probe_correlate
+from evals.golden import probe_correlate
 
 
 def _store(tmp_path, notes: dict[str, str]) -> CooccurStore:

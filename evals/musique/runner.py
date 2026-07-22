@@ -20,7 +20,7 @@ so nothing outside the bench vault can leak into the ranking.
   3. probe — ``related_notes_for_query(question)`` → recall@k / MRR against
              the ``is_supporting`` paragraphs
 
-  uv run python -m tests.eval.musique --vault bench/musique \
+  uv run python -m evals.musique --vault bench/musique \
       --corpus musique_corpus.json --questions musique.json --load --index
 """
 from __future__ import annotations
@@ -30,6 +30,8 @@ import datetime
 import json
 import re
 from pathlib import Path
+
+from evals import _shared
 
 _PID = re.compile(r"^p(\d+)$")
 _KS = (2, 5, 10)
@@ -214,12 +216,14 @@ def probe(
 
     for qi, q in enumerate(questions):
         gold: set[int] = set()
+        q_unmappable = 0
         for para in q.get("paragraphs", []):
             if not para.get("is_supporting"):
                 continue
             idx = key2idx.get(_key(para))
             if idx is None:
                 unmappable += 1
+                q_unmappable += 1
             else:
                 gold.add(idx)
         if not gold:
@@ -240,6 +244,11 @@ def probe(
         row = {
             "id": q.get("id") or q.get("_id") or str(qi),
             "gold": sorted(gold),
+            # Per-question dropped-gold count: recall here is over the MAPPED
+            # gold only, so a question with unmappable_gold>0 scored its evidence
+            # on a reduced denominator (audit 1.6). The headline stays inflated;
+            # this makes the affected rows filterable.
+            "unmappable_gold": q_unmappable,
             "top": ranked,
             "first_gold_rank": _first_gold_rank(gold, ranked),
         }
@@ -308,7 +317,7 @@ def _print_summary(doc: dict) -> None:
 
 
 def main(argv=None) -> int:
-    ap = argparse.ArgumentParser(prog="python -m tests.eval.musique")
+    ap = argparse.ArgumentParser(prog="python -m evals.musique")
     ap.add_argument("--vault", required=True, help="bench vault directory (dedicated, not your personal vault)")
     ap.add_argument("--corpus", required=True, help="musique_corpus.json (HippoRAG pooled dev corpus)")
     ap.add_argument("--questions", help="musique.json (HippoRAG 1k dev questions); omit to only load/index")
@@ -345,11 +354,21 @@ def main(argv=None) -> int:
 
     if not args.questions:
         return 0
+    if not args.no_rerank:
+        # Fail fast: a dead reranker silently abstains and fakes rerank == fused
+        # (audit lane 2.5).
+        from silica.config import CONFIG
+        _shared.assert_reranker_live(CONFIG)
     questions = json.loads(Path(args.questions).read_text(encoding="utf-8"))
     doc = probe(questions, corpus, k=args.k, use_embedder=not args.no_embed,
                 use_cooccur=not args.no_cooccur, use_rerank=not args.no_rerank,
                 expand=args.expand, limit=args.limit, verbose=args.verbose)
-    out = Path(args.out) if args.out else METRICS_PATH
+    # Attribution (audit lane 3) + machine-checkable primary (lane 2.6).
+    doc["provenance"] = _shared.provenance(args.questions)
+    doc["config"]["primary_metric"] = f"recall_at_{args.k}"
+    # Stamped default so consecutive runs never clobber a shared metrics.json.
+    out = Path(args.out) if args.out else METRICS_PATH.with_name(
+        f"metrics.{_shared.run_id()}.json")
     out.write_text(json.dumps(doc, indent=2, ensure_ascii=False) + "\n", encoding="utf-8")
     _print_summary(doc)
     print(f"\nreport → {out}")

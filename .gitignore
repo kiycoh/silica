@@ -179,7 +179,9 @@ CONTEXT.md
 PONYTAIL-DEBT.md
 
 # Golden harness per-run output (only baseline.json is committed)
-tests/eval/golden/metrics.json
+evals/golden/metrics.json
+# Stamped per-run benchmark outputs (evals/<bench>/metrics.<run_id>.json)
+evals/*/metrics.*.json
 
 # benchmark vaults + frozen corpora (never committed)
 bench/

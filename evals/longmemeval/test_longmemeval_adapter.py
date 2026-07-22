@@ -15,7 +15,7 @@ import json
 
 import silica.agent.llm as llm_mod
 from silica.agent.llm import LLMResponse
-from tests.eval.longmemeval import runner
+from evals.longmemeval import runner
 
 
 def _session(text):
@@ -600,7 +600,7 @@ def test_incremental_checkpoint_written_after_every_question(tmp_path, monkeypat
 def test_distill_passes_episodic_key_vocabulary(tmp_path, monkeypatch):
     import silica.kernel.paths as paths_mod
     from silica.kernel import prep_delegation as prep
-    from tests.eval.longmemeval import runner
+    from evals.longmemeval import runner
 
     monkeypatch.setattr(paths_mod, "_SILICA_HOME", tmp_path / "silica_home")
     runner.bind_vault(tmp_path / "vault")

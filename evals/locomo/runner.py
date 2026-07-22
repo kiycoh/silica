@@ -3,7 +3,7 @@
 
 """LoCoMo adapter — multi-session two-speaker conversational QA, LLM-judged.
 
-Reuses the LongMemEval pipeline (tests/eval/longmemeval/runner.py) wholesale:
+Reuses the LongMemEval pipeline (evals/longmemeval/runner.py) wholesale:
 vault binding, distiller ingest + episodic capture, index build, the
 perception product path (fused facade + rerank + query-densest windows +
 facts-first episodic block), the judge rubric, and aggregate(). What differs
@@ -33,7 +33,7 @@ with Mem0 / Zep):
   capture) -> index (cooccur offline; embeddings when an embedder is served)
   -> per question: perceive -> answer -> judge.
 
-  uv run python -m tests.eval.locomo \
+  uv run python -m evals.locomo \
       --data locomo10.json --run-root bench/locomo --distill --verbose
 
 Requires an LLM for answer + judge (litellm, via CONFIG.model). The
@@ -50,9 +50,10 @@ import os
 import re
 from pathlib import Path
 
+from evals import _shared
 # Shared pipeline — the LoCoMo adapter owns dataset shape only; every Silica
 # seam (vault lifecycle, distiller, indexes, judge, metrics) is the LME one.
-from tests.eval.longmemeval.runner import (
+from evals.longmemeval.runner import (
     _ephemeral_hit,
     _gold_in_context,
     _session_rel,
@@ -461,7 +462,11 @@ def answer_question_agent(model: str, question: str, now: str,
         response = loop_mod.run_agent(
             messages, model, tool_progress_callback=_collect,
             constraints=AgentConstraints(tools=_READONLY_TOOLS,
-                                         max_iterations=_AGENT_MAX_ITERATIONS))
+                                         max_iterations=_AGENT_MAX_ITERATIONS),
+            # Greedy decoding: single-run agent A/Bs must measure the lever, not
+            # provider sampling (audit lane 2.2). The product loop defaults to
+            # the provider temperature; only the eval path pins it.
+            temperature=0.0)
     except Exception as e:   # includes the loop's 3-strike RuntimeError
         response, err = "", f"{type(e).__name__}: {e}"
 
@@ -510,11 +515,17 @@ def _agent_aggregate(rows: list[dict]) -> dict | None:
     if not agent_rows:
         return None
     dist = Counter(t for r in agent_rows for t in (r.get("tools_used") or []))
+    # Split exhaustion by category: on cat-5 (adversarial) a budget-out is
+    # substituted with _ABSTAIN and judged CORRECT, so the aggregate number
+    # hides an inflation that lands entirely on abstention accuracy (audit 1.2).
+    exhausted_by_type = Counter(r["question_type"] for r in agent_rows
+                                if r.get("budget_exhausted"))
     return {
         "iterations_mean": round(sum(r["iterations"] for r in agent_rows)
                                  / len(agent_rows), 2),
         "tool_calls": dict(dist.most_common()),
         "budget_exhausted_n": sum(bool(r.get("budget_exhausted")) for r in agent_rows),
+        "budget_exhausted_by_type": dict(exhausted_by_type),
         "error_n": sum(bool(r.get("error")) for r in agent_rows),
     }
 
@@ -668,7 +679,8 @@ def run(data: list[dict], run_root: Path, *, model: str, judge_model: str, k: in
         categories: set[int] | None = None, limit: int | None = None,
         ingest_mode: str = "distill", answer_mode: str = "oneshot",
         timeline: bool = False, improve: bool = False, assemble: bool = False,
-        lexical: bool = False,
+        lexical: bool = False, data_path: str | Path | None = None,
+        primary_metric: str = "overall_accuracy",
         verbose: bool = False, out: Path | None = None) -> dict:
     from silica.config import CONFIG
     from silica.kernel import perception
@@ -680,7 +692,11 @@ def run(data: list[dict], run_root: Path, *, model: str, judge_model: str, k: in
     doc = {
         "generated_at": datetime.date.today().isoformat(),
         "benchmark": "locomo",
+        # Attribution: which code SHA, which dataset file, which run (audit lane 3).
+        "provenance": _shared.provenance(data_path) if data_path else None,
         "config": {"answer_model": None if retrieval_only else model,
+                   # Pre-registered primary, machine-checkable (audit lane 2.6).
+                   "primary_metric": primary_metric,
                    "judge_model": None if retrieval_only else judge_model,
                    "retrieval": "stuff-all" if stuff else f"facade-top{k}",
                    "retrieval_only": retrieval_only,
@@ -701,8 +717,7 @@ def run(data: list[dict], run_root: Path, *, model: str, judge_model: str, k: in
                                       if answer_mode == "agent" else None),
                    "agent_tools": (list(_READONLY_TOOLS)
                                    if answer_mode == "agent" else None),
-                   "agent_temperature": ("provider-default"
-                                         if answer_mode == "agent" else None),
+                   "agent_temperature": (0.0 if answer_mode == "agent" else None),
                    "tainted": [],
                    "context": "flat" if flat_context else "windowed",
                    "windows": windows if windows is not None else perception.DEFAULT_WINDOWS,
@@ -712,6 +727,9 @@ def run(data: list[dict], run_root: Path, *, model: str, judge_model: str, k: in
                    "episodic_ttl": episodic_ttl,
                    "provider_pin": CONFIG.openrouter_provider or None,
                    "embedder": use_embedder and not stuff,
+                   # Name, not a boolean (audit M1): the embedder shaped retrieval.
+                   "embedding_model": _shared.embedding_model(
+                       CONFIG, use_embedder and not stuff),
                    "reranker": (getattr(CONFIG, "rerank_model", None) or None)
                                if use_rerank and not stuff else None},
         "metrics": {},
@@ -797,8 +815,19 @@ def _run_conversations(data, rows, doc, *, run_root, model, judge_model, k,
             n_sessions = len(index)
             now = _conv_now(index)
             fsm_reused = reuse
+            # Non-FSM agent mode: silica_read_note args are wikilink names
+            # (e.g. 's0000') that miss the exact rel keys; route through the
+            # same basename fallback the FSM path has so session_recall is not
+            # deflated (audit 1.2b). Exact-rel modes (oneshot/retrieval) match
+            # identically, so this is a no-op for them.
+            session_map = {rel: {e["session_id"]} for rel, e in index.items()
+                           if e.get("session_id")}
         if not stuff:
             build_indexes(embed=use_embedder, force=not fsm_reused)
+            if lexical:
+                # This vault's lexical index must be live, else --lexical is a
+                # documented no-op and the A/B compares baseline vs baseline.
+                _shared.assert_lexical_live()
         digest_before = _vault_digest(vault) if answer_mode == "agent" else None
         # Timeline overlay: one deterministic seed per conversation from the
         # already-bound vault, injected as an extra agent system message. The
@@ -884,7 +913,7 @@ def _print_summary(doc: dict) -> None:
 def main(argv=None) -> int:
     from silica.config import CONFIG
 
-    ap = argparse.ArgumentParser(prog="python -m tests.eval.locomo")
+    ap = argparse.ArgumentParser(prog="python -m evals.locomo")
     ap.add_argument("--data", required=True, help="locomo10.json")
     ap.add_argument("--run-root", required=True, help="dir for the per-conversation vaults")
     ap.add_argument("--model", default=CONFIG.model, help="answer model (litellm string)")
@@ -960,6 +989,9 @@ def main(argv=None) -> int:
     ap.add_argument("--k", type=int, default=10)
     ap.add_argument("--limit", type=int, help="max questions across all conversations")
     ap.add_argument("--out")
+    ap.add_argument("--primary-metric", default="overall_accuracy",
+                    help="pre-registered primary metric, recorded in the config "
+                         "so the A/B verdict is machine-checkable")
     ap.add_argument("--verbose", action="store_true")
     args = ap.parse_args(argv)
 
@@ -993,6 +1025,13 @@ def main(argv=None) -> int:
     elif not args.model:
         print("no answer model: set SILICA_MODEL or pass --model")
         return 2
+    # Fail fast on a nondeterministic provider / dead reranker before spending a
+    # run (audit lane 2.5). --lexical liveness is per-conversation (checked once
+    # each vault is bound and indexed).
+    if not args.retrieval_only:
+        _shared.warn_unpinned_provider(args.model, CONFIG.openrouter_provider or None)
+    if not args.stuff and not args.no_rerank:
+        _shared.assert_reranker_live(CONFIG)
     categories = ({int(c) for c in args.categories.split(",") if c.strip()}
                   if args.categories else None)
     data = json.loads(Path(args.data).read_text(encoding="utf-8"))
@@ -1002,7 +1041,10 @@ def main(argv=None) -> int:
     run_root = Path(args.run_root).expanduser().resolve()
     run_root.mkdir(parents=True, exist_ok=True)
 
-    out = Path(args.out) if args.out else METRICS_PATH
+    # Stamped default so consecutive differently-configured runs never clobber
+    # a shared metrics.json (audit lane 3 H3).
+    out = Path(args.out) if args.out else METRICS_PATH.with_name(
+        f"metrics.{_shared.run_id()}.json")
     try:
         doc = run(data, run_root, model=args.model, judge_model=args.judge_model,
                   k=args.k, stuff=args.stuff, use_embedder=not args.no_embed,
@@ -1015,6 +1057,7 @@ def main(argv=None) -> int:
                   ingest_mode=args.ingest, answer_mode=args.answer,
                   timeline=args.timeline, improve=args.improve,
                   assemble=args.assemble, lexical=args.lexical,
+                  data_path=args.data, primary_metric=args.primary_metric,
                   verbose=args.verbose, out=out)
     finally:
         import silica.driver

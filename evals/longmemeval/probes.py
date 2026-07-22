@@ -24,7 +24,7 @@ Zero LLM; embeddings come from stored Fact.vec or a sidecar cache
 (probe_vecs.json) filled once per vault.
 
 CLI:
-  uv run python -m tests.eval.longmemeval.probes \
+  uv run python -m evals.longmemeval.probes \
       --data bench/lme_mixed18.json --run-root bench/lme18_hyb
   # capture-side identity sweep:
   ... --embed-tau 0.70,0.75,0.80,0.85 --embed-repr key+text
@@ -248,7 +248,7 @@ def probe_question(inst: dict, run_root: Path, *, normalize: bool = False,
     the chains a capture-side semantic matcher WOULD have formed at cosine
     threshold t (row gains embed_joins + cosines)."""
     from silica.kernel.episodic import normalize_key
-    from tests.eval.longmemeval.runner import question_vault
+    from evals.longmemeval.runner import question_vault
 
     qid = inst["question_id"]
     qtype = inst["question_type"]

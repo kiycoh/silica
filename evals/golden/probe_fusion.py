@@ -73,7 +73,7 @@ def run_rerank_ab(vault, store, *, embed_store=None, reranker=None,
     es = embed_store if (embed_store is not None and len(embed_store)) else None
     endpoints = sorted({e for pr in eligible for e in pr})
     if verbose:
-        print(f"\nrerank A/B: {len(endpoints)} endpoints, pool {max(k, pool)} → top-{k} …")
+        print(f"\nrerank A/B: {len(endpoints)} endpoints, top-{k} …")
 
     base_topk: dict[str, list[str]] = {}
     rr_topk: dict[str, list[str]] = {}

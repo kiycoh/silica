@@ -35,7 +35,7 @@ Mem0 / Zep, not the agentic loop):
                'yes' in the reply => correct. Prompts mirror
                github.com/xiaowu0162/LongMemEval src/evaluation/evaluate_qa.py.
 
-  uv run python -m tests.eval.longmemeval \
+  uv run python -m evals.longmemeval \
       --data longmemeval_oracle.json --run-root bench/lme --stuff --limit 20
 
 Requires an LLM for answer + judge (litellm, via CONFIG.model). The embedder is
@@ -50,6 +50,8 @@ import json
 import logging
 import re
 from pathlib import Path
+
+from evals import _shared
 
 logger = logging.getLogger(__name__)
 
@@ -95,7 +97,7 @@ _JUDGE_PREFERENCE = (
 # correct rejections as failures (it cannot verify the naming is correct, so it
 # defaults to no). Anchor the "no" strictly on asserting the incorrect answer AS
 # the answer; credit premise-correction and related context. Verify with
-# tests/eval/probe_abstention_rubric.py before trusting the number.
+# evals/probe_abstention_rubric.py before trusting the number.
 _JUDGE_ABSTENTION = (
     "I will give you an unanswerable question, an incorrect answer that a naive "
     "model might give, and a response from a model. Answer yes if the model "
@@ -324,7 +326,7 @@ def answer_question(model: str, question: str, question_date: str, context: str)
 
 
 def judge(model: str, qtype: str, question: str, gold: str, response: str,
-          is_abs: bool = False) -> bool:
+          is_abs: bool = False) -> bool | None:
     from silica.agent.llm import call_llm
 
     if is_abs:
@@ -344,7 +346,13 @@ def judge(model: str, qtype: str, question: str, gold: str, response: str,
     # the budget before emitting text — an empty reply would silently score "no".
     resp = call_llm(model, [{"role": "user", "content": prompt}], max_tokens=64,
                     temperature=0.0)
-    return "yes" in (resp.text or "").lower()
+    text = (resp.text or "").strip().lower()
+    if not text:
+        # A degenerate/empty judge reply (reasoning burn past 64 tokens, refusal,
+        # content filter) is a JUDGE failure, not a silica miss — None excludes
+        # it from accuracy rather than scoring it wrong (audit lane 1.1).
+        return None
+    return "yes" in text
 
 
 # --- Run ---------------------------------------------------------------------
@@ -413,6 +421,7 @@ def run_instance(inst: dict, run_root: Path, *, model: str, judge_model: str,
         ephemeral_hit = _ephemeral_hit(p.fact_chains, gold_sessions)
 
     gold_in_ctx: bool | None = None
+    err: str | None = None
     if retrieval_only:
         # LLM-free loop: measure session_recall only, no answer/judge cost.
         response, correct = "", None
@@ -423,9 +432,16 @@ def run_instance(inst: dict, run_root: Path, *, model: str, judge_model: str,
         context = p.render(facts_first=not facts_last, windowed=not flat_context)
         if not is_abs:
             gold_in_ctx = _gold_in_context(inst["answer"], context)
-        response = answer_question(model, inst["question"], inst.get("question_date", ""), context)
-        correct = judge(judge_model, qtype, inst["question"], inst["answer"], response,
-                        is_abs=is_abs)
+        # Per-question guard mirrors LoCoMo (post-mortem: a baseline died at
+        # 9/585 on one transient OpenRouter APIError): a flaky answer/judge call
+        # becomes an error row (correct=None, surfaced via error_n), never a
+        # run-killing crash nor a provider failure scored as a silica miss.
+        try:
+            response = answer_question(model, inst["question"], inst.get("question_date", ""), context)
+            correct = judge(judge_model, qtype, inst["question"], inst["answer"], response,
+                            is_abs=is_abs)
+        except Exception as e:
+            response, correct, err = "", None, f"{type(e).__name__}: {e}"
     retrieved_sessions = {index.get(r, {}).get("session_id") for r in rels}
     return {
         "question_id": qid,
@@ -441,7 +457,20 @@ def run_instance(inst: dict, run_root: Path, *, model: str, judge_model: str,
         "ephemeral_hit": ephemeral_hit,
         "gold_in_context": gold_in_ctx,
         "response": response[:500],
+        "error": err,
     }
+
+
+def _metrics(rows: list[dict]) -> dict:
+    """aggregate() plus a top-level error_n: errored questions score correct=None
+    (excluded from accuracy), so error_n keeps provider flakiness visible instead
+    of silently shrinking the denominator. Same shape LoCoMo's _compute_metrics
+    gives — the two harnesses now surface errors identically (audit lane 1.3)."""
+    m = aggregate(rows)
+    errs = sum(1 for r in rows if r.get("error"))
+    if errs:
+        m["error_n"] = errs
+    return m
 
 
 def aggregate(rows: list[dict]) -> dict:
@@ -479,7 +508,9 @@ def run(data: list[dict], run_root: Path, *, model: str, judge_model: str, k: in
         episodic_ttl: int = 0, reuse: bool = False, flat_context: bool = False,
         facts_last: bool = False, windows: int | None = None,
         window_chars: int | None = None, key_schema: bool = False,
-        limit: int | None, verbose: bool, out: Path | None = None) -> dict:
+        limit: int | None, verbose: bool, out: Path | None = None,
+        data_path: str | Path | None = None,
+        primary_metric: str = "overall_accuracy") -> dict:
     from silica.config import CONFIG
     from silica.kernel import perception
 
@@ -488,7 +519,12 @@ def run(data: list[dict], run_root: Path, *, model: str, judge_model: str, k: in
     doc = {
         "generated_at": datetime.date.today().isoformat(),
         "benchmark": "longmemeval",
+        # Attribution: which code SHA, which dataset file, which run (audit lane 3).
+        "provenance": _shared.provenance(data_path) if data_path else None,
         "config": {"answer_model": None if retrieval_only else model,
+                   # Pre-registered primary, machine-checkable (audit lane 2.6):
+                   # guards against reading whichever of ~10 metrics happened to move.
+                   "primary_metric": primary_metric,
                    "judge_model": None if retrieval_only else judge_model,
                    "retrieval": "stuff-all" if stuff else f"facade-top{k}",
                    "retrieval_only": retrieval_only,
@@ -510,6 +546,9 @@ def run(data: list[dict], run_root: Path, *, model: str, judge_model: str, k: in
                    # (proven: byte-identical prompt flipped abstain<->answer).
                    "provider_pin": CONFIG.openrouter_provider or None,
                    "embedder": use_embedder and not stuff,
+                   # Name, not a boolean (audit M1): the embedder shaped retrieval.
+                   "embedding_model": _shared.embedding_model(
+                       CONFIG, use_embedder and not stuff),
                    "reranker": (getattr(CONFIG, "rerank_model", None) or None)
                                if use_rerank and not stuff else None},
         "metrics": {},
@@ -533,11 +572,11 @@ def run(data: list[dict], run_root: Path, *, model: str, judge_model: str, k: in
             # Checkpoint after every question: a killed/hung run keeps
             # everything scored so far, marked partial until the last row.
             doc["partial"] = f"{i + 1}/{len(data)}"
-            doc["metrics"] = aggregate(rows)
+            doc["metrics"] = _metrics(rows)
             out.write_text(json.dumps(doc, indent=2, ensure_ascii=False) + "\n",
                            encoding="utf-8")
     doc.pop("partial", None)
-    doc["metrics"] = aggregate(rows)
+    doc["metrics"] = _metrics(rows)
     return doc
 
 
@@ -559,7 +598,7 @@ def _print_summary(doc: dict) -> None:
 def main(argv=None) -> int:
     from silica.config import CONFIG
 
-    ap = argparse.ArgumentParser(prog="python -m tests.eval.longmemeval")
+    ap = argparse.ArgumentParser(prog="python -m evals.longmemeval")
     ap.add_argument("--data", required=True, help="longmemeval_{oracle,s,m}.json")
     ap.add_argument("--run-root", required=True, help="dir for the per-question vaults")
     ap.add_argument("--model", default=CONFIG.model, help="answer model (litellm string)")
@@ -597,6 +636,9 @@ def main(argv=None) -> int:
     ap.add_argument("--k", type=int, default=10)
     ap.add_argument("--limit", type=int)
     ap.add_argument("--out")
+    ap.add_argument("--primary-metric", default="overall_accuracy",
+                    help="pre-registered primary metric, recorded in the config "
+                         "so the A/B verdict is machine-checkable")
     ap.add_argument("--verbose", action="store_true")
     args = ap.parse_args(argv)
 
@@ -605,11 +647,22 @@ def main(argv=None) -> int:
     elif not args.model:
         print("no answer model: set SILICA_MODEL or pass --model")
         return 2
+    # Fail fast on a dead lever / warn on a nondeterministic provider (audit
+    # lane 2.5) before spending a run comparing baseline vs baseline.
+    if not args.retrieval_only:
+        from silica.config import CONFIG
+        _shared.warn_unpinned_provider(args.model, CONFIG.openrouter_provider or None)
+    if not args.stuff and not args.no_rerank:
+        from silica.config import CONFIG
+        _shared.assert_reranker_live(CONFIG)
     data = json.loads(Path(args.data).read_text(encoding="utf-8"))
     run_root = Path(args.run_root).expanduser().resolve()
     run_root.mkdir(parents=True, exist_ok=True)
 
-    out = Path(args.out) if args.out else METRICS_PATH
+    # Stamped default so consecutive differently-configured runs never clobber
+    # a shared metrics.json (audit lane 3 H3).
+    out = Path(args.out) if args.out else METRICS_PATH.with_name(
+        f"metrics.{_shared.run_id()}.json")
     try:
         doc = run(data, run_root, model=args.model, judge_model=args.judge_model,
                   k=args.k, stuff=args.stuff, use_embedder=not args.no_embed,
@@ -618,7 +671,8 @@ def main(argv=None) -> int:
                   reuse=args.reuse_vaults, flat_context=args.flat_context,
                   facts_last=args.facts_last, windows=args.windows,
                   window_chars=args.window_chars, key_schema=args.key_schema,
-                  limit=args.limit, verbose=args.verbose, out=out)
+                  limit=args.limit, verbose=args.verbose, out=out,
+                  data_path=args.data, primary_metric=args.primary_metric)
     finally:
         import silica.driver
         silica.driver._driver = None

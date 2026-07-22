@@ -12,7 +12,7 @@ from silica.kernel.graph_report.models import (
     StructuralGap,
     VaultReport,
 )
-from tests.eval.vault_energy import Weights, vault_energy
+from evals.vault_energy import Weights, vault_energy
 
 
 def _report(**over) -> VaultReport:

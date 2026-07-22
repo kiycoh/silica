@@ -13,7 +13,7 @@ import pytest
 from silica.kernel import frontmatter
 from silica.kernel.cooccurrence import CooccurStore, build_contribution
 from silica.kernel.health import integrity_probe, lint
-from tests.eval.golden import probe_classify, probe_links
+from evals.golden import probe_classify, probe_links
 
 
 def test_probe_links_masked_recall(synthetic_vault):
@@ -70,7 +70,7 @@ def test_probe_classify_taxonomy_and_counting(synthetic_vault, tmp_path):
 def test_probe_dedup_skips_without_index(tmp_path):
     """No embed index ⇒ empty result, never a crash — the runner SKIPs it."""
     from silica.kernel.cooccurrence import CooccurStore
-    from tests.eval.golden import probe_dedup
+    from evals.golden import probe_dedup
 
     out = probe_dedup.run(tmp_path, CooccurStore(path=tmp_path / "c.json"), embed_store=None)
     assert out["fp_pairs_evaluated"] == 0
@@ -82,7 +82,7 @@ def test_probe_dedup_fp_counts_mechanical_merge(tmp_path):
     are auto-routed `patch` — the FP arm must count that as an auto-merge."""
     from silica.kernel.cooccurrence import CooccurStore
     from silica.kernel.embed import EmbedStore
-    from tests.eval.golden import probe_dedup
+    from evals.golden import probe_dedup
 
     (tmp_path / "D").mkdir()
     (tmp_path / "D" / "Foo.md").write_text("# Foo\nbody one", encoding="utf-8")

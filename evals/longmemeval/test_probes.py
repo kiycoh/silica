@@ -11,7 +11,7 @@ from __future__ import annotations
 import json
 from pathlib import Path
 
-from tests.eval.longmemeval.probes import probe_question, run_probes
+from evals.longmemeval.probes import probe_question, run_probes
 
 
 def _fact(fid: str, key: str, runs: list[str], status: str = "live") -> dict:
@@ -37,7 +37,7 @@ def _inst(qid: str, qtype: str, gold: list[str]) -> dict:
 
 
 def test_aggregative_groups_by_two_segment_prefix(tmp_path, monkeypatch):
-    from tests.eval.longmemeval.runner import question_vault
+    from evals.longmemeval.runner import question_vault
 
     run_root = tmp_path / "run"
     inst = _inst("q1", "multi-session", ["answer_s1", "answer_s2"])
@@ -56,7 +56,7 @@ def test_aggregative_groups_by_two_segment_prefix(tmp_path, monkeypatch):
 
 
 def test_ku_groups_by_full_key(tmp_path, monkeypatch):
-    from tests.eval.longmemeval.runner import question_vault
+    from evals.longmemeval.runner import question_vault
 
     run_root = tmp_path / "run"
     inst = _inst("q2", "knowledge-update", ["answer_s1", "answer_s2"])
@@ -79,7 +79,7 @@ def test_ku_groups_by_full_key(tmp_path, monkeypatch):
 
 
 def test_answer_prefix_is_part_of_the_id(tmp_path, monkeypatch):
-    from tests.eval.longmemeval.runner import question_vault
+    from evals.longmemeval.runner import question_vault
 
     run_root = tmp_path / "run"
     inst = _inst("q4", "multi-session", ["answer_s1"])
@@ -114,7 +114,7 @@ def test_run_probes_filters_to_probed_types(tmp_path, monkeypatch):
 
 
 def test_normalize_merges_plural_split_prefixes(tmp_path, monkeypatch):
-    from tests.eval.longmemeval.runner import question_vault
+    from evals.longmemeval.runner import question_vault
 
     run_root = tmp_path / "run"
     inst = _inst("q6", "multi-session", ["answer_s1", "answer_s2"])
@@ -130,7 +130,7 @@ def test_normalize_merges_plural_split_prefixes(tmp_path, monkeypatch):
 
 
 def test_normalize_merges_ku_full_key_variants(tmp_path, monkeypatch):
-    from tests.eval.longmemeval.runner import question_vault
+    from evals.longmemeval.runner import question_vault
 
     run_root = tmp_path / "run"
     inst = _inst("q7", "knowledge-update", ["answer_s1", "answer_s2"])
@@ -144,7 +144,7 @@ def test_normalize_merges_ku_full_key_variants(tmp_path, monkeypatch):
 
 
 def test_cluster_merges_keys_sharing_stemmed_tokens(tmp_path, monkeypatch):
-    from tests.eval.longmemeval.runner import question_vault
+    from evals.longmemeval.runner import question_vault
 
     run_root = tmp_path / "run"
     inst = _inst("q8", "multi-session", ["answer_s1", "answer_s2", "answer_s3"])
@@ -162,7 +162,7 @@ def test_cluster_merges_keys_sharing_stemmed_tokens(tmp_path, monkeypatch):
 
 
 def test_cluster_keeps_unrelated_apart_and_counts_riders(tmp_path, monkeypatch):
-    from tests.eval.longmemeval.runner import question_vault
+    from evals.longmemeval.runner import question_vault
 
     run_root = tmp_path / "run"
     inst = _inst("q9", "knowledge-update", ["answer_s1", "answer_s2", "answer_s3"])
@@ -180,7 +180,7 @@ def test_cluster_keeps_unrelated_apart_and_counts_riders(tmp_path, monkeypatch):
 
 
 def test_cluster_drops_entity_prefix_but_not_topic(tmp_path, monkeypatch):
-    from tests.eval.longmemeval.runner import question_vault
+    from evals.longmemeval.runner import question_vault
 
     run_root = tmp_path / "run"
     inst = _inst("q10", "multi-session", ["answer_s1", "answer_s2"])
@@ -206,7 +206,7 @@ def test_run_probes_passes_cluster_through(tmp_path, monkeypatch):
 
 
 def test_cluster_max_df_breaks_generic_token_glue(tmp_path, monkeypatch):
-    from tests.eval.longmemeval.runner import question_vault
+    from evals.longmemeval.runner import question_vault
 
     run_root = tmp_path / "run"
     inst = _inst("q11", "multi-session", ["answer_s1", "answer_s2"])
@@ -225,7 +225,7 @@ def test_cluster_max_df_breaks_generic_token_glue(tmp_path, monkeypatch):
 
 
 def test_best_group_tie_breaks_to_smallest(tmp_path, monkeypatch):
-    from tests.eval.longmemeval.runner import question_vault
+    from evals.longmemeval.runner import question_vault
 
     run_root = tmp_path / "run"
     inst = _inst("q12", "knowledge-update", ["answer_s1"])
@@ -247,7 +247,7 @@ def test_best_group_tie_breaks_to_smallest(tmp_path, monkeypatch):
 
 
 def test_capture_sim_exact_key_joins_without_vecs():
-    from tests.eval.longmemeval.probes import capture_sim
+    from evals.longmemeval.probes import capture_sim
 
     facts = [_fact("f_0001", "user.car.model", ["s1"]),
              _fact("f_0002", "user.car.models", ["s2"])]  # Layer A merges
@@ -257,7 +257,7 @@ def test_capture_sim_exact_key_joins_without_vecs():
 
 
 def test_capture_sim_embed_fallback_joins_drifted_key():
-    from tests.eval.longmemeval.probes import capture_sim
+    from evals.longmemeval.probes import capture_sim
 
     facts = [_fact("f_0001", "user.car.model", ["s1"]),
              _fact("f_0002", "user.vehicle.model", ["s2"]),
@@ -275,7 +275,7 @@ def test_capture_sim_embed_fallback_joins_drifted_key():
 
 
 def test_capture_sim_exact_match_beats_embedding():
-    from tests.eval.longmemeval.probes import capture_sim
+    from evals.longmemeval.probes import capture_sim
 
     # f_0003 exact-matches f_0001's key but its vec points at f_0002:
     # the fallback must never override arm 1.
@@ -289,7 +289,7 @@ def test_capture_sim_exact_match_beats_embedding():
 
 
 def test_capture_sim_replays_in_numeric_id_order():
-    from tests.eval.longmemeval.probes import capture_sim
+    from evals.longmemeval.probes import capture_sim
 
     # Lexicographic order would put f_10000 before f_9999.
     facts = [_fact("f_10000", "user.car.model", ["s2"]),
@@ -299,7 +299,7 @@ def test_capture_sim_replays_in_numeric_id_order():
 
 
 def test_capture_sim_superseded_head_retires():
-    from tests.eval.longmemeval.probes import capture_sim
+    from evals.longmemeval.probes import capture_sim
 
     # f_0002 supersedes f_0001; f_0003's vec matches only the RETIRED head.
     facts = [_fact("f_0001", "user.car.model", ["s1"]),
@@ -312,7 +312,7 @@ def test_capture_sim_superseded_head_retires():
 
 
 def test_embed_view_links_drifted_ku_chain(tmp_path, monkeypatch):
-    from tests.eval.longmemeval.runner import question_vault
+    from evals.longmemeval.runner import question_vault
 
     run_root = tmp_path / "run"
     inst = _inst("q14", "knowledge-update", ["answer_s1", "answer_s2"])
@@ -335,7 +335,7 @@ def test_embed_view_links_drifted_ku_chain(tmp_path, monkeypatch):
 def test_sim_vecs_key_repr_embeds_once_then_caches(tmp_path, monkeypatch):
     import pytest
     import silica.kernel.paths as paths_mod
-    from tests.eval.longmemeval.probes import sim_vecs
+    from evals.longmemeval.probes import sim_vecs
 
     monkeypatch.setattr(paths_mod, "_SILICA_HOME", tmp_path / "silica_home")
     vault = tmp_path / "vault"
@@ -360,7 +360,7 @@ def test_sim_vecs_key_repr_embeds_once_then_caches(tmp_path, monkeypatch):
 
 
 def test_product_probe_reports_product_groups(tmp_path, monkeypatch):
-    from tests.eval.longmemeval.runner import question_vault
+    from evals.longmemeval.runner import question_vault
 
     run_root = tmp_path / "run"
     inst = _inst("q13", "knowledge-update", ["answer_s1", "answer_s2"])

@@ -45,7 +45,7 @@ def mask_links(body: str) -> tuple[str, list[str]]:
 
 
 def run(vault, *, verbose: bool = False) -> dict:
-    from tests.eval.golden.runner import iter_notes
+    from evals.golden.runner import iter_notes
 
     all_md = iter_notes(vault)
     title_index = build_title_index([p.stem for p in all_md])  # drops ambiguous basenames

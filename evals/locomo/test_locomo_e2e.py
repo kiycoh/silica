@@ -7,7 +7,7 @@ Zero LLM: every product seam is monkeypatched, per the adapter-test pattern.
 """
 import json
 
-from tests.eval.locomo import runner
+from evals.locomo import runner
 
 
 # The one-shot system prompt as shipped today (baseline cell). The e2e leg's
@@ -205,8 +205,9 @@ def _scripted_run_agent(script):
     from silica.agent.events import ToolCompleteEvent
 
     def fake(messages, model, tool_progress_callback=None, progress=None,
-             cancel_token=None, constraints=None):
+             cancel_token=None, constraints=None, temperature=None):
         assert constraints is not None
+        assert temperature == 0.0   # eval agent arm pins greedy decoding
         assert set(constraints.tools) == set(runner._READONLY_TOOLS)
         assert constraints.max_iterations == runner._AGENT_MAX_ITERATIONS
         for name, args, result, it in script["events"]:

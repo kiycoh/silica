@@ -10,8 +10,8 @@ regression gate (``tests/golden/test_golden_regression.py`` imports ``collect``
 Phase 1 = cheap/deterministic tier (classify, links, integrity). Embedder-tier
 probes (dedup, neighbors) print a visible SKIP row.
 
-  uv run python -m tests.eval.golden --vault ~/Documents/Obsidian/test [--verbose]
-  uv run python -m tests.eval.golden --vault <v> --freeze-baseline
+  uv run python -m evals.golden --vault ~/Documents/Obsidian/test [--verbose]
+  uv run python -m evals.golden --vault <v> --freeze-baseline
 """
 from __future__ import annotations
 
@@ -25,7 +25,7 @@ from pathlib import Path
 # Gated probes (fusion_probe, integrity_probe) live in kernel.health — shared
 # with the silica_health tool; iter_notes re-exported so probes keep one source.
 from silica.kernel.health import fusion_probe, integrity_probe, iter_notes  # noqa: F401
-from tests.eval.golden import (
+from evals.golden import (
     probe_classify,
     probe_correlate,
     probe_dedup,
@@ -209,7 +209,7 @@ def collect(vault: Path, *, tier: str = "cheap", verbose: bool = False) -> dict:
     # ponytail: analytics=True runs PageRank/betweenness; fine on the fixed
     # test vault, and that scan is the known ceiling if the vault ever grows.
     from silica.kernel.graph_report import compute_report
-    from tests.eval.vault_energy import vault_energy
+    from evals.vault_energy import vault_energy
 
     e = vault_energy(compute_report(
         analytics=True, with_cooccurrence=True, _cooccur_store_override=store,
@@ -264,7 +264,9 @@ def print_table(doc: dict, baseline: dict | None) -> None:
           f"embedder: {cfg['embedding_model']}  "
           f"legs: {cfg.get('relatedness_legs') or '—'}")
     base_m = baseline["metrics"] if baseline else {}
-    gated = set(GATED_DROP_2PP) | set(GATED_EXACT_ONE)
+    # Rise-gated dedup rates ARE gated by compare(); mark them so the table
+    # matches the gate (they were silently unmarked before).
+    gated = set(GATED_DROP_2PP) | set(GATED_RISE_2PP) | set(GATED_EXACT_ONE)
     print(f"\n{'metric':<38} {'value':>10} {'baseline':>10} {'delta':>9}  gate")
     for key in sorted(doc["metrics"]):
         val = doc["metrics"][key]
@@ -280,7 +282,7 @@ def _write_json(path: Path, doc: dict) -> None:
 
 
 def main(argv=None) -> int:
-    ap = argparse.ArgumentParser(prog="python -m tests.eval.golden")
+    ap = argparse.ArgumentParser(prog="python -m evals.golden")
     ap.add_argument("--vault")
     ap.add_argument("--tier", choices=["cheap", "embedder", "all"], default="cheap")
     ap.add_argument("--verbose", action="store_true")

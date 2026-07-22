@@ -26,13 +26,13 @@ pytestmark = pytest.mark.skipif(
 
 def test_golden_regression():
     import silica.driver
-    from tests.eval.golden import runner
+    from evals.golden import runner
 
     baseline_path = Path(runner.__file__).parent / "baseline.json"
     if not baseline_path.exists():
         pytest.fail(
             "no baseline.json — freeze one with: "
-            "uv run python -m tests.eval.golden --vault <v> --freeze-baseline"
+            "uv run python -m evals.golden --vault <v> --freeze-baseline"
         )
     baseline = json.loads(baseline_path.read_text())
 

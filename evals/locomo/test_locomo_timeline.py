@@ -11,8 +11,8 @@ agent cannot open would invalidate the experiment).
 import re
 
 from silica.driver import DRIVER
-from tests.eval.locomo import runner
-from tests.eval.longmemeval.runner import bind_vault
+from evals.locomo import runner
+from evals.longmemeval.runner import bind_vault
 
 
 def _note(path, *, date=None, session_id=None, body="body"):
@@ -82,7 +82,7 @@ def _capture_messages(monkeypatch):
     monkeypatch.setattr(vault_map, "build_vault_map", lambda: "VMAP")
 
     def fake(messages, model, tool_progress_callback=None, progress=None,
-             cancel_token=None, constraints=None):
+             cancel_token=None, constraints=None, temperature=None):
         captured.append(messages)
         return "ok"
 

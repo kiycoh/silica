@@ -15,7 +15,7 @@ import math
 
 from silica.kernel.cooccurrence import CooccurStore, build_contribution
 from silica.kernel import health
-from tests.eval.golden import probe_fusion
+from evals.golden import probe_fusion
 
 
 def _store(tmp_path, notes: dict[str, str]) -> CooccurStore:

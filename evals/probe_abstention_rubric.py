@@ -6,8 +6,8 @@ Default: the 3 known LoCoMo cat-5 false-negatives (model caught the Caroline/
 Melanie swap and abstained, old judge said "no") + 1 synthetic confabulation.
 Asserts the corrections flip to True and the confabulation stays False.
 
-    uv run python -m tests.eval.probe_abstention_rubric              # 4-case self-check
-    uv run python -m tests.eval.probe_abstention_rubric --full       # re-score all 47 adversarial in R26b
+    uv run python -m evals.probe_abstention_rubric              # 4-case self-check
+    uv run python -m evals.probe_abstention_rubric --full       # re-score all 47 adversarial in R26b
 
 Needs a judge model (CONFIG.model) reachable, i.e. API key set. ponytail: the
 4-case assert is the check; --full is the operator re-score, not the gate.
@@ -17,7 +17,7 @@ import json
 from pathlib import Path
 
 from silica.config import CONFIG
-from tests.eval.longmemeval.runner import judge
+from evals.longmemeval.runner import judge
 
 BENCH = Path("bench")
 R26B = BENCH / "locomo_e2e.R26b.metrics.json"
