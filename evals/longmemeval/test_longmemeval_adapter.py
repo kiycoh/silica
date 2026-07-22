@@ -549,6 +549,28 @@ def test_judge_rubric_uses_abstention_template_for_abs():
     assert "unanswerable" in abstain.lower()
 
 
+def test_judge_retries_empty_reply_before_none(monkeypatch):
+    # Empty completions are mostly transient provider drops (HTTP-200-no-text);
+    # a verdict must survive one, and only repeated emptiness is a judge failure.
+    import types as _types
+
+    calls = []
+
+    def fake(model, messages, **kw):
+        calls.append(1)
+        return _types.SimpleNamespace(text="" if len(calls) == 1 else "yes")
+
+    monkeypatch.setattr("time.sleep", lambda s: None)  # backoff is not the test
+    monkeypatch.setattr("silica.agent.llm.call_llm", fake)
+    assert runner.judge("m", "multi-session", "q", "gold", "resp") is True
+    assert len(calls) == 2
+
+    calls.clear()
+    monkeypatch.setattr("silica.agent.llm.call_llm",
+                        lambda *a, **k: _types.SimpleNamespace(text=""))
+    assert runner.judge("m", "multi-session", "q", "gold", "resp") is None
+
+
 def test_pipeline_routes_abs_question_to_abstention_rubric(tmp_path, monkeypatch):
     # The abstention rubric must actually reach the judge: run_instance threads
     # is_abs, not just qtype.

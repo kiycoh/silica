@@ -342,17 +342,25 @@ def judge(model: str, qtype: str, question: str, gold: str, response: str,
         f"Model Response: {response}\n\n"
         f"{closing} Answer yes or no only."
     )
-    # 64, not 8: openrouter can route to a reasoning-enabled backend that burns
-    # the budget before emitting text — an empty reply would silently score "no".
-    resp = call_llm(model, [{"role": "user", "content": prompt}], max_tokens=64,
-                    temperature=0.0)
-    text = (resp.text or "").strip().lower()
-    if not text:
-        # A degenerate/empty judge reply (reasoning burn past 64 tokens, refusal,
-        # content filter) is a JUDGE failure, not a silica miss — None excludes
-        # it from accuracy rather than scoring it wrong (audit lane 1.1).
-        return None
-    return "yes" in text
+    import time
+
+    # 256, not 8: openrouter can route to a reasoning-enabled backend that
+    # burns budget before emitting text — an empty reply would silently score
+    # "no", and 64 proved too small for deepseek-v4-flash routing.
+    # Empty completions are also transient provider drops (HTTP-200-no-text,
+    # not an exception, so call_llm's own retry never fires) — retry with
+    # backoff before declaring a judge failure; same lesson as factscore._llm.
+    for attempt in range(3):
+        resp = call_llm(model, [{"role": "user", "content": prompt}],
+                        max_tokens=256, temperature=0.0)
+        text = (resp.text or "").strip().lower()
+        if text:
+            return "yes" in text
+        time.sleep(1.0 * (attempt + 1))
+    # A persistently degenerate/empty judge reply (reasoning burn past 64
+    # tokens, refusal, content filter) is a JUDGE failure, not a silica miss —
+    # None excludes it from accuracy rather than scoring it wrong (audit 1.1).
+    return None
 
 
 # --- Run ---------------------------------------------------------------------
