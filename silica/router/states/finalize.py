@@ -293,11 +293,16 @@ def handle_cleanup(fsm: "InjectorFSM") -> None:
             fi, ci, fi,
         )
 
-    if fsm.context.get("final_status") != "no_ops":
-        if fsm.context.get("has_partial_failure"):
-            fsm.context["final_status"] = "partial"
-        else:
-            fsm.context["final_status"] = "Success"
+    # Run-level verdict, recomputed each chunk's CLEANUP (last write wins).
+    # no_ops is a whole-run property — it holds only when NO chunk had actionable
+    # ops. A later chunk that had ops lifts a prior all-skip chunk's provisional
+    # no_ops rather than staying stuck on it, in either order (A24).
+    if fsm.context.get("has_partial_failure"):
+        fsm.context["final_status"] = "partial"
+    elif fsm.context.get("run_had_ops"):
+        fsm.context["final_status"] = "Success"
+    else:
+        fsm.context["final_status"] = "no_ops"
 
     # Persist this run's inverses for /revert, with final content hash.
     if fsm._undo_run_id and fsm._run_inverses:

@@ -566,11 +566,19 @@ def handle_validate(fsm: "InjectorFSM") -> None:
 
     if res.get("validated_count", 0) == 0 and res.get("rejected_count", 0) == 0:
         logger.info("VALIDATE: no actionable ops (all skip) — short-circuit to CLEANUP")
+        # Provisional per-chunk verdict; CLEANUP overrides it to Success if any
+        # chunk in the run had actionable ops (run_had_ops), fixing the sticky
+        # run-global that mislabelled multi-chunk runs (A24).
         fsm.context["final_status"] = "no_ops"
         fsm._chunk_ctx["ops_path"] = ops_path
         fsm._progress_note(fsm._chunk_task_id("validate"), "validate", "done")
         fsm.state = orch.InjectorState.CLEANUP
         return
+
+    # Run-global: any chunk with actionable ops makes the run not-no_ops, so a
+    # later all-skip chunk can't drag a committing run back to no_ops (A24).
+    if res.get("validated_count", 0) > 0:
+        fsm.context["run_had_ops"] = True
 
     # Persist rejected ops to the deferred store so the model can retry them
     # later without re-running the expensive RECON → DELEGATE cycle.
@@ -661,6 +669,7 @@ def handle_validate(fsm: "InjectorFSM") -> None:
         # Exhausted steering budget → defer and short-circuit.
         logger.warning("VALIDATE: steer budget exhausted (%d/%d) — deferring chunk %d.", steer_attempts, _max_steer, idx)
         fsm._chunk_ctx["abort_reason"] = "All ops rejected — nothing to write"
+        # Provisional; CLEANUP overrides to Success if the run had ops elsewhere (A24).
         fsm.context["final_status"] = "no_ops"
         fsm._chunk_ctx["ops_path"] = ops_path
         fsm._progress_note(fsm._chunk_task_id("validate"), "validate", "done")
