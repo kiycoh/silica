@@ -189,7 +189,10 @@ def _read_dated_body(path: str, origin: str = "vault") -> tuple[str, str | None,
     if data.get("contested"):
         refs = data.get("contradictions") or []
         contested = str(refs[0]) if refs else "contested"
-    return date, contested, (body or content)
+    # `body` is the frontmatter-stripped text; for a body-only note split()
+    # already returns the whole content as body. The old `or content` fallback
+    # leaked YAML frontmatter into context whenever the body was empty (A7).
+    return date, contested, body
 
 
 def _recall_facts(perception: Perception, query: str, query_vec, *, now: str,
