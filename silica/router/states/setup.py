@@ -107,6 +107,16 @@ def handle_crossdedup(fsm: "InjectorFSM") -> None:
         fsm._transition_success()
         return
 
+    # Ragged-embed guard (mirrors NOVELTY/COLLISION): a short reply would zip
+    # short and silently drop the trailing concepts from dedup (A6).
+    if len(vecs) != len(names):
+        logger.warning(
+            "CROSSDEDUP: ragged embed (%d vecs for %d names) — skipping",
+            len(vecs), len(names),
+        )
+        fsm._transition_success()
+        return
+
     τ_high = getattr(orch.CONFIG, "sim_threshold_high", 0.85)
     fi = fsm._current_file_idx
     removed = 0

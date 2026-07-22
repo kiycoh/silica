@@ -223,9 +223,13 @@ def handle_write(fsm: "InjectorFSM") -> None:
 
     if result.failed:
         try:
+            # Default None + skip: a failed result whose path matches no op (a
+            # normalization drift) must not StopIteration out of the whole
+            # deferral/skip-marking block below (A4).
             _deferred = [
-                next(o for o in ops if o.touched_ref() == r.path).model_dump()
+                o.model_dump()
                 for r in result.failed
+                if (o := next((o for o in ops if o.touched_ref() == r.path), None)) is not None
             ]
             _errors = {r.path: (r.error or "lint/write failed") for r in result.failed}
             fsm._defer_ops(_deferred, _errors, phase="WRITE")
