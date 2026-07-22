@@ -355,6 +355,42 @@ def _provenance_session_map(vault: Path) -> dict[str, set[str]]:
     return out
 
 
+_SOURCES_MARKER = "## Sources"
+
+
+def build_hybrid_overlay(vault: Path, inst: dict) -> dict:
+    """Attach verbatim session leaves to a distilled fsm vault and link every
+    distilled note to its source session(s) via provenance.
+
+    The distilled graph (entity notes, wikilinks, dedup) stays the navigable
+    structure; each note gains a `## Sources` block of `[[session_N]]` links to
+    the exact transcript, so the agent navigates the graph and reads verbatim
+    for wording. Idempotent: the marker guards double-linking on vault reuse.
+    Returns {"leaves": n, "linked": n}."""
+    src_dir = vault / "sources"
+    src_dir.mkdir(exist_ok=True)
+    leaves = 0
+    for n, date_time, turns in conversation_sessions(inst["conversation"]):
+        sid = f"session_{n}"
+        (src_dir / f"{sid}.md").write_text(
+            _note(sid, parse_date_time(date_time), date_time, render_session(turns)),
+            encoding="utf-8")
+        leaves += 1
+    linked = 0
+    for rel, sids in _provenance_session_map(vault).items():
+        note_path = vault / f"{rel}.md"
+        if not note_path.is_file():
+            continue
+        text = note_path.read_text(encoding="utf-8")
+        if _SOURCES_MARKER in text:  # already overlaid — idempotent
+            continue
+        links = " ".join(f"[[{s}]]" for s in sorted(sids))
+        note_path.write_text(f"{text.rstrip()}\n\n{_SOURCES_MARKER}\n{links}\n",
+                             encoding="utf-8")
+        linked += 1
+    return {"leaves": leaves, "linked": linked}
+
+
 def _sessions_for(session_map: dict[str, set[str]], ref: str) -> set[str]:
     """Sessions a retrieved ref counts for. Exact rel match first; wikilink
     names (silica_read_note takes names, not paths) fall back to basename."""
@@ -685,6 +721,16 @@ def run(data: list[dict], run_root: Path, *, model: str, judge_model: str, k: in
     from silica.config import CONFIG
     from silica.kernel import perception
 
+    # fsm-extractive: same product Coordinator as fsm, but the distill phase
+    # SELECTS verbatim spans (extractive profile) and the validator enforces it
+    # (SILICA_EXTRACTIVE_ENFORCE) — the mechanics run on non-lossy bodies.
+    if ingest_mode == "fsm-extractive":
+        os.environ["SILICA_DISTILL_PROFILE"] = "extractive"
+        os.environ["SILICA_EXTRACTIVE_ENFORCE"] = "1"
+        # A verbatim durable fact can live in a short turn; the 100-char prose
+        # placeholder floor would defer it and starve the mechanics of content.
+        os.environ["SILICA_MIN_WRITE_SNIPPET_CHARS"] = "40"
+
     planned = sum(len(_filtered_qa(inst, categories)) for inst in data)
     if limit is not None:
         planned = min(planned, limit)
@@ -710,7 +756,7 @@ def run(data: list[dict], run_root: Path, *, model: str, judge_model: str, k: in
                    "improve": improve,
                    "assemble": assemble,
                    "lexical": lexical,
-                   "seen_override": "session-date" if ingest_mode == "fsm" else None,
+                   "seen_override": "session-date" if ingest_mode.startswith("fsm") else None,
                    "fsm": {},
                    "failed_conversations": [],
                    "max_iterations": (_AGENT_MAX_ITERATIONS
@@ -790,7 +836,7 @@ def _run_conversations(data, rows, doc, *, run_root, model, judge_model, k,
                 "conventions:\n  episodic_keys: {}\n", encoding="utf-8")
         bind_vault(vault)
         session_map = run_sessions = None
-        if ingest_mode == "fsm":
+        if ingest_mode.startswith("fsm"):
             _clear_fsm_state()
             marker = fsm_ingest_conversation(vault, inst, reuse=reuse,
                                              key_schema=key_schema)
@@ -802,6 +848,13 @@ def _run_conversations(data, rows, doc, *, run_root, model, judge_model, k,
                 "partial_sessions": marker.get("partial_sessions"),
                 "runs": "fsm_runs.json"}
             session_map = _provenance_session_map(vault)
+            if ingest_mode == "fsm-hybrid":
+                # Overlay verbatim leaves + source links onto the distilled graph,
+                # then let build_indexes below pick them up. A leaf read counts
+                # for its session in session_recall.
+                doc["config"]["fsm"][sample_id]["hybrid"] = build_hybrid_overlay(vault, inst)
+                for _n, _dt, _t in conversation_sessions(inst["conversation"]):
+                    session_map.setdefault(f"sources/session_{_n}", set()).add(f"session_{_n}")
             run_sessions = json.loads((vault / "fsm_runs.json")
                                       .read_text(encoding="utf-8"))
             sess = conversation_sessions(inst["conversation"])
@@ -839,7 +892,7 @@ def _run_conversations(data, rows, doc, *, run_root, model, judge_model, k,
                                 judge_model=judge_model, k=k, stuff=stuff,
                                 use_embedder=use_embedder, use_rerank=use_rerank,
                                 retrieval_only=retrieval_only,
-                                distill=distill or ingest_mode == "fsm",
+                                distill=distill or ingest_mode.startswith("fsm"),
                                 episodic_ttl=episodic_ttl, flat_context=flat_context,
                                 facts_last=facts_last, windows=windows,
                                 window_chars=window_chars, now=now, speakers=speakers,
@@ -927,10 +980,16 @@ def main(argv=None) -> int:
                     help="coarsen FSM concept extraction: cap salient keyphrases per "
                          "session (0 = product default 40). YAKE-ranked, so the trivial "
                          "tail drops first -> fewer, denser notes. --ingest fsm only.")
-    ap.add_argument("--ingest", choices=("distill", "fsm"), default="distill",
+    ap.add_argument("--ingest",
+                    choices=("distill", "fsm", "fsm-extractive", "fsm-hybrid"), default="distill",
                     help="write path: 'distill' = slice ingest (per --distill), "
                          "'fsm' = full product Coordinator per session "
-                         "(collision/dedup/deferred/anneal live)")
+                         "(collision/dedup/deferred/anneal live), "
+                         "'fsm-extractive' = same Coordinator but the distill phase "
+                         "SELECTS verbatim spans (extractive profile, validator-enforced) "
+                         "so linking/dedup run on non-lossy bodies, "
+                         "'fsm-hybrid' = distilled fsm graph PLUS verbatim session leaves, "
+                         "each note linked to its source session (navigate graph, read verbatim)")
     ap.add_argument("--answer", choices=("oneshot", "agent"), default="oneshot",
                     help="read path: 'oneshot' = stuffed-context single call, "
                          "'agent' = product run_agent loop with read-only tools")
@@ -995,11 +1054,11 @@ def main(argv=None) -> int:
     ap.add_argument("--verbose", action="store_true")
     args = ap.parse_args(argv)
 
-    if args.ingest == "fsm" and (args.stuff or args.distill):
+    if args.ingest.startswith("fsm") and (args.stuff or args.distill):
         print("--ingest fsm distills inside the FSM; drop --stuff/--distill")
         return 2
     if args.fsm_max_concepts:
-        if args.ingest != "fsm":
+        if not args.ingest.startswith("fsm"):
             print("--fsm-max-concepts only applies to --ingest fsm")
             return 2
         # Read at call time inside keyphrase._cutoff; set for the whole run so
