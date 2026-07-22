@@ -119,6 +119,8 @@ class CurationPlan:
                 # ponytail: bare-stem `x.md` suffix-matches every folder's x.md
                 # (intended convenience); the escape hatch is a folder-qualified
                 # path (Concepts/x.md), which the segment-boundary rule narrows.
+                # Warn on multi-folder matches if a bare stem ever curates the
+                # wrong note.
                 paths = [_norm_note_path(item.target)]
                 if item.partner:
                     paths.append(_norm_note_path(item.partner))

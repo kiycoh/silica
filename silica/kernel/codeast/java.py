@@ -63,7 +63,9 @@ def extract(root, src: bytes, path: str, language: str) -> ModuleSkeleton:
             _collect_calls(node, src, calls, parent=_name_of(node, src))
         last_comment = None
 
-    # ponytail: same-package Java calls need no import and are invisible here
+    # ponytail: same-package Java calls need no import and are invisible here;
+    # resolve against a per-package symbol table if Java call graphs read thin
+    # on a real repo (single-package projects lose every internal edge)
     return ModuleSkeleton(
         path=path, language=language, imports=imports, symbols=symbols,
         module_doc=module_doc,

@@ -43,7 +43,8 @@ class Fact(BaseModel):
     supersedes: str | None = None
     status: str = "live"
     # ponytail: inline float list, not npz packing — the store is TTL-bounded
-    # to hundreds of facts; the 10k scaling fix targeted note stores.
+    # to hundreds of facts; the 10k scaling fix targeted note stores. Pack npz
+    # like note stores if a store ever holds ~10^3+ facts or load/save drags.
     vec: list[float] | None = None
 
 

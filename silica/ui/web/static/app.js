@@ -40,7 +40,8 @@ function addCopyBtn(bodyEl, getText) {
 
 // ponytail: lazy live markdown for the streaming turn — headings, bold, italic,
 // inline + fenced code, bullet/ordered lists, links. Re-parses the whole segment
-// on every delta (O(n²) over the turn, fine at KB scale). The server re-renders
+// on every delta (O(n²) over the turn, fine at KB scale; parse from the last
+// block boundary if very long turns ever stutter). The server re-renders
 // the canonical answer (wikilinks, callouts, mermaid) on `done` for uninterrupted
 // turns; swap in a vendored parser if full CommonMark is ever needed here.
 function mdLite(src) {
