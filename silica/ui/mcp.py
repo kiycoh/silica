@@ -44,6 +44,7 @@ CORE_TOOLS = (
     "silica_exists",
     "silica_write_note",
     "silica_patch_note",
+    "silica_flag_note",
 )
 
 

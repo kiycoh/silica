@@ -479,6 +479,29 @@ class ProgressLedger:
         except Exception:
             pass
 
+        # Correction loop: notes flagged wrong/stale in use, surfaced for a
+        # human to resolve. The register is a rebuildable index; re-read each
+        # note to show the live reason and self-heal entries no longer contested.
+        try:
+            from silica.driver import DRIVER
+            from silica.kernel import contested_register
+            from silica.kernel.contested import contested_refs
+
+            for path in contested_register.entries():
+                try:
+                    refs = contested_refs(DRIVER.read_note(path).content or "")
+                except Exception:
+                    refs = []
+                if refs:
+                    parts.append(
+                        f"contested note: {path} | {refs[0]} -> "
+                        f"resolve: edit / delete / clear"
+                    )
+                else:
+                    contested_register.discard(path)  # resolved or gone
+        except Exception:
+            pass
+
         return "\n".join(parts)
 
     # ------------------------------------------------------------------

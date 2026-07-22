@@ -84,6 +84,68 @@ def silica_patch_note(
     return {**result, "note": name, "path": path, "checkpoint_depth": checkpoint_depth}
 
 
+class FlagNoteArgs(BaseModel):
+    name: str = Field(description="Name or vault-relative path of the note to flag")
+    reason: str = Field(default="", description="Why the note is wrong or stale, in a few words")
+    clear: bool = Field(default=False, description="Clear a previously set flag instead of setting one")
+
+
+@tool(FlagNoteArgs, cls="composed", collapse="eager")
+def silica_flag_note(name: str, reason: str = "", clear: bool = False) -> dict[str, Any]:
+    """Flag an EXISTING note as wrong or stale, found while USING it.
+
+    The correction entry point: a note that fed an answer but proved wrong is
+    marked `contested` in its frontmatter (git-diffable, cleared by hand or by
+    `clear=True`). Contested notes are demoted and marked at recall (never
+    silently dropped) and surfaced in the run digest for a human to resolve.
+    This does NOT edit the note's content or delete it — the human decides.
+    Checkpointed, reversible with /undo.
+    """
+    import datetime
+    import os
+
+    from silica.kernel.checkpoints import get_checkpoint_store
+    from silica.kernel.contested import clear_contested, mark_contested
+
+    try:
+        nc = DRIVER.read_note(name)
+    except Exception as e:
+        return {"error": f"Failed to read note '{name}': {e}"}
+
+    path = nc.ref.path or name
+    prior_content = nc.content
+
+    if clear:
+        new_content = clear_contested(prior_content)
+    else:
+        who = os.environ.get("SILICA_AGENT_ID") or "user"
+        source_ref = f"flagged: {reason} (by {who}, {datetime.date.today().isoformat()})"
+        new_content = mark_contested(prior_content, source_ref)
+
+    if new_content == prior_content:
+        return {"note": name, "path": path, "contested": not clear, "changed": False}
+
+    try:
+        DRIVER.overwrite(path, new_content)
+    except Exception as e:
+        return {"error": f"Failed to write '{name}': {e}"}
+
+    try:
+        from silica.kernel import contested_register
+        contested_register.discard(path) if clear else contested_register.add(path)
+    except Exception:
+        pass  # digest index is best-effort; the note's frontmatter is the truth
+
+    checkpoint_depth = None
+    try:
+        checkpoint_depth = get_checkpoint_store().push(path, prior_content, new_content)
+    except Exception:
+        pass
+
+    return {"note": name, "path": path, "contested": not clear,
+            "checkpoint_depth": checkpoint_depth}
+
+
 class WriteNoteArgs(BaseModel):
     path: str = Field(description="Vault-relative path for the new note (e.g. 'Computer Science/Computer Vision.md')")
     body: str = Field(description="Markdown body only — NO YAML frontmatter; it is applied mechanically from the vault template")

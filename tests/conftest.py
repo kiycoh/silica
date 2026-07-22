@@ -68,6 +68,19 @@ def _isolate_episodic_store(tmp_path, monkeypatch: pytest.MonkeyPatch) -> None:
 
 
 @pytest.fixture(autouse=True)
+def _isolate_contested_register(tmp_path, monkeypatch: pytest.MonkeyPatch) -> None:
+    """Redirect the contested-note register to a per-test tmp path.
+
+    silica_flag_note and progress.digest() read/write index_dir()/
+    contested_register.json; without this a test driving the flag tool would
+    leave the developer's real ~/.silica/index littered.
+    """
+    import silica.kernel.contested_register as reg_mod
+    monkeypatch.setattr(reg_mod, "_register_path",
+                        lambda: tmp_path / "contested_register.json")
+
+
+@pytest.fixture(autouse=True)
 def _isolate_cluster_ctx_cache(tmp_path, monkeypatch: pytest.MonkeyPatch) -> None:
     """Redirect the vault-cluster ctx cache (Scaling E) to a per-test tmp path.
 

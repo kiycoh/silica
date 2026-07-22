@@ -39,6 +39,7 @@ class NoteBlock:
     evidence: str   # joined per-leg provenance ("embed:0.83 cooccur:w9"), '' in --stuff
     body: str       # full body, frontmatter stripped
     excerpt: str    # query-densest window of the body
+    contested: str | None = None  # correction reason when flagged, else None
 
 
 @dataclass
@@ -57,10 +58,13 @@ class Perception:
         for rank, b in enumerate(self.blocks, 1):
             if windowed:
                 head = f"[#{rank}" + (f" | {b.evidence}" if b.evidence else "")
-                head += (f" | dated {b.date}" if b.date else "") + "]"
+                head += (f" | dated {b.date}" if b.date else "")
+                head += (f" | contested: {b.contested}" if b.contested else "") + "]"
                 parts.append(f"{head}\n{b.excerpt}")
             else:
-                head = f"[dated {b.date}]\n" if b.date else ""
+                marks = ([f"dated {b.date}"] if b.date else []) \
+                    + ([f"contested: {b.contested}"] if b.contested else [])
+                head = f"[{' | '.join(marks)}]\n" if marks else ""
                 parts.append(f"{head}{b.body}")
         ctx = "\n\n---\n\n".join(parts)
         if not self.facts_block or not ctx:
@@ -151,20 +155,21 @@ def facade_retrieve(query: str, *, k: int, use_embedder: bool = True,
     return results, query_vec
 
 
-def _read_dated_body(path: str, origin: str = "vault") -> tuple[str, str | None]:
-    """(frontmatter date, body) for one note; ('', None) when unreadable.
-    origin='memory' resolves in the personal-memory vault (ADR-0019)."""
+def _read_dated_body(path: str, origin: str = "vault") -> tuple[str, str | None, str | None]:
+    """(frontmatter date, contested reason, body) for one note; ('', None, None)
+    when unreadable. `contested` is the note's flag reason (first `contradictions`
+    entry) or None. origin='memory' resolves in the personal-memory vault (ADR-0019)."""
     if origin == "memory":
         from silica.kernel.memory_lane import memory_vault
 
         mv = memory_vault()
         if mv is None:
-            return "", None
+            return "", None, None
         p = mv / (path if path.endswith(".md") else path + ".md")
         try:
             content = p.read_text(encoding="utf-8", errors="replace")
         except OSError:
-            return "", None
+            return "", None, None
     else:
         from silica.driver import DRIVER
 
@@ -172,14 +177,19 @@ def _read_dated_body(path: str, origin: str = "vault") -> tuple[str, str | None]
             content = DRIVER.read_note(
                 path if path.endswith(".md") else path + ".md").content or ""
         except Exception:
-            return "", None
+            return "", None, None
     from silica.kernel import frontmatter
 
     data, _raw, body = frontmatter.split(content)
     # data is None for a body-only note (no frontmatter) or a YAML error —
     # product notes from the FSM write path can lack frontmatter entirely.
-    date = str((data or {}).get("date") or "").strip()
-    return date, (body or content)
+    data = data or {}
+    date = str(data.get("date") or "").strip()
+    contested = None
+    if data.get("contested"):
+        refs = data.get("contradictions") or []
+        contested = str(refs[0]) if refs else "contested"
+    return date, contested, (body or content)
 
 
 def _recall_facts(perception: Perception, query: str, query_vec, *, now: str,
@@ -268,7 +278,7 @@ def _name_of(path: str) -> str:
 
 
 def _assembly_body(path: str) -> str:
-    _date, body = _read_dated_body(path)
+    _date, _contested, body = _read_dated_body(path)
     return body or ""
 
 
@@ -341,13 +351,16 @@ def perceive(query: str, *, now: str, k: int = DEFAULT_K,
 
     blocks: list[NoteBlock] = []
     for path, evidence, origin in hits:
-        date, body = _read_dated_body(path, origin)
+        date, contested, body = _read_dated_body(path, origin)
         if body is None:
             continue
         excerpt = ("\n[…]\n".join(best_windows(body, query, window_chars, windows))
                    if query else body[:window_chars])
         blocks.append(NoteBlock(path=path, date=date, evidence=evidence,
-                                body=body, excerpt=excerpt))
+                                body=body, excerpt=excerpt, contested=contested))
+    # Correction loop: contested notes are demoted behind clean ones (stable),
+    # never dropped — the render marks them so the answer step can distrust them.
+    blocks = [b for b in blocks if not b.contested] + [b for b in blocks if b.contested]
 
     if paths is None:
         blocks = _maybe_assemble(blocks, assemble=assemble, query=query)

@@ -35,6 +35,20 @@ def mark_contested(content: str, source_ref: str) -> str:
     return frontmatter.dump(data, body)
 
 
+def clear_contested(content: str) -> str:
+    """Remove the `contested`/`contradictions` flag from a note's frontmatter.
+
+    No-op when the note is not contested; a note with unparseable YAML is
+    returned unchanged (mirror of `mark_contested`).
+    """
+    data, raw, body = frontmatter.split(content)
+    if data is None or not data.get(CONTESTED_KEY):
+        return content
+    data.pop(CONTESTED_KEY, None)
+    data.pop(CONTRADICTIONS_KEY, None)
+    return frontmatter.dump(data, body)
+
+
 def contested_refs(content: str) -> list[str]:
     """The note's `contradictions:` entries; [] when not contested."""
     data, _, _ = frontmatter.split(content)

@@ -77,6 +77,29 @@ def test_perceive_windows_bodies_under_rank_evidence_date_headers(tmp_path, monk
     assert "yoga class is on Tuesday" in ctx
 
 
+def test_perceive_demotes_contested_note_last_with_marker(tmp_path, monkeypatch):
+    _bind(tmp_path / "v", monkeypatch)
+    from silica.driver import DRIVER
+
+    DRIVER.create(
+        "sessions/bad.md",
+        '---\ndate: "2026-01-01"\ncontested: true\n'
+        'contradictions:\n  - "flagged: wrong day (by user, 2026-05-01)"\n'
+        "---\n\nyoga on Monday\n",
+    )
+    DRIVER.create("sessions/good.md", '---\ndate: "2026-02-02"\n---\n\nyoga on Tuesday\n')
+    from silica.kernel.perception import perceive
+
+    # paths= assembles the given notes in order (bad first): the contested one
+    # must be demoted behind the clean note regardless of input order.
+    p = perceive("yoga?", now="2026-05-01",
+                 paths=["sessions/bad", "sessions/good"], use_embedder=False)
+    assert [b.path for b in p.blocks] == ["sessions/good", "sessions/bad"]
+    assert p.blocks[-1].contested and "wrong day" in p.blocks[-1].contested
+    assert p.blocks[0].contested is None
+    assert "contested" in p.render().lower()  # marker reaches the answer context
+
+
 def test_render_flat_returns_whole_bodies_without_rank_headers(tmp_path, monkeypatch):
     _bind(tmp_path / "v", monkeypatch)
     _write("sessions/a.md", "2026-01-01", LONG_BODY)

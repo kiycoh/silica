@@ -127,6 +127,7 @@ def test_write_gate_tools_are_classified_eager():
     assert eager == {
         "silica_move", "silica_delete", "silica_snapshot", "silica_restore",
         "silica_cleanup", "silica_patch_note", "silica_write_note",
+        "silica_flag_note",
         "silica_autolink", "silica_backlink", "silica_embed_refresh",
         "silica_cooccurrence_refresh", "silica_lexical_refresh", "silica_bulk_write",
         "silica_deferred_retry", "silica_deferred_flush", "silica_run_injector",

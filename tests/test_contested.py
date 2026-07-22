@@ -10,6 +10,7 @@ from __future__ import annotations
 import pytest
 
 from silica.kernel.contested import (
+    clear_contested,
     contested_callout,
     contested_refs,
     mark_contested,
@@ -89,6 +90,25 @@ def test_marked_note_stays_lint_clean():
 def test_contested_refs_roundtrip():
     assert contested_refs(NOTE) == []
     assert contested_refs(mark_contested(NOTE, REF)) == [REF]
+
+
+# --- clear_contested (pure) --------------------------------------------------
+
+def test_clear_contested_removes_flag_and_refs():
+    cleared = clear_contested(mark_contested(NOTE, REF))
+    data, _, body = frontmatter.split(cleared)
+    assert not data.get("contested")
+    assert "contradictions" not in data
+    assert "Il dosaggio raccomandato" in body  # note content intact
+
+
+def test_clear_contested_noop_on_clean_note():
+    assert clear_contested(NOTE) == NOTE
+
+
+def test_clear_contested_broken_yaml_untouched():
+    broken = "---\ntags: [unclosed\n---\n\ncorpo\n"
+    assert clear_contested(broken) == broken
 
 
 # --- contested_callout (pure) ------------------------------------------------
