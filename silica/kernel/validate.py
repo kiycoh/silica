@@ -291,15 +291,20 @@ def validate_operations(
                     "spans": spans,
                 })
 
-    _extract_enforce = os.getenv("SILICA_EXTRACTIVE_ENFORCE") == "1"
+    from silica.kernel.prep_delegation import active_distill_profile
+
+    _extract_enforce = (os.getenv("SILICA_EXTRACTIVE_ENFORCE") == "1"
+                        or active_distill_profile() == "extractive")
 
     def _extractive_reject(op: Op) -> str | None:
         """Under the extractive distill profile a write/patch body must be
         SELECTED verbatim from the source, not rewritten. Returns a rejection
         reason when it isn't — routing the op through the normal defer/steer
         retry so a persistent violator becomes a declared hole, never silent
-        loss. Off unless SILICA_EXTRACTIVE_ENFORCE=1: the default distiller
-        paraphrases legitimately, so this must never fire outside such a run."""
+        loss. On when the extractive profile is active (the invariant is the
+        profile's contract, one lever) or under SILICA_EXTRACTIVE_ENFORCE=1;
+        otherwise off — the default distiller paraphrases legitimately, so
+        this must never fire outside such a run."""
         if not _extract_enforce:
             return None
         excerpt = concept_excerpts.get((op.source_basename, op.heading), "")

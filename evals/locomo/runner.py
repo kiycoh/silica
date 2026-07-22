@@ -722,11 +722,11 @@ def run(data: list[dict], run_root: Path, *, model: str, judge_model: str, k: in
     from silica.kernel import perception
 
     # fsm-extractive: same product Coordinator as fsm, but the distill phase
-    # SELECTS verbatim spans (extractive profile) and the validator enforces it
-    # (SILICA_EXTRACTIVE_ENFORCE) — the mechanics run on non-lossy bodies.
+    # SELECTS verbatim spans (extractive profile); the validator enforces the
+    # verbatim invariant as the profile's contract — no second flag, the eval
+    # exercises the same coupling the product ships.
     if ingest_mode == "fsm-extractive":
         os.environ["SILICA_DISTILL_PROFILE"] = "extractive"
-        os.environ["SILICA_EXTRACTIVE_ENFORCE"] = "1"
         # A verbatim durable fact can live in a short turn; the 100-char prose
         # placeholder floor would defer it and starve the mechanics of content.
         os.environ["SILICA_MIN_WRITE_SNIPPET_CHARS"] = "40"

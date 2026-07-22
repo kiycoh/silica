@@ -91,6 +91,18 @@ def test_paraphrase_rejected_under_enforce_but_passes_without(tmp_vault, monkeyp
     assert any(o.path == "mem/Elena's pottery class.md" for o in validated_off)
 
 
+def test_profile_alone_enables_enforcement(tmp_vault, monkeypatch):
+    """The extractive profile IS the contract: selecting it (env or vault
+    conventions) enforces the verbatim invariant without a second env var."""
+    monkeypatch.delenv("SILICA_EXTRACTIVE_ENFORCE", raising=False)
+    monkeypatch.setenv("SILICA_DISTILL_PROFILE", "extractive")
+    paraphrase = ("Elena enrolled in a beginners ceramics course at the local "
+                  "recreation hall downtown, taught by Alvarez himself.")
+    _, rejected = validate_operations(
+        [_write_op(paraphrase)], _payload(_EXCERPT), "mem")
+    assert any("extractive" in r.reason for r in rejected)
+
+
 def test_short_verbatim_floor_is_env_lowerable(tmp_vault, monkeypatch):
     # A durable fact copied verbatim can be a short turn (<100 chars). The prose
     # placeholder floor would defer it; the extractive arm lowers it via env.
