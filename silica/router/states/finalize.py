@@ -265,13 +265,12 @@ def handle_cleanup(fsm: "InjectorFSM") -> None:
             t.status == "failed" for t in fsm.progress.tasks
             if t.id.startswith(fi_prefix)
         )
+        inbox_file_for_fi = file_group.get("source_file", fsm.inbox_file)
         if not file_has_failure:
-            inbox_file_for_fi = file_group.get("source_file", fsm.inbox_file)
             res = silica_cleanup(inbox_file_for_fi, "done")
             if "error" in res:
                 fsm.context["cleanup_warning"] = res["error"]
             _log_nucleate_completion(fsm, fi, inbox_file_for_fi)
-            _record_provenance(fsm, fi, inbox_file_for_fi)
             # Title-index run cache: the archived source moved out of its
             # indexed path — drop its ref so AUTOLINK can't link to a stale
             # inbox title.
@@ -287,6 +286,11 @@ def handle_cleanup(fsm: "InjectorFSM") -> None:
                 "File %d (%s) had chunk failures — not archiving.",
                 fi, file_group.get("source_file", "?"),
             )
+        # Provenance covers whatever DID commit: a partial file's validated
+        # write/patch ops are real derived notes, and both session attribution
+        # (eval session_recall) and re-ingest idempotence (note_authored_by)
+        # must see them even while the source stays in inbox for retry.
+        _record_provenance(fsm, fi, inbox_file_for_fi)
     else:
         logger.info(
             "Chunk f%d_c%d done. Archiving deferred until last chunk of file %d.",

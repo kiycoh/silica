@@ -135,3 +135,42 @@ def test_wired_into_handle_cleanup_on_archive(monkeypatch, tmp_vault):
     finalize.handle_cleanup(fsm)
 
     assert calls == [(0, "Inbox/a.md")]
+
+
+def test_partial_file_still_records_provenance(monkeypatch, tmp_vault):
+    """A file with a failed chunk is not archived, but the notes its committed
+    chunks DID write must still be recorded: session_recall and re-ingest
+    idempotence read this ledger, and partial files were invisible to both."""
+    calls = []
+    monkeypatch.setattr(
+        finalize, "_record_provenance",
+        lambda fsm, fi, source_file: calls.append((fi, source_file)),
+    )
+    monkeypatch.setattr(finalize, "_log_nucleate_completion", lambda *a, **k: None)
+    archived = []
+    monkeypatch.setattr(
+        "silica.tools.wrapped.silica_cleanup",
+        lambda *a, **k: archived.append(a) or {"success": True},
+    )
+
+    fsm = types.SimpleNamespace(
+        _get_chunks_from_context_if_empty=lambda: None,
+        _chunk_flat_to_fi_ci={0: (0, 0)},
+        _current_chunk_idx=0,
+        _progress_note=lambda *a, **k: None,
+        _write_ledger_for_file=lambda *a, **k: None,
+        _file_chunks={0: {"chunks": [{}], "source_file": "Inbox/a.md"}},
+        progress=types.SimpleNamespace(
+            tasks=[types.SimpleNamespace(id="f0_c0_distill", status="failed")]),
+        inbox_file="Inbox/a.md",
+        context={},
+        _undo_run_id=None,
+        _run_inverses=[],
+        _transition_success=lambda: None,
+        _chunk_task_id=lambda *a: "cleanup",
+    )
+
+    finalize.handle_cleanup(fsm)
+
+    assert calls == [(0, "Inbox/a.md")]  # committed notes recorded anyway
+    assert archived == []  # the failed file stays in inbox
