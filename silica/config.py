@@ -27,6 +27,17 @@ if not _dotenv_path.exists():
 load_dotenv(_dotenv_path, override=False)
 
 
+# Provider prefixes that map a `prefix/model` string to an endpoint and get
+# auto-prefixed onto a bare model. Single source for the three checks below
+# (provider, distill_escalation_provider, _ensure_prefix). "custom" routes to
+# SILICA_PROVIDER_BASE_URL/_API_KEY; the rest to PROVIDER_PRESETS in
+# agent.providers (kept a subset of this set — see test_providers).
+PROVIDER_PREFIXES = frozenset({
+    "openrouter", "lmstudio", "ollama", "gemini",
+    "openai", "groq", "deepseek", "mistral", "xai", "custom",
+})
+
+
 @dataclass
 class SilicaConfig:
     """Runtime configuration singleton."""
@@ -42,6 +53,16 @@ class SilicaConfig:
     # Provider preset name (derived from model prefix by default, or overridden)
     _provider: str | None = field(
         default_factory=lambda: os.getenv("SILICA_PROVIDER", None)
+    )
+
+    # Custom OpenAI-compatible endpoint (provider="custom"): base URL + key.
+    # Covers any server speaking the OpenAI API without a dedicated preset —
+    # vLLM, llama.cpp, LocalAI, Jan, or a hosted vendor we don't preset.
+    provider_base_url: str = field(
+        default_factory=lambda: os.getenv("SILICA_PROVIDER_BASE_URL", "")
+    )
+    provider_api_key: str = field(
+        default_factory=lambda: os.getenv("SILICA_PROVIDER_API_KEY", "")
     )
 
     # OpenRouter upstream-provider routing (agent/llm.py). Comma-separated
@@ -66,7 +87,7 @@ class SilicaConfig:
             return self._provider
         if self.model and "/" in self.model:
             prefix = self.model.split("/", 1)[0]
-            if prefix in ("openrouter", "lmstudio", "ollama", "gemini"):
+            if prefix in PROVIDER_PREFIXES:
                 return prefix
         return "lmstudio"
 
@@ -86,7 +107,7 @@ class SilicaConfig:
             return None
         if "/" in m:
             prefix = m.split("/", 1)[0]
-            if prefix in ("openrouter", "lmstudio", "ollama", "gemini"):
+            if prefix in PROVIDER_PREFIXES:
                 return prefix
         return "lmstudio"
 
@@ -363,7 +384,7 @@ class SilicaConfig:
     def __post_init__(self):
         def _ensure_prefix(model: str | None, provider: str | None) -> str | None:
             if model and provider and not model.startswith(f"{provider}/"):
-                if provider in ("openrouter", "gemini", "ollama", "lmstudio"):
+                if provider in PROVIDER_PREFIXES:
                     return f"{provider}/{model}"
             return model
 
