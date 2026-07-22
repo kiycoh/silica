@@ -291,6 +291,30 @@ def validate_operations(
                     "spans": spans,
                 })
 
+    _extract_enforce = os.getenv("SILICA_EXTRACTIVE_ENFORCE") == "1"
+
+    def _extractive_reject(op: Op) -> str | None:
+        """Under the extractive distill profile a write/patch body must be
+        SELECTED verbatim from the source, not rewritten. Returns a rejection
+        reason when it isn't — routing the op through the normal defer/steer
+        retry so a persistent violator becomes a declared hole, never silent
+        loss. Off unless SILICA_EXTRACTIVE_ENFORCE=1: the default distiller
+        paraphrases legitimately, so this must never fire outside such a run."""
+        if not _extract_enforce:
+            return None
+        excerpt = concept_excerpts.get((op.source_basename, op.heading), "")
+        collision = collision_excerpts.get((op.source_basename, op.heading), "")
+        source_text = f"{excerpt}\n{collision}" if collision else excerpt
+        body = op.snippet or op.content or ""
+        if not source_text.strip() or not body.strip():
+            return None
+        from silica.kernel.provenance import nonextractive_lines
+        bad = nonextractive_lines(body, source_text)
+        if bad:
+            return ("extractive: %d body line(s) not verbatim from source: %s"
+                    % (len(bad), " | ".join(s[:60] for s in bad[:3])))
+        return None
+
     validated_ops = []
     rejected_ops = []
 
@@ -397,6 +421,10 @@ def validate_operations(
 
             _resolve_parent(op, cleared_parents_out)
             _check_grounding(op)
+            _reason = _extractive_reject(op)
+            if _reason:
+                rejected_ops.append(Rejection(op=op, reason=_reason))
+                continue
             validated_ops.append(op)
 
         elif op_type == OpType.write:
@@ -452,11 +480,17 @@ def validate_operations(
                         "forward-reference (nothing to distill)", op.path,
                     )
                     continue
-            if body_len < MIN_WRITE_SNIPPET_CHARS:
+            # Floor read at call time (not import) so an arm can lower it via env
+            # without import-order fragility. Extractive selects verbatim spans, and
+            # a durable fact can live in a legitimately short turn — a 60-char
+            # verbatim fact is real content, not the prose-placeholder this gate
+            # guards against — so the extractive arm sets a lower floor.
+            _min_snippet = int(os.getenv("SILICA_MIN_WRITE_SNIPPET_CHARS", str(MIN_WRITE_SNIPPET_CHARS)))
+            if body_len < _min_snippet:
                 rejected_ops.append(Rejection(
                     op=op,
                     reason=(
-                        f"snippet too short ({body_len} < {MIN_WRITE_SNIPPET_CHARS} chars) "
+                        f"snippet too short ({body_len} < {_min_snippet} chars) "
                         f"— would write a placeholder note, deferred for retry"
                     ),
                 ))
@@ -464,6 +498,10 @@ def validate_operations(
 
             _resolve_parent(op, cleared_parents_out)
             _check_grounding(op)
+            _reason = _extractive_reject(op)
+            if _reason:
+                rejected_ops.append(Rejection(op=op, reason=_reason))
+                continue
             validated_ops.append(op)
 
         elif op_type == OpType.overwrite:

@@ -319,6 +319,48 @@ def ungrounded_spans(body: str, source: str) -> list[str]:
     return out
 
 
+# Extractive invariant: markers the model may prepend to a copied span (list
+# bullets, ordered markers, headings, blockquotes) and inline wikilinks the
+# autolink phase injects later — stripped before the substring check so added
+# structure never reads as content drift.
+_LEADING_MARKER_RE = re.compile(r"^\s*(?:[-*+]|\d+[.)]|#{1,6}|>)\s+")
+_WIKILINK_RE = re.compile(r"\[\[([^\]|]+)(?:\|[^\]]+)?\]\]")
+_EXTRACTIVE_MIN_CHARS = 12  # normalized; shorter residues match trivially
+
+
+def _norm_extract(s: str) -> str:
+    """Whitespace + straight-apostrophe normalization for substring matching.
+    Case is preserved: a case change is an edit, not a copied span."""
+    return _norm_ws(s.replace("’", "'").replace("‘", "'"))
+
+
+def nonextractive_lines(body: str, source: str) -> list[str]:
+    """Body content-lines that are NOT verbatim spans of *source*.
+
+    The `extractive` distill profile must SELECT spans from the transcript, not
+    rewrite them; this is the mechanical check enforcing that. Split the body
+    into lines, strip structural markers (bullets, headings, blockquotes) and
+    inline wikilinks (autolink adds those post-write), normalize whitespace and
+    apostrophes, and require each remaining line to be a substring of the
+    normalized source. Returns the offending lines; empty means fully
+    extractive.
+
+    ponytail: lines under MIN chars after stripping are skipped — a short
+    residue substring-matches almost any source, so enforcing them only yields
+    false rejections; paraphrase and fabrication are prose-length anyway.
+    """
+    src = _norm_extract(source)
+    out: list[str] = []
+    for raw in body.splitlines():
+        line = _WIKILINK_RE.sub(r"\1", _LEADING_MARKER_RE.sub("", raw))
+        norm = _norm_extract(line)
+        if len(norm) < _EXTRACTIVE_MIN_CHARS:
+            continue
+        if norm not in src:
+            out.append(norm)
+    return out
+
+
 def content_sha256(source_path: str) -> str:
     """SHA-256 hex digest of a source file's content.
 
